@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { DemoBadge } from "@/components/ui/Badge";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { LanguageToggle } from "@/components/ui/LanguageToggle";
 import { BrandLogo } from "@/components/ui/BrandLogo";
@@ -21,15 +20,12 @@ export function Header({
   const toast = useToast();
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Check supabase user
     async function loadUser() {
-      const hasDemoCookie = typeof document !== "undefined" && document.cookie.includes("demo_mode=true");
-      setIsDemoMode(hasDemoCookie);
       try {
         const supabase = createClient();
         const { data: { user } } = await supabase.auth.getUser();
@@ -41,16 +37,10 @@ export function Header({
             user.email?.split("@")[0] ||
             null
           );
-        } else if (hasDemoCookie) {
-          setUserEmail("supervisor@demoproperty.id");
-          setUserName("Supervisor Reviewer");
         }
       } catch {
-        // Fallback for offline demo
-        if (hasDemoCookie) {
-          setUserEmail("supervisor@demoproperty.id");
-          setUserName("Supervisor Reviewer");
-        }
+        setUserEmail(null);
+        setUserName(null);
       }
     }
 
@@ -70,7 +60,6 @@ export function Header({
   const handleLogout = async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
-      document.cookie = "demo_mode=; path=/; max-age=0";
       toast.success(dict.common.logout + " " + dict.common.saved);
       router.push("/login");
     } catch {
@@ -130,7 +119,6 @@ export function Header({
           </div>
 
           {/* Demo Badge */}
-          {isDemoMode && <DemoBadge />}
 
           {/* Language Selector */}
           <LanguageToggle />

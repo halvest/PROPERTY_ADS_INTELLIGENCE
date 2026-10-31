@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getReviewQueue as getDemoReviewQueue } from "@/lib/data/dashboard-service";
 import { persistAttributionEvent } from "@/lib/data/attribution-history-service";
 import { recordRecommendationReview } from "@/lib/recommendations/persistent-review-service";
 import type { ReviewQueueItem } from "@/lib/data/types";
@@ -18,23 +17,11 @@ export async function GET() {
       error: authErr,
     } = await supabase.auth.getUser();
 
-    const isDemo = process.env.DATA_MODE === "demo";
-
-    if ((authErr || !user) && !isDemo && process.env.NODE_ENV === "production") {
+    if (authErr || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
       );
-    }
-
-    // 1. Explicit demo fallback
-    if (isDemo || !user) {
-      const demoQueue = getDemoReviewQueue();
-      return NextResponse.json({
-        success: true,
-        isDemo: true,
-        data: demoQueue,
-      });
     }
 
     const { data: profile } = await supabase
@@ -43,8 +30,11 @@ export async function GET() {
       .eq("id", user.id)
       .maybeSingle();
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     // 2. Query conversations flagged for review (inferred attribution or low completeness)
     const { data: flaggedConvs, error: dbErr } = await supabase
@@ -105,7 +95,6 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      isDemo: false,
       data: queueItems,
     });
   } catch (err) {
@@ -145,8 +134,11 @@ export async function POST(request: NextRequest) {
       .eq("id", user.id)
       .maybeSingle();
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     // 1. Recommendation review submission
     if (type === "recommendation" || recommendationId) {

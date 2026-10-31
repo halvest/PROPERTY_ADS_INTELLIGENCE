@@ -3,13 +3,11 @@ import { z } from "zod";
 import { executeMarketingSync } from "@/lib/marketing/meta/sync-service";
 import {
   getMetaMarketingConfig,
-  isMetaMarketingConfigured,
-  maskToken,
-  maskAdAccountId,
 } from "@/lib/marketing/meta/config";
 import { MarketingApiError } from "@/lib/marketing/meta/types";
 import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
+import { getTenantIntegrationStatuses } from "@/lib/integrations/status-service";
 
 const SyncRequestSchema = z.object({
   targetAdAccountId: z.string().optional(),
@@ -20,7 +18,6 @@ const SyncRequestSchema = z.object({
     })
     .optional(),
   organizationId: z.string().uuid().optional(),
-  allowDemoFallback: z.boolean().optional(),
 });
 
 /**
@@ -62,7 +59,6 @@ export async function POST(request: Request) {
     let authenticatedOrgId: string | null = null;
     let userRole: string | null = null;
     let supabaseClientInstance: Awaited<ReturnType<typeof createClient>> | null = null;
-    const isProduction = process.env.NODE_ENV === "production";
 
     try {
       const supabase = await createClient();
@@ -89,7 +85,7 @@ export async function POST(request: Request) {
     }
 
     // 2. Strict Production Guard & Authorization Policy
-    if (isProduction && !authenticatedOrgId) {
+    if (!authenticatedOrgId) {
       return NextResponse.json(
         {
           status: "error",
@@ -127,41 +123,25 @@ export async function POST(request: Request) {
       }
     }
 
-    // In production, unauthenticated requests require explicit demo mode fallback
-    if (isProduction && !authenticatedOrgId && data.allowDemoFallback === false) {
-      return NextResponse.json(
-        {
-          status: "error",
-          code: "UNAUTHORIZED",
-          message: "Autentikasi diperlukan saat demo fallback dinonaktifkan.",
-        },
-        { status: 401 }
-      );
-    }
-
-    // Resolve tenant ID: Authoritative session org takes strict precedence
-    const organizationId =
-      authenticatedOrgId ||
-      data.organizationId ||
-      "00000000-0000-0000-0000-000000000001"; // Controlled demo tenant in dev/test only
+    const organizationId = authenticatedOrgId;
 
     const result = await executeMarketingSync({
       organizationId,
       targetAdAccountId: data.targetAdAccountId,
       timeRange: data.timeRange,
       supabaseClient: supabaseClientInstance || undefined,
-      allowDemoFallback: data.allowDemoFallback !== undefined ? data.allowDemoFallback : !isProduction,
     });
 
     const config = getMetaMarketingConfig({ requireConfigured: false });
 
     return NextResponse.json({
-      status: "success",
+      status: result.status,
+      ...(result.status === "partial"
+        ? { message: "Sinkronisasi sebagian: sebagian data tidak berhasil disimpan." }
+        : {}),
       syncResult: result,
       provider: "meta_marketing",
       mode: result.mode,
-      adAccountId: maskAdAccountId(config.adAccountId),
-      maskedToken: maskToken(config.accessToken),
       apiVersion: config.apiVersion,
     });
   } catch (error) {
@@ -174,7 +154,10 @@ export async function POST(request: Request) {
           metaErrorCode: error.metaErrorCode,
           isRecoverable: error.isRecoverable,
         },
-        { status: error.statusCode ?? (error.code === "AUTHENTICATION_ERROR" ? 401 : 500) }
+        {
+          status: error.statusCode ??
+            (error.code === "AUTHENTICATION_ERROR" ? 401 : error.code === "MISSING_CONFIGURATION" ? 409 : 500),
+        }
       );
     }
 
@@ -204,7 +187,25 @@ export async function GET() {
       { status: 401 }
     );
   }
-  const isConfigured = isMetaMarketingConfigured();
+  let isConfigured = false;
+  if (user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("organization_id")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profile?.organization_id) {
+      try {
+        const { integrations } = await getTenantIntegrationStatuses({
+          organizationId: profile.organization_id,
+          client: supabase,
+        });
+        isConfigured = integrations.find((item) => item.provider === "meta_marketing")?.health === "connected";
+      } catch {
+        isConfigured = false;
+      }
+    }
+  }
   const config = getMetaMarketingConfig({ requireConfigured: false });
 
   return NextResponse.json({
@@ -212,7 +213,7 @@ export async function GET() {
     provider: "meta_marketing",
     configured: isConfigured,
     apiVersion: config.apiVersion,
-    requiredPermissions: ["ads_read", "read_insights"],
-    mode: isConfigured ? "live" : "demo",
+    requiredPermissions: ["ads_read"],
+    mode: isConfigured ? "live" : "not_connected",
   });
 }

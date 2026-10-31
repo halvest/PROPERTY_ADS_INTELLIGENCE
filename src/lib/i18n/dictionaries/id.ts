@@ -47,8 +47,6 @@ export const idDictionary: TranslationDictionary = {
     indonesian: "Bahasa Indonesia",
     english: "English",
     workspace: "Workspace",
-    demoMode: "Mode Demo (Data Sintetis)",
-    demoBadgeTooltip: "Data pada halaman ini adalah simulasi sintetis deterministik untuk keperluan evaluasi hackathon",
     active: "Aktif",
     connected: "Terhubung",
     disconnected: "Terputus",
@@ -94,8 +92,6 @@ export const idDictionary: TranslationDictionary = {
     hasAccount: "Sudah memiliki akun?",
     signInLink: "Masuk di sini",
     signUpLink: "Daftar sekarang",
-    demoLoginButton: "Masuk Langsung via Mode Demo",
-    demoLoginSubtitle: "Login instan menggunakan akun supervisor pada tenant simulasi evaluasi.",
     passwordMinLength: "Kata sandi harus minimal 8 karakter.",
     passwordMismatch: "Konfirmasi kata sandi tidak cocok.",
     invalidCredentials: "Email atau kata sandi tidak sesuai.",
@@ -115,7 +111,7 @@ export const idDictionary: TranslationDictionary = {
   },
   dashboard: {
     title: "Ringkasan Performa Iklan & Kualitas Leads",
-    subtitle: "Analisis efektivitas belanja iklan Meta dan mutu penanganan calon pembeli WhatsApp.",
+    subtitle: "Analisis belanja iklan Meta dan data prospek yang dicatat atau diunggah ke CRM.",
     totalSpend: "Total Belanja Iklan",
     cpqlTitle: "Biaya per Calon Pembeli Potensial (CPQL)",
     buyerScoreTitle: "Rata-rata Buyer Score",
@@ -182,7 +178,6 @@ export const idDictionary: TranslationDictionary = {
       sectionTitle: "Rekomendasi Optimasi Iklan Deterministik",
       ruleBasedBadge: "Deterministik • Tanpa LLM",
       sectionSubtitle: "Saran penyesuaian anggaran iklan properti berdasarkan mutu lead, CPQL, dan tingkat verifikasi atribusi.",
-      dataSourceLabel: "Sumber Data: Mode Demo Sintetis",
       filterAll: "Semua",
       scaleCandidate: "Kandidat Scale",
       investigate: "Investigasi",
@@ -234,8 +229,8 @@ export const idDictionary: TranslationDictionary = {
       dataCompleteness: "Kelengkapan Data",
       evidenceConfidence: "Confidence Bukti",
       criteriaBreakdownTitle: "Rincian Kriteria Penilaian:",
-      conversationTimelineTitle: "Timeline Percakapan WhatsApp (Transkrip Riil)",
-      conversationTimelineSubtitle: "Data percakapan murni yang dianalisis oleh kalkulator domain.",
+      conversationTimelineTitle: "Catatan Percakapan yang Tersedia",
+      conversationTimelineSubtitle: "Pesan yang memang tercatat pada data prospek ini.",
       noMessages: "Belum ada transkrip pesan tersimpan dalam skenario ini.",
       buyerSpeaker: "Calon Pembeli",
       salesSpeaker: "Sales Representative",
@@ -294,9 +289,8 @@ export const idDictionary: TranslationDictionary = {
     changeSelection: "Ubah Pilihan Aset",
     disconnectMeta: "Putuskan Koneksi",
     disconnectConfirm: "Apakah Anda yakin ingin memutuskan integrasi aset Meta? Sinkronisasi metrik iklan otomatis akan dihentikan.",
-    whatsappCardTitle: "Koneksi WhatsApp Business Coexistence (GASS-Style)",
     providersTableTitle: "Koneksi Adapter Provider API",
-    providersTableSubtitle: "Status autentikasi Meta Marketing, WhatsApp Cloud, Meta Model API, dan Supabase.",
+    providersTableSubtitle: "Status akun iklan Meta, sumber data CRM, layanan analisis, dan basis data.",
     syncButton: "Sinkronkan Ulang",
     syncingButton: "Menyinkronkan...",
     lastSynced: "Sinkronisasi Terakhir:",
@@ -342,7 +336,7 @@ export const idDictionary: TranslationDictionary = {
     meta: {
       title: "HD Creative — Analisis iklan properti hingga percakapan pembeli",
       description:
-        "HD Creative membantu tim properti membaca performa iklan Meta bersama percakapan WhatsApp, kualitas prospek, dan tindak lanjut sales.",
+        "HD Creative membantu tim properti membaca performa iklan Meta bersama data prospek yang dicatat atau diunggah ke CRM.",
     },
     nav: {
       features: "Fitur",
@@ -356,14 +350,14 @@ export const idDictionary: TranslationDictionary = {
     },
     hero: {
       badge: "Untuk pemasaran properti",
-      title: "Hubungkan performa iklan dengan percakapan calon pembeli.",
+      title: "Baca performa iklan dan data prospek dalam satu alur.",
       subtitle:
-        "Pantau belanja Meta Ads, percakapan WhatsApp, dan tindak lanjut prospek dalam satu alur yang mudah ditinjau.",
+        "Tinjau performa Meta Ads bersama data CRM yang Anda catat atau unggah untuk memahami tindak lanjut prospek.",
       ctaPrimary: "Coba Dashboard",
-      note: "Memerlukan akun Meta Ads dan WhatsApp Business untuk data langsung.",
+      note: "Hubungkan akun Meta Ads dan unggah data CRM untuk memulai.",
       previewLabel: "Contoh tampilan",
       previewSpend: "Belanja iklan",
-      previewLeads: "Percakapan masuk",
+      previewLeads: "Prospek tercatat",
       previewQualified: "Lead berkualitas",
       previewCpql: "CPQL (biaya per lead berkualitas)",
       previewBuyerScore: "Buyer Score",
@@ -391,11 +385,11 @@ export const idDictionary: TranslationDictionary = {
       unseenItems: [
         { title: "Bandingkan performa per iklan", detail: "Tinjau belanja, tayangan, klik, dan hasil Meta menurut campaign dan iklan." },
         { title: "Atribusi dengan bukti", detail: "Referral resmi yang diterima ditautkan ke Ad ID. Inferensi dan percakapan tanpa sumber tetap dipisahkan." },
-        { title: "Insight saat data tersedia", detail: "Dengan integrasi WhatsApp atau CRM aktif, tinjau kebutuhan, respons sales, dan hasil yang tercatat." },
+        { title: "Insight saat data tersedia", detail: "Tinjau informasi prospek dan hasil yang benar-benar dicatat atau diunggah tim Anda." },
       ],
       solutionSummary:
         "Lihat mana yang didukung bukti, mana yang belum diketahui, dan data apa yang perlu dilengkapi sebelum mengubah anggaran.",
-      note: "Ketersediaan insight percakapan bergantung pada referral yang diterima dan integrasi WhatsApp atau CRM yang aktif. Data tanpa bukti tetap ditandai terpisah.",
+      note: "Analisis memakai data iklan Meta dan informasi CRM yang Anda berikan. Informasi yang tidak tersedia tetap ditandai dan tidak ditebak.",
     },
     simulator: {
       eyebrow: "Simulator interaktif",
@@ -546,8 +540,8 @@ export const idDictionary: TranslationDictionary = {
     },
     workflow: {
       eyebrow: "Cara kerja",
-      title: "Dari data iklan ke konteks calon pembeli.",
-      subtitle: "Hubungkan Meta Ads dan WhatsApp, lalu tinjau performa serta konteks percakapan yang tersedia. Analisis lead dijalankan saat diminta.",
+      title: "Dari performa iklan ke data prospek.",
+      subtitle: "Hubungkan Meta Ads, lalu catat atau unggah data CRM untuk dianalisis saat Anda membutuhkannya.",
       readOnlyNote: "Akses Meta hanya baca. Sinkronisasi tidak mengubah iklan atau anggaran.",
       steps: [
         {
@@ -555,12 +549,12 @@ export const idDictionary: TranslationDictionary = {
           description: "Masuk melalui Meta dan pilih akun iklan. HD Creative mengambil data performa dengan akses baca saja.",
         },
         {
-          title: "Hubungkan WhatsApp Business",
-          description: "Hubungkan nomor WhatsApp Business melalui Coexistence Meta agar pesan masuk dan referral CTWA dapat diterima.",
+          title: "Unggah data CRM",
+          description: "Masukkan data prospek secara manual atau unggah file spreadsheet dari tim Anda.",
         },
         {
           title: "Sinkronkan data",
-          description: "Tarik metrik iklan dari Meta dan catat pesan melalui webhook. Percakapan dihubungkan ke iklan hanya jika bukti referral tersedia.",
+          description: "Tarik metrik iklan Meta dan hubungkan data prospek ke iklan hanya bila informasi sumber tersedia.",
         },
         {
           title: "Analisis dan tinjau lead",
@@ -575,11 +569,11 @@ export const idDictionary: TranslationDictionary = {
       items: [
         {
           title: "Informasi akses disimpan dengan aman",
-          description: "Informasi untuk menghubungkan Meta dan WhatsApp disimpan dalam bentuk terenkripsi dan dibuka kembali saat dibutuhkan layanan.",
+          description: "HD Creative membaca metrik iklan Meta. Iklan dan anggaran Anda tidak diubah oleh aplikasi.",
         },
         {
-          title: "Pesan WhatsApp diperiksa sebelum diproses",
-          description: "Data yang dikirim WhatsApp diperiksa keasliannya terlebih dahulu. Kiriman yang tidak lolos pemeriksaan akan ditolak.",
+          title: "Analisis mengikuti data yang diberikan",
+          description: "Informasi prospek berasal dari input atau file CRM Anda. Data yang tidak tersedia tidak dibuat atau ditebak.",
         },
         {
           title: "Data setiap organisasi dipisahkan",
@@ -590,7 +584,7 @@ export const idDictionary: TranslationDictionary = {
           description: "HD Creative hanya mengambil data performa dari Meta. Iklan dan anggaran tidak dapat diubah melalui koneksi ini.",
         },
       ],
-      note: "Percakapan WhatsApp disimpan untuk membantu penilaian calon pembeli. Organisasi Anda menentukan berapa lama data disimpan dan siapa di tim yang dapat mengaksesnya.",
+      note: "Data prospek yang Anda catat atau unggah disimpan di ruang kerja organisasi Anda.",
     },
     faq: {
       eyebrow: "Pertanyaan umum",
@@ -610,7 +604,7 @@ export const idDictionary: TranslationDictionary = {
         {
           question: "Apa arti atribusi terverifikasi, terinferensi, dan tidak diketahui?",
           answer:
-            "Terverifikasi berarti WhatsApp menyertakan rujukan resmi ke iklan. Inferensi berarti ada petunjuk yang cocok, tetapi tidak ada rujukan resmi. Tidak diketahui berarti buktinya belum cukup. Dalam keadaan terakhir, percakapan tidak dipasangkan ke iklan tertentu.",
+            "Atribusi terverifikasi memerlukan bukti rujukan resmi Meta. Data CRM yang diunggah hanya dikaitkan ke iklan bila file memuat informasi iklan yang cocok; selain itu sumbernya tetap tidak diketahui.",
         },
         {
           question: "Apakah HD Creative mengubah iklan atau anggaran saya?",
@@ -618,9 +612,9 @@ export const idDictionary: TranslationDictionary = {
             "Tidak. HD Creative hanya membaca data performa dari Meta. Anda tetap memegang kendali untuk mengubah iklan, pengaturan, dan anggaran.",
         },
         {
-          question: "Data apa yang perlu saya hubungkan?",
+          question: "Data apa yang perlu saya siapkan?",
           answer:
-            "Hubungkan Meta Ads untuk melihat belanja dan performa iklan. Hubungkan WhatsApp Business agar pesan masuk dan rujukan iklan dapat diterima. Penilaian lead memerlukan isi percakapan yang tersedia; hasil survei atau booking hanya terlihat jika dicatat di sistem.",
+            "Hubungkan akun Meta Ads dan unggah data CRM dalam format yang disediakan. Analisis lead bergantung pada informasi yang tercatat di file atau input manual, termasuk tahap survei dan booking.",
         },
         {
           question: "Apakah skor AI dapat ditinjau ulang oleh tim saya?",
@@ -632,7 +626,7 @@ export const idDictionary: TranslationDictionary = {
     cta: {
       eyebrow: "Mulai dengan data Anda",
       title: "Bawa data iklan dan percakapan ke satu dashboard.",
-      subtitle: "Hubungkan Meta Ads dan WhatsApp Business untuk meninjau biaya iklan, sumber percakapan, dan tindak lanjut yang tersedia.",
+      subtitle: "Hubungkan Meta Ads, lalu unggah data CRM untuk meninjau biaya iklan dan perkembangan prospek.",
       primary: "Coba Dashboard",
       secondary: "Sudah punya akun? Masuk",
     },

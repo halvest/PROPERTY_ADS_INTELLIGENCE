@@ -5,6 +5,7 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import type { RealAdRow } from "@/app/(dashboard)/ads/page";
 import type { AIAdAnalysisResponse } from "@/app/api/ai/analyze-ad/route";
 import type { AdDetailResponseData } from "@/app/api/ads/[id]/route";
+import { useAiQuota } from "@/hooks/useAiQuota";
 
 interface AdDetailDrawerProps {
   ad: RealAdRow;
@@ -15,11 +16,12 @@ interface AdDetailDrawerProps {
 
 export function AdDetailDrawer({
   ad,
-  currency = "IDR",
+  currency,
   lastSyncedAt,
   onClose,
 }: AdDetailDrawerProps) {
   const { formatNumber, locale } = useI18n();
+  const { quota, refresh: refreshQuota } = useAiQuota();
 
   // Server-verified ad detail
   const [serverDetail, setServerDetail] = useState<AdDetailResponseData | null>(null);
@@ -39,6 +41,7 @@ export function AdDetailDrawer({
   const formatMoney = (amount: number | null | undefined) => {
     if (amount === null || amount === undefined || Number.isNaN(amount)) return "—";
     const intlLocale = locale === "id" ? "id-ID" : "en-US";
+    if (!currency) return amount.toLocaleString(intlLocale, { maximumFractionDigits: 2 });
     return new Intl.NumberFormat(intlLocale, {
       style: "currency",
       currency,
@@ -91,6 +94,10 @@ export function AdDetailDrawer({
   const runAiAnalysis = async () => {
     // Prevent double-clicks or concurrent requests
     if (isAnalyzingRef.current || isAiLoading) return;
+    if (quota?.remaining === 0) {
+      setAiError(locale === "id" ? "Kuota analisis gratis Anda telah habis. Lihat waktu reset di Pengaturan." : "Your free analysis quota is exhausted. Check the reset time in Settings.");
+      return;
+    }
     isAnalyzingRef.current = true;
     setIsAiLoading(true);
     setAiError(null);
@@ -98,7 +105,7 @@ export function AdDetailDrawer({
     try {
       const res = await fetch("/api/ai/analyze-ad", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           adId: ad.id,
           adName: ad.adName,
@@ -134,6 +141,7 @@ export function AdDetailDrawer({
       if (json.success && analysisData && analysisData.executiveSummary) {
         setAiAnalysis(analysisData);
         setAiError(null);
+        void refreshQuota();
       } else {
         throw new Error("Format respons analisis AI tidak valid. Silakan coba kembali.");
       }
@@ -145,6 +153,7 @@ export function AdDetailDrawer({
     } finally {
       setIsAiLoading(false);
       isAnalyzingRef.current = false;
+      void refreshQuota();
     }
   };
 
@@ -162,48 +171,6 @@ export function AdDetailDrawer({
   const deliveryStatus = serverDetail?.delivery.deliveryStatus || ad.deliveryStatus;
   const deliveryLabel = serverDetail?.delivery.deliveryLabel || ad.deliveryLabel;
   const deliveryReason = serverDetail?.delivery.deliveryReason || ad.deliveryReason || "Penayangan Meta";
-  const renderVerificationBadge = (status: string) => {
-    switch (status) {
-      case "TERVERIFIKASI ADA":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800 border border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            TERVERIFIKASI ADA
-          </span>
-        );
-      case "TERVERIFIKASI NOL":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-2 py-0.5 text-[11px] font-bold text-zinc-700 border border-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700">
-            <span className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
-            TERVERIFIKASI NOL
-          </span>
-        );
-      case "BELUM TERVERIFIKASI":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-800 border border-blue-300 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800">
-            <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
-            BELUM TERVERIFIKASI
-          </span>
-        );
-      case "DATA TIDAK KONSISTEN":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-800 border border-rose-300 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800">
-            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-            DATA TIDAK KONSISTEN
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-2 py-0.5 text-[11px] font-bold text-zinc-600 border border-zinc-200">
-            {status}
-          </span>
-        );
-    }
-  };
-
-
-
-
   const renderBudgetDecisionBadge = (decision: string) => {
     switch (decision) {
       case "NAIKKAN":
@@ -489,7 +456,8 @@ export function AdDetailDrawer({
               <button
                 type="button"
                 onClick={runAiAnalysis}
-                disabled={isAiLoading}
+                disabled={isAiLoading || quota?.remaining === 0}
+                title={quota?.remaining === 0 ? (locale === "id" ? "Kuota habis — lihat Pengaturan" : "Quota exhausted — see Settings") : undefined}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
               >
                 {isAiLoading ? (
@@ -537,6 +505,8 @@ export function AdDetailDrawer({
                 <button
                   type="button"
                   onClick={runAiAnalysis}
+                  disabled={quota?.remaining === 0}
+                  title={quota?.remaining === 0 ? (locale === "id" ? "Kuota habis — lihat Pengaturan" : "Quota exhausted — see Settings") : undefined}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 cursor-pointer transition-colors"
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -576,7 +546,8 @@ export function AdDetailDrawer({
                   <button
                     type="button"
                     onClick={runAiAnalysis}
-                    disabled={isAiLoading}
+                    disabled={isAiLoading || quota?.remaining === 0}
+                    title={quota?.remaining === 0 ? (locale === "id" ? "Kuota habis — lihat Pengaturan" : "Quota exhausted — see Settings") : undefined}
                     className="inline-flex items-center gap-1 rounded bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 cursor-pointer transition-colors"
                   >
                     <span>Coba Lagi</span>
@@ -611,32 +582,30 @@ export function AdDetailDrawer({
                   </p>
                 </div>
 
-                {/* B. Status Hasil WhatsApp */}
-                {aiAnalysis.whatsappStatus && (
+                {/* B. Hasil Meta dan data CRM yang tersedia */}
+                {aiAnalysis.sourceDataStatus && (
                   <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 space-y-2.5 shadow-xs">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <span className="text-[10px] text-zinc-400 uppercase tracking-wider block font-bold">
-                        Status Hasil WhatsApp
+                        Hasil Meta & Data CRM
                       </span>
-                      {renderVerificationBadge(aiAnalysis.whatsappStatus.verificationStatus)}
                     </div>
-                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    {aiAnalysis.sourceDataStatus.note && (
+                      <p className="text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+                        {aiAnalysis.sourceDataStatus.note}
+                      </p>
+                    )}
+                    <div className="grid grid-cols-2 gap-2 text-center text-xs">
                       <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60">
-                        <p className="text-[10px] text-zinc-400">Menurut Meta</p>
+                        <p className="text-[10px] text-zinc-400">Hasil menurut Meta</p>
                         <p className="mt-0.5 font-mono font-bold text-zinc-800 dark:text-zinc-200">
-                          {aiAnalysis.whatsappStatus.chatAccordingToMeta}
+                          {aiAnalysis.sourceDataStatus.metaResults}
                         </p>
                       </div>
                       <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60">
-                        <p className="text-[10px] text-zinc-400">Pesan Masuk Riil</p>
+                        <p className="text-[10px] text-zinc-400">Prospek CRM tersedia</p>
                         <p className="mt-0.5 font-mono font-bold text-zinc-800 dark:text-zinc-200">
-                          {aiAnalysis.whatsappStatus.verifiedInboundMessages || "—"}
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60">
-                        <p className="text-[10px] text-zinc-400">Leads CRM</p>
-                        <p className="mt-0.5 font-mono font-bold text-zinc-800 dark:text-zinc-200">
-                          {aiAnalysis.whatsappStatus.crmLeads || "—"}
+                          {aiAnalysis.sourceDataStatus.crmProspects || "—"}
                         </p>
                       </div>
                     </div>

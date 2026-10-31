@@ -3,6 +3,17 @@ import crypto from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getLiveDashboardData } from "@/lib/data/live-dashboard-service";
 
+function mockQuery(data: unknown[], error: unknown = null) {
+  const result = { data, error };
+  const query: Record<string, unknown> = {};
+  for (const method of ["select", "eq", "gte", "lte", "in", "order", "limit"]) {
+    query[method] = vi.fn(() => query);
+  }
+  query.then = (resolve: (value: typeof result) => unknown, reject?: (reason: unknown) => unknown) =>
+    Promise.resolve(result).then(resolve, reject);
+  return query;
+}
+
 describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication", () => {
   const secretKey = "test_meta_app_secret_for_signing_state_token_12345";
   const orgId = "11111111-2222-3333-4444-555555555555";
@@ -200,9 +211,7 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
           }
           if (table === "ad_insights" || table === "conversations") {
             return {
-              select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-              }),
+              select: vi.fn(() => mockQuery([])),
             };
           }
           return {
@@ -343,16 +352,12 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
           }
           if (table === "ad_insights") {
             return {
-              select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockResolvedValue({ data: mockInsights, error: null }),
-              }),
+              select: vi.fn(() => mockQuery(mockInsights)),
             };
           }
           if (table === "conversations") {
             return {
-              select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockResolvedValue({ data: mockConvs, error: null }),
-              }),
+              select: vi.fn(() => mockQuery(mockConvs)),
             };
           }
           return {

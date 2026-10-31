@@ -62,8 +62,7 @@ export async function POST(request: NextRequest) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
-    if ((authError || !user) && isProduction) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -78,8 +77,11 @@ export async function POST(request: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     const { searchParams } = request.nextUrl;
     const validateOnly = searchParams.get("validateOnly") === "true";

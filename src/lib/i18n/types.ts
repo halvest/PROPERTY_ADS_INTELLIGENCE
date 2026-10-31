@@ -47,8 +47,6 @@ export interface TranslationDictionary {
     indonesian: string;
     english: string;
     workspace: string;
-    demoMode: string;
-    demoBadgeTooltip: string;
     active: string;
     connected: string;
     disconnected: string;
@@ -94,8 +92,6 @@ export interface TranslationDictionary {
     hasAccount: string;
     signInLink: string;
     signUpLink: string;
-    demoLoginButton: string;
-    demoLoginSubtitle: string;
     passwordMinLength: string;
     passwordMismatch: string;
     invalidCredentials: string;
@@ -182,7 +178,6 @@ export interface TranslationDictionary {
       sectionTitle: string;
       ruleBasedBadge: string;
       sectionSubtitle: string;
-      dataSourceLabel: string;
       filterAll: string;
       scaleCandidate: string;
       investigate: string;
@@ -294,7 +289,6 @@ export interface TranslationDictionary {
     changeSelection: string;
     disconnectMeta: string;
     disconnectConfirm: string;
-    whatsappCardTitle: string;
     providersTableTitle: string;
     providersTableSubtitle: string;
     syncButton: string;

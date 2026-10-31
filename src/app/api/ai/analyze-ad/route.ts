@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { finishAiAnalysis, requestIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
 import { z } from "zod";
 import { isMetaModelApiConfigured, maskApiKey, getMetaConfig } from "@/lib/ai/meta/config";
 import { MetaModelApiClient } from "@/lib/ai/meta/client";
@@ -49,7 +50,8 @@ const AnalyzeAdRequestSchema = z.object({
     .optional(),
 });
 
-export type WhatsAppVerificationStatus =
+export type WhatsAppVerificationStatus = SourceVerificationStatus;
+type SourceVerificationStatus =
   | "TERVERIFIKASI ADA"
   | "TERVERIFIKASI NOL"
   | "BELUM TERVERIFIKASI"
@@ -62,11 +64,9 @@ export type BudgetDecisionKey =
   | "KURANGI"
   | "HENTIKAN SEMENTARA";
 
-export interface WhatsAppStatusSection {
-  chatAccordingToMeta: string;
-  verifiedInboundMessages: string;
-  crmLeads: string;
-  verificationStatus: WhatsAppVerificationStatus;
+export interface SourceDataStatusSection {
+  metaResults: string;
+  crmProspects: string;
   note?: string | null;
 }
 
@@ -127,8 +127,8 @@ export interface AIAdAnalysisResponse {
   // A. Ringkasan Kinerja (Maksimal 3–4 baris)
   performanceSummary: string;
 
-  // B. Status Hasil WhatsApp
-  whatsappStatus: WhatsAppStatusSection;
+  // B. Sumber data yang dipakai
+  sourceDataStatus: SourceDataStatusSection;
 
   // C. Keputusan (Satu keputusan utama + alasan maks 2 kalimat)
   budgetDecision: BudgetDecisionSection;
@@ -158,16 +158,9 @@ export interface AIAdAnalysisResponse {
 // Zod schema to validate live model JSON
 const ModelOutputSchema = z.object({
   performanceSummary: z.string(),
-  whatsappStatus: z.object({
-    chatAccordingToMeta: z.string(),
-    verifiedInboundMessages: z.string(),
-    crmLeads: z.string(),
-    verificationStatus: z.enum([
-      "TERVERIFIKASI ADA",
-      "TERVERIFIKASI NOL",
-      "BELUM TERVERIFIKASI",
-      "DATA TIDAK KONSISTEN",
-    ]),
+  sourceDataStatus: z.object({
+    metaResults: z.string(),
+    crmProspects: z.string(),
     note: z.string().nullable().optional(),
   }),
   budgetDecision: z.object({
@@ -225,20 +218,19 @@ function parseModelJson(raw: string): unknown {
 }
 
 /**
- * Builds the 6 core metrics strictly complying with CTWA data validation rules:
- * 1. If conversations is 0, cost per conversation MUST NOT be shown as valid actual cost.
- * 2. If cost per conversation > 0 but conversations is 0, marks as DATA TIDAK KONSISTEN.
- * 3. Never produces Infinity / NaN.
+ * Builds Meta performance metrics alongside CRM data supplied by the client.
+ * CRM lead costs are only shown when imported records are available.
  */
 export function buildCoreMetrics(params: {
   spend: number;
   linkClicks: number;
   linkCpc: number | null;
   metaConversations: number | null;
-  verifiedWhatsAppMessages: number | null;
-  hasActiveIntegration: boolean;
-  costPerConversation: number | null;
-  isCostPerConversationValid: boolean;
+  crmLeadsCount?: number | null;
+  verifiedWhatsAppMessages?: number | null;
+  hasActiveIntegration?: boolean;
+  costPerConversation?: number | null;
+  isCostPerConversationValid?: boolean;
   costPerConversationNote?: string;
 }): CoreMetricItem[] {
   const {
@@ -246,11 +238,7 @@ export function buildCoreMetrics(params: {
     linkClicks,
     linkCpc,
     metaConversations,
-    verifiedWhatsAppMessages,
-    hasActiveIntegration,
-    costPerConversation,
-    isCostPerConversationValid,
-    costPerConversationNote,
+    crmLeadsCount = null,
   } = params;
 
   return [
@@ -277,34 +265,32 @@ export function buildCoreMetrics(params: {
     },
     {
       id: "metaConversations",
-      label: "Percakapan menurut Meta",
+      label: "Hasil menurut Meta",
       rawValue: metaConversations,
-      formattedValue: metaConversations !== null ? `${metaConversations.toLocaleString("id-ID")} chat` : "Tidak tersedia",
+      formattedValue: metaConversations !== null ? `${metaConversations.toLocaleString("id-ID")} hasil` : "Tidak tersedia",
       isValid: metaConversations !== null,
     },
     {
-      id: "verifiedMessages",
-      label: "Pesan WhatsApp Terverifikasi",
-      rawValue: verifiedWhatsAppMessages,
+      id: "crmLeads",
+      label: "Prospek CRM Tercatat",
+      rawValue: crmLeadsCount,
       formattedValue:
-        !hasActiveIntegration
-          ? "Belum diketahui"
-          : verifiedWhatsAppMessages !== null
-          ? `${verifiedWhatsAppMessages.toLocaleString("id-ID")} pesan`
-          : "Belum diketahui",
-      isValid: hasActiveIntegration && verifiedWhatsAppMessages !== null,
-      note: !hasActiveIntegration ? "Integrasi WhatsApp belum terhubung" : undefined,
+        crmLeadsCount === null
+          ? "Belum tersedia"
+          : `${crmLeadsCount.toLocaleString("id-ID")} prospek`,
+      isValid: crmLeadsCount !== null,
+      note: "Jumlah dari input atau unggahan klien; bukan pesan yang diverifikasi otomatis.",
     },
     {
-      id: "costPerConversation",
-      label: "Biaya per Percakapan",
-      rawValue: isCostPerConversationValid ? costPerConversation : null,
+      id: "costPerCrmLead",
+      label: "Biaya per Prospek CRM",
+      rawValue: crmLeadsCount !== null && crmLeadsCount > 0 ? Number((spend / crmLeadsCount).toFixed(2)) : null,
       formattedValue:
-        isCostPerConversationValid && costPerConversation !== null
-          ? `${formatRupiah(costPerConversation)} / chat`
+        crmLeadsCount !== null && crmLeadsCount > 0
+          ? `${formatRupiah(spend / crmLeadsCount)} / prospek`
           : "Tidak dapat dihitung",
-      isValid: isCostPerConversationValid,
-      note: costPerConversationNote || (!isCostPerConversationValid ? "Tidak valid karena belum ada chat terverifikasi" : undefined),
+      isValid: crmLeadsCount !== null && crmLeadsCount > 0,
+      note: "Belanja Meta dibagi jumlah prospek CRM terkait dengan iklan ini.",
     },
   ];
 }
@@ -438,7 +424,7 @@ export function buildVerifiedMetricsSummary(params: {
           ? `${results} percakapan`
           : "0 percakapan",
       status: resultsTrackingStatus,
-      plainExplanation: "Pesan WhatsApp aktual yang berhasil diterima dari kampanye iklan ini.",
+      plainExplanation: "Hasil yang dilaporkan Meta untuk kampanye iklan ini.",
     },
     {
       id: "costPerResult",
@@ -478,7 +464,7 @@ function generateDeterministicAdAnalysis(
     crmLeadsCount: number | null;
     crmSurveysCount: number;
     crmClosingsCount: number;
-    detectedStatus?: WhatsAppVerificationStatus;
+    detectedStatus?: SourceVerificationStatus;
   }
 ): AIAdAnalysisResponse {
   const { adName, campaignName, campaignObjective, metrics } = input;
@@ -499,7 +485,7 @@ function generateDeterministicAdAnalysis(
   const crmLeads = context.crmLeadsCount;
 
   // Determine conversation verification status
-  let verificationStatus: WhatsAppVerificationStatus = context.detectedStatus || "BELUM TERVERIFIKASI";
+  let verificationStatus: SourceVerificationStatus = context.detectedStatus || "BELUM TERVERIFIKASI";
   let statusNote: string | null = null;
   let isCostPerConversationValid = false;
   let costPerConversation: number | null = null;
@@ -516,10 +502,10 @@ function generateDeterministicAdAnalysis(
   } else if (context.hasActiveIntegration && (metaConversations || 0) > 0 && verifiedMessages === 0) {
     verificationStatus = "DATA TIDAK KONSISTEN";
     statusNote = "Meta melaporkan percakapan, tetapi belum ada pesan masuk yang terekam pada sistem WhatsApp.";
-    costNote = "Pencatatan Meta dan WhatsApp belum selaras.";
+    costNote = "Hasil Meta dan jumlah prospek CRM tidak sebanding langsung.";
   } else if (!context.hasActiveIntegration) {
     verificationStatus = "BELUM TERVERIFIKASI";
-    statusNote = "Integrasi WhatsApp belum terhubung ke sistem sehingga pesan masuk belum dapat dipastikan.";
+    statusNote = "Pesan tidak dikumpulkan otomatis; analisis menggunakan data CRM yang dicatat atau diunggah klien.";
     costNote = "Jumlah chat belum terverifikasi sistem.";
   } else if (context.hasActiveIntegration && verifiedMessages !== null && verifiedMessages > 0) {
     verificationStatus = "TERVERIFIKASI ADA";
@@ -527,7 +513,7 @@ function generateDeterministicAdAnalysis(
     costPerConversation = Number((spend / verifiedMessages).toFixed(2));
   } else if (context.hasActiveIntegration && verifiedMessages === 0 && (metaConversations === 0 || metaConversations === null)) {
     verificationStatus = "TERVERIFIKASI NOL";
-    statusNote = "Integrasi WhatsApp aktif dan belum ada pesan masuk yang diterima untuk iklan ini.";
+    statusNote = "Belum ada data prospek yang dicatat atau diunggah klien untuk iklan ini.";
     costNote = "Tidak dapat dihitung karena belum ada chat.";
   }
 
@@ -539,29 +525,22 @@ function generateDeterministicAdAnalysis(
 
   // 1. Ringkasan Kinerja (Maksimal 3–4 baris)
   let performanceSummary = "";
-  if (verificationStatus === "TERVERIFIKASI ADA") {
+  if (verificationStatus === "TERVERIFIKASI ADA" && crmLeads !== null) {
     performanceSummary = `Iklan sudah menghabiskan ${formatRupiah(spend)} dan menghasilkan ${linkClicks.toLocaleString("id-ID")} klik tautan dengan ${verifiedMessages} pesan WhatsApp masuk terverifikasi. Biaya per chat tercatat ${formatRupiah(costPerConversation)}. Lanjutkan pemantauan kualitas respon dan percepat waktu tindak lanjut admin penjualan.`;
   } else if (verificationStatus === "BELUM TERVERIFIKASI") {
-    performanceSummary = `Iklan sudah menghabiskan ${formatRupiah(spend)} dan memperoleh ${linkClicks.toLocaleString("id-ID")} klik tautan. Namun, jumlah chat WhatsApp belum dapat dipastikan dari data yang tersedia. Sebelum menambah anggaran, periksa pencatatan percakapan dan pastikan pesan masuk benar-benar terhubung ke sistem.`;
+    performanceSummary = `Iklan menghabiskan ${formatRupiah(spend)} dan memperoleh ${linkClicks.toLocaleString("id-ID")} klik tautan. Jumlah prospek dari input atau unggahan CRM ${crmLeads === null ? "belum tersedia" : `tercatat ${crmLeads.toLocaleString("id-ID")}`}; data ini belum mencakup pesan yang tidak dimasukkan ke CRM.`;
   } else if (verificationStatus === "DATA TIDAK KONSISTEN") {
-    performanceSummary = `Iklan mencatat belanja ${formatRupiah(spend)} dan ${linkClicks.toLocaleString("id-ID")} klik tautan, namun terdapat pertentangan data chat antara laporan Meta dan catatan WhatsApp. Selaraskan pencatatan dan pelacakan webhook sebelum mengambil keputusan anggaran.`;
+    performanceSummary = `Iklan mencatat belanja ${formatRupiah(spend)} dan ${linkClicks.toLocaleString("id-ID")} klik tautan. Hasil Meta dan prospek CRM memiliki definisi berbeda; tinjau sumber data sebelum membandingkannya.`;
   } else {
     // TERVERIFIKASI NOL
-    performanceSummary = `Iklan telah menghabiskan ${formatRupiah(spend)} dengan ${linkClicks.toLocaleString("id-ID")} klik tautan, tetapi belum ada pesan WhatsApp yang masuk. Periksa jalur tautan nomor WhatsApp dan evaluasi penawaran pembuka iklan sebelum melanjutkan pengeluaran.`;
+    performanceSummary = `Iklan telah menghabiskan ${formatRupiah(spend)} dan memperoleh ${linkClicks.toLocaleString("id-ID")} klik tautan. Belum ada prospek CRM yang dicatat untuk iklan ini; pastikan catatan prospek telah dimasukkan sebelum menilai hasil setelah klik.`;
   }
 
   // 2. Status Hasil WhatsApp
-  const whatsappStatus: WhatsAppStatusSection = {
-    chatAccordingToMeta: metaConversations !== null ? `${metaConversations.toLocaleString("id-ID")} chat` : "Tidak tersedia",
-    verifiedInboundMessages:
-      !context.hasActiveIntegration
-        ? "Belum diketahui"
-        : verifiedMessages !== null
-        ? `${verifiedMessages.toLocaleString("id-ID")} pesan masuk`
-        : "Belum diketahui",
-    crmLeads: crmLeads !== null ? `${crmLeads.toLocaleString("id-ID")} prospek` : "Belum tersedia",
-    verificationStatus,
-    note: statusNote,
+  const sourceDataStatus: SourceDataStatusSection = {
+    metaResults: metaConversations !== null ? `${metaConversations.toLocaleString("id-ID")} hasil` : "Tidak tersedia",
+    crmProspects: crmLeads !== null ? `${crmLeads.toLocaleString("id-ID")} prospek dari CRM` : "Belum tersedia",
+    note: statusNote || "Data prospek berasal dari input atau unggahan klien. Pesan tidak dikumpulkan otomatis.",
   };
 
   // 3. Keputusan (Satu keputusan utama + alasan maksimal 2 kalimat)
@@ -570,10 +549,12 @@ function generateDeterministicAdAnalysis(
 
   if (verificationStatus === "DATA TIDAK KONSISTEN") {
     decision = "TAHAN KENAIKAN";
-    decisionReason = "Terdapat pertentangan data antara laporan Meta dan catatan pesan WhatsApp. Selaraskan pencatatan sebelum menambah biaya iklan.";
+    decisionReason = "Hasil Meta dan prospek CRM memiliki definisi berbeda. Tinjau data sumber sebelum membandingkan keduanya untuk keputusan anggaran.";
   } else if (verificationStatus === "BELUM TERVERIFIKASI") {
     decision = "TAHAN KENAIKAN";
-    decisionReason = "Klik sudah masuk, tetapi hasil WhatsApp belum terverifikasi. Periksa pencatatan pesan terlebih dahulu sebelum menambah biaya iklan.";
+    decisionReason = crmLeads !== null && crmLeads > 0
+      ? `CRM mencatat ${crmLeads.toLocaleString("id-ID")} prospek terkait iklan ini. Gunakan jumlah tersebut sebagai catatan yang diunggah klien, bukan sebagai verifikasi pesan otomatis.`
+      : "Belum ada prospek CRM yang dicatat untuk iklan ini. Lengkapi data prospek sebelum menilai biaya per prospek.";
   } else if (spend === 0 || impressions === 0) {
     decision = "TAHAN KENAIKAN";
     decisionReason = "Iklan belum memiliki data penayangan yang cukup. Biarkan materi iklan tayang untuk mengumpulkan respon awal.";
@@ -594,7 +575,7 @@ function generateDeterministicAdAnalysis(
       decisionReason = `Pengeluaran telah mencapai ${formatRupiah(spend)} tanpa respon klik atau pesan masuk yang memadai. Hentikan sementara untuk merumuskan ulang penawaran.`;
     } else if (linkClicks >= 40) {
       decision = "TAHAN KENAIKAN";
-      decisionReason = `Klik tautan sudah masuk (${linkClicks} klik) namun belum ada pesan WhatsApp yang diterima. Periksa alur nomor WhatsApp sebelum menambah biaya iklan.`;
+      decisionReason = `Terdapat ${linkClicks} klik tautan, tetapi belum ada prospek CRM yang dicatat. Periksa tujuan iklan dan lengkapi catatan prospek sebelum menaikkan anggaran.`;
     } else {
       decision = "TAHAN KENAIKAN";
       decisionReason = "Belum ada pesan masuk yang terekam pada sistem. Pantau perkembangan data hingga mencapai volume klik yang layak evaluasi.";
@@ -611,32 +592,32 @@ function generateDeterministicAdAnalysis(
     isHypothesis: false,
   });
 
-  if (verificationStatus === "TERVERIFIKASI ADA") {
+  if (verificationStatus === "TERVERIFIKASI ADA" && crmLeads !== null) {
     keyFindings.push({
-      finding: "Pesan masuk WhatsApp telah terverifikasi di sistem.",
-      evidence: `${verifiedMessages} percakapan masuk tercatat dengan biaya ${formatRupiah(costPerConversation)} per chat.`,
-      impact: "Tim penjualan memiliki kontak calon pembeli nyata untuk dijadwalkan survei lokasi.",
+      finding: "Data CRM mencatat prospek terkait iklan ini.",
+      evidence: `${crmLeads} prospek tercatat dengan biaya ${formatRupiah(spend / crmLeads)} per prospek CRM.`,
+      impact: "Tim dapat meninjau catatan prospek dan tindak lanjutnya di CRM.",
       isHypothesis: false,
     });
   } else if (verificationStatus === "BELUM TERVERIFIKASI") {
     keyFindings.push({
-      finding: "Pencatatan pesan masuk WhatsApp belum terhubung ke sistem pelacakan.",
-      evidence: `Status verifikasi WhatsApp belum aktif untuk akun pengiklan ini.`,
+      finding: "Belum ada data CRM yang dapat digunakan untuk memeriksa hasil setelah klik.",
+      evidence: `Data percakapan otomatis tidak digunakan pada produk saat ini.`,
       impact: "Efektivitas iklan terhadap penjualan belum dapat dihitung secara pasti.",
       isHypothesis: false,
     });
   } else if (verificationStatus === "DATA TIDAK KONSISTEN") {
     keyFindings.push({
-      finding: "Terjadi ketidaksesuaian pelaporan antara Meta dan pesan WhatsApp.",
-      evidence: `Meta mencatat ${metaConversations || 0} chat, namun WhatsApp mencatat ${verifiedMessages ?? 0} pesan masuk.`,
-      impact: "Perhitungan biaya per kontak berpotensi keliru jika data tidak diselaraskan.",
+      finding: "Hasil Meta dan jumlah prospek CRM memakai sumber yang berbeda.",
+      evidence: `Meta melaporkan ${metaConversations || 0} hasil, sementara CRM mencatat ${crmLeads ?? 0} prospek.`,
+      impact: "Keduanya perlu ditinjau terpisah sebelum menghitung biaya per prospek.",
       isHypothesis: false,
     });
   } else {
     keyFindings.push({
-      finding: "Belum ada pesan WhatsApp yang masuk setelah calon pembeli mengklik tautan.",
-      evidence: `${linkClicks.toLocaleString("id-ID")} klik tautan berbanding 0 pesan masuk.`,
-      impact: "Biaya iklan keluar tanpa menghasilkan kontak prospek yang dapat dihubungi tenaga penjual.",
+      finding: "Belum ada prospek CRM yang dapat dikaitkan dengan iklan ini.",
+      evidence: `${linkClicks.toLocaleString("id-ID")} klik tautan dan belum ada prospek CRM yang dicatat.`,
+      impact: "Data yang tersedia belum menunjukkan hasil setelah klik.",
       isHypothesis: true,
     });
   }
@@ -664,22 +645,22 @@ function generateDeterministicAdAnalysis(
 
   if (verificationStatus === "BELUM TERVERIFIKASI" || verificationStatus === "DATA TIDAK KONSISTEN") {
     priorityActions.push({
-      action: "Verifikasi integrasi WhatsApp dan pelacakan pesan masuk.",
-      howToCheck: "Kirim pesan uji coba mandiri dari tombol iklan dan periksa log webhook WhatsApp.",
-      expectedResult: "Pesan uji coba terekam dengan benar pada sistem analitik HD Creative.",
+      action: "Unggah atau lengkapi data CRM yang terkait dengan kampanye ini.",
+      howToCheck: "Periksa apakah file CRM memuat nama iklan atau kampanye yang cocok dengan data Meta.",
+      expectedResult: "Prospek dapat ditinjau bersama data performa iklan.",
     });
   } else if (verificationStatus === "TERVERIFIKASI NOL" && linkClicks >= 20) {
     priorityActions.push({
-      action: "Uji kelancaran nomor tujuan WhatsApp dan pesan pembuka otomatis.",
-      howToCheck: "Klik tombol iklan dari ponsel dan pastikan aplikasi WhatsApp langsung terbuka tanpa pesan error.",
+      action: "Tinjau tujuan tautan iklan dan informasi penawaran yang ditampilkan.",
+      howToCheck: "Pastikan tautan pada iklan membuka tujuan yang benar di perangkat calon pembeli.",
       expectedResult: "Nomor tujuan aktif dan pesan pembuka otomatis memudahkan calon pembeli menekan tombol kirim.",
     });
   }
 
   if (verificationStatus === "TERVERIFIKASI ADA") {
     priorityActions.push({
-      action: "Percepat respon admin WhatsApp dan arahkan langsung ke jadwal survei lokasi.",
-      howToCheck: "Pantau waktu respon pesan pertama di WhatsApp Business (usahakan di bawah 15 menit).",
+      action: "Tindak lanjuti prospek berdasarkan catatan CRM dan arahkan ke jadwal survei.",
+      howToCheck: "Perbarui tanggal dan tahap tindak lanjut berdasarkan catatan tim sales.",
       expectedResult: "Calon pembeli segera menerima denah unit dan menyepakati waktu kunjungan lokasi.",
     });
   }
@@ -692,9 +673,9 @@ function generateDeterministicAdAnalysis(
     });
   } else {
     priorityActions.push({
-      action: "Pantau akumulasi pesan masuk selama 48 jam ke depan.",
+      action: "Catat atau unggah prospek setelah ditindaklanjuti.",
       howToCheck: "Periksa laporan berkala pada panel HD Creative Ads tanpa mengubah setelan penargetan.",
-      expectedResult: "Mendapatkan data tren biaya per kontak yang konsisten untuk evaluasi mingguan.",
+      expectedResult: "Performa iklan dapat ditinjau bersama data prospek yang dimasukkan klien.",
     });
   }
 
@@ -706,6 +687,7 @@ function generateDeterministicAdAnalysis(
     linkClicks,
     linkCpc,
     metaConversations,
+    crmLeadsCount: context.crmLeadsCount,
     verifiedWhatsAppMessages: verifiedMessages,
     hasActiveIntegration: context.hasActiveIntegration,
     costPerConversation,
@@ -720,7 +702,7 @@ function generateDeterministicAdAnalysis(
       : linkClicks === 0
       ? "Klik Tautan (Link Clicks)"
       : (verifiedMessages ?? 0) === 0
-      ? "Percakapan WhatsApp"
+      ? "Data prospek CRM"
       : context.crmSurveysCount === 0
       ? "Survei Lokasi"
       : context.crmClosingsCount === 0
@@ -728,10 +710,10 @@ function generateDeterministicAdAnalysis(
       : "Tidak ada hambatan kritis";
 
   const stageExplanation =
-    firstFailingStage === "Percakapan WhatsApp"
-      ? "Kesenjangan Antara Klik Tautan dan Percakapan Masuk: Klik tautan berhasil didapatkan, namun transisi menuju percakapan WhatsApp belum menghasilkan kontak."
+    firstFailingStage === "Data prospek CRM"
+      ? "Klik tautan tercatat, tetapi belum ada prospek CRM yang dimasukkan untuk iklan ini."
       : firstFailingStage === "Survei Lokasi"
-      ? "Percakapan WhatsApp sudah masuk, namun belum banyak calon pembeli yang membuat janji survei lokasi."
+      ? "Belum ada catatan survei lokasi pada data CRM yang tersedia."
       : "Funnel berjalan dalam batas wajar.";
 
   const additionalDetails: AdditionalDetails = {
@@ -743,7 +725,7 @@ function generateDeterministicAdAnalysis(
       `Total belanja aktual tercatat ${formatRupiah(spend)}.`,
       `Iklan telah ditampilkan sebanyak ${impressions.toLocaleString("id-ID")} kali.`,
       `Menghasilkan ${linkClicks.toLocaleString("id-ID")} klik tautan spesifik.`,
-      `Status integrasi WhatsApp sistem: ${context.hasActiveIntegration ? "Terhubung aktif" : "Belum terhubung"}.`,
+      "Sumber percakapan otomatis tidak digunakan; konteks prospek berasal dari input dan unggahan CRM klien.",
     ],
     hypotheses: [
       effectiveChats === 0 && linkClicks > 20
@@ -751,9 +733,9 @@ function generateDeterministicAdAnalysis(
         : "Format materi iklan saat ini memiliki tingkat penerimaan wajar pada audiens target.",
     ],
     unknowns: [
-      !context.hasActiveIntegration ? "Jumlah pesan masuk yang sebenarnya diterima pada nomor WhatsApp pengiklan." : "",
+      "Jumlah prospek yang tidak dicatat atau diunggah ke CRM tidak tersedia untuk analisis.",
       reach === 0 ? "Jumlah individu unik yang dijangkau." : "",
-      context.crmSurveysCount === 0 ? "Catatan survei lokasi dari percakapan WhatsApp belum terhubung ke CRM." : "",
+      context.crmSurveysCount === 0 ? "Belum ada catatan survei lokasi di data CRM yang tersedia." : "",
     ].filter(Boolean),
     allMetrics: [
       { label: "Total Belanja", value: formatRupiah(spend), explanation: "Biaya resmi dari platform Meta." },
@@ -778,7 +760,7 @@ function generateDeterministicAdAnalysis(
     campaignName,
     campaignObjective,
     performanceSummary,
-    whatsappStatus,
+    sourceDataStatus,
     budgetDecision: {
       decision,
       reason: decisionReason,
@@ -812,6 +794,7 @@ function generateDeterministicAdAnalysis(
  * Strictly manual AI analysis. Never triggered automatically.
  */
 export async function POST(request: NextRequest) {
+  let quotaReservation: { userId: string; reservationId: string } | null = null;
   try {
     const rl = checkRateLimit(rateLimitKey(request, "ai-analyze-ad"), 20, 60_000);
     if (!rl.allowed) {
@@ -841,9 +824,7 @@ export async function POST(request: NextRequest) {
       error: authErr,
     } = await supabase.auth.getUser();
 
-    const isDemoMode = process.env.DATA_MODE === "demo";
-
-    if ((authErr || !user) && !isDemoMode && process.env.NODE_ENV === "production") {
+    if (authErr || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -858,9 +839,7 @@ export async function POST(request: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const isProduction = process.env.NODE_ENV === "production";
-    const organizationId =
-      profile?.organization_id || (isProduction ? null : "d2a99e97-b4cd-4e9f-b084-e36214277225");
+    const organizationId = profile?.organization_id;
 
     if (!organizationId) {
       return NextResponse.json(
@@ -871,9 +850,9 @@ export async function POST(request: NextRequest) {
 
     let data = parseResult.data;
 
-    // Client-supplied metrics are not ground truth. In production an
-    // analysis requires a server-verified adId within the caller's tenant.
-    if (!data.adId && process.env.NODE_ENV === "production") {
+    // Client-supplied metrics are not ground truth. Every analysis requires a
+    // server-verified ad ID within the caller's tenant.
+    if (!data.adId) {
       return NextResponse.json(
         {
           success: false,
@@ -884,8 +863,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let hasActiveIntegration = false;
-    let verifiedInboundMessages: number | null = null;
+    const hasActiveIntegration = false;
+    const verifiedInboundMessages: number | null = null;
     let crmLeadsCount: number | null = null;
     let crmSurveysCount = 0;
     let crmClosingsCount = 0;
@@ -941,17 +920,6 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Check WhatsApp integration status in integration_connections
-      const { data: waConn } = await supabase
-        .from("integration_connections")
-        .select("id, status")
-        .eq("organization_id", organizationId)
-        .in("provider", ["whatsapp", "meta_whatsapp"])
-        .eq("status", "connected")
-        .maybeSingle();
-
-      hasActiveIntegration = Boolean(waConn);
-
       // Fetch authentic persisted insights from database
       const { data: insights } = await supabase
         .from("ad_insights")
@@ -984,33 +952,24 @@ export async function POST(request: NextRequest) {
       const serverCpm = serverImpressions > 0 ? Number(((serverSpend / serverImpressions) * 1000).toFixed(2)) : null;
       const serverCostPerResult = serverConversions > 0 ? Number((serverSpend / serverConversions).toFixed(2)) : null;
 
-      // Query verified conversations for this ad from WhatsApp / webhook
-      if (hasActiveIntegration) {
-        const { count: convCount } = await supabase
-          .from("conversations")
-          .select("id", { count: "exact", head: true })
-          .eq("ad_id", verifiedAd.id)
-          .eq("organization_id", organizationId);
-
-        verifiedInboundMessages = convCount ?? 0;
-      }
-
       // Query CRM leads count
       const { count: leadsCount } = await supabase
         .from("conversations")
         .select("id", { count: "exact", head: true })
         .eq("ad_id", verifiedAd.id)
         .eq("organization_id", organizationId)
+        .eq("channel", "crm_upload")
         .neq("attribution_status", "unknown");
 
-      crmLeadsCount = leadsCount ?? (verifiedInboundMessages ?? 0);
+      crmLeadsCount = leadsCount;
 
       // Query CRM surveys & closings for THIS ad only (via its conversations)
       const { data: adConvs } = await supabase
         .from("conversations")
         .select("id")
         .eq("ad_id", verifiedAd.id)
-        .eq("organization_id", organizationId);
+        .eq("organization_id", organizationId)
+        .eq("channel", "crm_upload");
       const adConvIds = (adConvs || []).map((c) => c.id);
       const { data: outcomes } = adConvIds.length
         ? await supabase
@@ -1067,12 +1026,32 @@ export async function POST(request: NextRequest) {
           cpm: serverCpm,
           results: serverConversions,
           costPerResult: serverCostPerResult,
-          resultType: "Percakapan WhatsApp / Prospek",
+          resultType: "Hasil Meta",
           attributedLeads: crmLeadsCount || 0,
           qualifiedLeads: serverQualifiedLeads,
         },
       };
     }
+
+    const reservation = await reserveAiAnalysis(user.id, requestIdempotencyKey(request.headers.get("Idempotency-Key")));
+    if (!reservation.ok) {
+      if (reservation.unavailable) {
+        return NextResponse.json({ success: false, error: "Kuota analisis sementara tidak tersedia. Coba lagi sebentar.", code: "QUOTA_UNAVAILABLE" }, { status: 503 });
+      }
+      const limitReached = reservation.status === "limit_reached";
+      return NextResponse.json({
+        success: false,
+        error: limitReached ? "Kuota analisis AI untuk periode ini telah habis." : "Permintaan analisis ini sedang diproses atau sudah selesai.",
+        code: limitReached ? "AI_QUOTA_EXHAUSTED" : "AI_ANALYSIS_DUPLICATE",
+        resetAt: reservation.resetAt,
+      }, { status: limitReached ? 429 : 409 });
+    }
+    quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    const releaseReservation = async (code: string) => {
+      if (!quotaReservation) return;
+      await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, code);
+      quotaReservation = null;
+    };
 
     const isConfigured = isMetaModelApiConfigured();
     const config = getMetaConfig({ requireApiKey: false });
@@ -1082,11 +1061,11 @@ export async function POST(request: NextRequest) {
       try {
         const client = new MetaModelApiClient({ timeoutMs: 35000, maxRetries: 0 });
 
-        const systemPrompt = `Anda adalah Analis Meta Ads Senior spesialis iklan properti, kampanye Click-to-WhatsApp (CTWA), funnel penjualan, dan validasi data CRM.
+        const systemPrompt = `Anda adalah Analis Meta Ads untuk pemasaran properti. Analisis performa iklan Meta dan catatan CRM yang dimasukkan atau diunggah klien.
 
 TUGAS UTAMA:
 Membantu pemilik bisnis dan tim marketing memahami:
-1. Apakah iklan menghasilkan pesan WhatsApp yang benar-benar masuk.
+1. Apa yang ditunjukkan data hasil Meta dan catatan prospek CRM yang tersedia.
 2. Apakah biaya iklan sebanding dengan hasil yang diperoleh.
 3. Apa masalah paling mungkin berdasarkan data yang tersedia.
 4. Tindakan apa yang harus dilakukan selanjutnya.
@@ -1097,13 +1076,11 @@ GAYA BAHASA & ATURAN WAJIB:
 - Hindari frasa berulang ("Hal ini menunjukkan bahwa...", "Dampak bisnis properti...", "Keramaian ini belum menghasilkan peluang...").
 - Gunakan format Rupiah yang konsisten tanpa spasi, contoh: Rp323.001.
 
-ATURAN MUTLAK VALIDASI DATA CTWA:
-1. Jangan menyamakan klik tautan dengan percakapan WhatsApp.
-2. Status verifikasi percakapan (whatsappStatus.verificationStatus) WAJIB memilih salah satu dari 4 status:
-   - TERVERIFIKASI ADA: ditemukan pesan masuk berdasarkan data WhatsApp/webhook.
-   - TERVERIFIKASI NOL: data percakapan telah diperiksa, integrasi aktif, dan memang tidak ditemukan percakapan.
-   - BELUM TERVERIFIKASI: data WhatsApp belum tersedia atau integrasi belum dipastikan aktif.
-   - DATA TIDAK KONSISTEN: terdapat pertentangan data (misal biaya per chat positif tapi chat 0, atau Meta vs WhatsApp tidak selaras).
+ATURAN MUTLAK VALIDASI DATA:
+1. Jangan menyamakan klik tautan, hasil Meta, dan jumlah prospek CRM.
+2. Status sumber data (sourceDataStatus) harus menjelaskan hasil Meta dan prospek CRM apa adanya:
+   - Pesan tidak diambil otomatis; CRM hanya memuat catatan yang dimasukkan/diunggah klien.
+   - Tandai ketidakkonsistenan di catatan hanya jika angka dari sumber yang tersedia saling bertentangan.
 3. Jika jumlah percakapan adalah 0, biaya per percakapan TIDAK BOLEH dianggap valid.
 4. KEPUTUSAN ANGGARAN (budgetDecision.decision) WAJIB MEMILIH SALAH SATU:
    - NAIKKAN
@@ -1122,11 +1099,9 @@ ATURAN MUTLAK VALIDASI DATA CTWA:
 HASILKAN OUTPUT JSON MURNI DENGAN STRUKTUR:
 {
   "performanceSummary": "string maksimal 3-4 baris ringkasan kinerja to-the-point",
-  "whatsappStatus": {
-    "chatAccordingToMeta": "string jumlah chat Meta atau 'Tidak tersedia'",
-    "verifiedInboundMessages": "string jumlah pesan masuk WhatsApp atau 'Belum diketahui'",
-    "crmLeads": "string jumlah prospek CRM atau 'Belum tersedia'",
-    "verificationStatus": "TERVERIFIKASI ADA" | "TERVERIFIKASI NOL" | "BELUM TERVERIFIKASI" | "DATA TIDAK KONSISTEN",
+  "sourceDataStatus": {
+    "metaResults": "string jumlah hasil Meta atau 'Tidak tersedia'",
+    "crmProspects": "string jumlah prospek CRM atau 'Belum tersedia'",
     "note": "string maksimal satu kalimat catatan jika ada kendala data"
   },
   "budgetDecision": {
@@ -1171,14 +1146,12 @@ Data Metrik Aktual:
 - Penayangan (Impressions): ${data.metrics.impressions.toLocaleString("id-ID")} kali
 - Klik Tautan (Link Clicks): ${data.metrics.linkClicks.toLocaleString("id-ID")} klik tautan
 - CPC Tautan: ${data.metrics.linkCpc !== null && data.metrics.linkCpc !== undefined ? `${formatRupiah(data.metrics.linkCpc)} / klik` : "Tidak dapat dihitung"}
-- Chat menurut Meta: ${data.metrics.results > 0 ? `${data.metrics.results} percakapan` : "0 percakapan"}
-- Integrasi WhatsApp Webhook: ${hasActiveIntegration ? "Terhubung Aktif" : "Belum Terhubung"}
-- Pesan Masuk WhatsApp Terverifikasi: ${!hasActiveIntegration ? "Belum diketahui" : verifiedInboundMessages !== null ? `${verifiedInboundMessages} pesan` : "Belum diketahui"}
-- Prospek CRM: ${crmLeadsCount !== null ? `${crmLeadsCount} prospek` : "Belum tersedia"}
+- Hasil menurut Meta: ${data.metrics.results !== null ? `${data.metrics.results.toLocaleString("id-ID")} hasil` : "Tidak tersedia"}
+- Prospek dari data yang dimasukkan/diunggah klien: ${crmLeadsCount !== null ? `${crmLeadsCount.toLocaleString("id-ID")} prospek` : "Belum tersedia"}
 - Jadwal Survei CRM: ${crmSurveysCount} survei
 - Closing Transaksi: ${crmClosingsCount} transaksi
 
-Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai aturan validasi CTWA.`;
+Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan menyamakan hasil Meta dengan jumlah prospek CRM.`;
 
         const response = await client.createChatCompletion({
           messages: [
@@ -1192,6 +1165,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
 
         const finishReason = response.choices?.[0]?.finish_reason;
         if (finishReason === "length") {
+          await releaseReservation("truncated_ai_response");
           return NextResponse.json(
             {
               success: false,
@@ -1204,6 +1178,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
 
         const rawContent = response.choices?.[0]?.message?.content;
         if (!rawContent || rawContent.trim() === "") {
+          await releaseReservation("empty_ai_response");
           return NextResponse.json(
             {
               success: false,
@@ -1218,6 +1193,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
         try {
           parsedJson = parseModelJson(rawContent);
         } catch {
+          await releaseReservation("invalid_json_response");
           return NextResponse.json(
             {
               success: false,
@@ -1230,6 +1206,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
 
         const validationResult = ModelOutputSchema.safeParse(parsedJson);
         if (!validationResult.success) {
+          await releaseReservation("schema_validation_error");
           console.error(
             "[AI Analysis] Model response failed schema validation:",
             validationResult.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ")
@@ -1245,6 +1222,17 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
         }
 
         const validData = validationResult.data;
+        const dataSourceStatus: SourceDataStatusSection = {
+          metaResults:
+            data.metrics.results !== null && data.metrics.results !== undefined
+              ? `${data.metrics.results.toLocaleString("id-ID")} hasil`
+              : "Tidak tersedia",
+          crmProspects:
+            crmLeadsCount !== null
+              ? `${crmLeadsCount.toLocaleString("id-ID")} prospek dari CRM`
+              : "Belum tersedia",
+          note: "Pesan tidak dikumpulkan otomatis. Data CRM berasal dari input atau unggahan klien.",
+        };
 
         // Build 6 Core Metrics mathematically
         const isCostValid = hasActiveIntegration && verifiedInboundMessages !== null && verifiedInboundMessages > 0;
@@ -1255,6 +1243,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
           linkClicks: data.metrics.linkClicks,
           linkCpc: data.metrics.linkCpc ?? null,
           metaConversations: data.metrics.results,
+          crmLeadsCount,
           verifiedWhatsAppMessages: verifiedInboundMessages,
           hasActiveIntegration,
           costPerConversation,
@@ -1281,7 +1270,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
           campaignName: data.campaignName,
           campaignObjective: data.campaignObjective,
           performanceSummary: validData.performanceSummary,
-          whatsappStatus: validData.whatsappStatus,
+          sourceDataStatus: dataSourceStatus,
           budgetDecision: validData.budgetDecision,
           keyFindings: validData.keyFindings,
           priorityActions: validData.priorityActions,
@@ -1308,11 +1297,16 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
           },
         };
 
+        if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+          return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
+        }
+        quotaReservation = null;
         return NextResponse.json({
           success: true,
           data: responsePayload,
         });
       } catch (aiErr) {
+        await releaseReservation("ai_call_failed");
         console.error("[AI Analysis] Exception during model call:", aiErr);
         return NextResponse.json(
           {
@@ -1335,11 +1329,18 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis sesuai atura
       crmClosingsCount,
     });
 
+    if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+      return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
+    }
+    quotaReservation = null;
     return NextResponse.json({
       success: true,
       data: deterministicAnalysis,
     });
   } catch (error) {
+    if (quotaReservation) {
+      await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, "analysis_failed");
+    }
     const errorMsg = error instanceof Error ? error.message : "Kesalahan internal";
     console.error("[AI Analysis] Unhandled exception:", errorMsg);
     return NextResponse.json(

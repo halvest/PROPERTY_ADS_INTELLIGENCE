@@ -25,9 +25,9 @@ export function mapMetaAccountToInternal(
     organizationId,
     provider: "meta",
     providerAccountId,
-    accountName: metaAccount.name?.trim() || "Meta Ad Account",
-    currency: metaAccount.currency?.toUpperCase() || "IDR",
-    timezone: metaAccount.timezone_name || "Asia/Jakarta",
+    accountName: metaAccount.name?.trim() || providerAccountId,
+    currency: metaAccount.currency?.toUpperCase() || null,
+    timezone: metaAccount.timezone_name || null,
     connectionStatus: status,
     lastSyncedAt: new Date().toISOString(),
   };
@@ -107,11 +107,12 @@ export function mapMetaInsightToInternal(
   options: {
     organizationId: string;
     adId: string;
-    currency?: string;
+    currency?: string | null;
     source?: "meta" | "demo";
   }
 ): NormalizedAdInsight {
-  const { organizationId, adId, currency = "IDR", source = "meta" } = options;
+  const { organizationId, adId, source = "meta" } = options;
+  const currency = options.currency ?? metaInsight.account_currency ?? null;
 
   const spend = parseSpend(metaInsight.spend);
   const impressions = parseCount(metaInsight.impressions);

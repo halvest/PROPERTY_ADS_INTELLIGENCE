@@ -7,7 +7,7 @@ export interface DailyTrendPoint {
   date: string;
   spend: number;
   impressions: number;
-  reach: number;
+  reach: number | null;
   linkClicks: number;
   allClicks?: number;
   results: number;

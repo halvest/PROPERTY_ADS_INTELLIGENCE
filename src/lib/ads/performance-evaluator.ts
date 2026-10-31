@@ -42,8 +42,7 @@ export interface EvaluationInput {
   impressions: number;
   reach?: number;
   frequency?: number | null;
-  trackingStatus?: "verified" | "unverified" | "unavailable" | "disconnect";
-  whatsappMessagesActual?: number | null; // for detecting WhatsApp vs Meta disconnect
+  trackingStatus?: "verified" | "unverified" | "unavailable";
   midPeriodChange?: boolean; // Significant change occurred mid-period
   prevSpend?: number | null;
   prevResults?: number | null;
@@ -145,7 +144,6 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     linkClicks,
     impressions,
     trackingStatus = "verified",
-    whatsappMessagesActual,
     midPeriodChange = false,
     prevSpend,
     prevResults,
@@ -186,11 +184,9 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
   }
 
   // Check Reported CPR Consistency against Calculated CPR
-  let isInconsistent = false;
   if (reportedCpr !== undefined && reportedCpr !== null && actualCpr !== null && actualCpr > 0) {
     const diff = Math.abs(reportedCpr - actualCpr) / actualCpr;
     if (diff > 0.1) {
-      isInconsistent = true;
       isDataCorrupt = true;
       corruptReason = loc === "en"
         ? `Reported CPR (Rp ${Math.round(reportedCpr).toLocaleString()}) contradicts total spend / results ratio (Rp ${Math.round(actualCpr).toLocaleString()}).`
@@ -198,28 +194,15 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     }
   }
 
-  // Tracking Disconnect (WhatsApp received messages, but Meta recorded 0 conversions)
-  const isTrackingDisconnect =
-    (whatsappMessagesActual && whatsappMessagesActual > 0 && results === 0) ||
-    trackingStatus === "disconnect";
-
-  if (isTrackingDisconnect) {
-    uncertaintyNotes.push(
-      loc === "en"
-        ? "Tracking mismatch detected: WhatsApp incoming messages active while Meta recorded 0 conversions."
-        : "Terdeteksi ketidakcocokan tracking: pesan WhatsApp masuk aktif namun konversi Meta tercatat 0."
-    );
-  }
-
   // 2. Assess Data Sufficiency Status (cukup, terbatas, tidak_valid)
   let dataStatus: DataSufficiencyStatus = "cukup";
   let dataStatusReason = "";
 
-  if (isDataCorrupt || resultsCondition === "unavailable" || isTrackingDisconnect) {
+  if (isDataCorrupt || resultsCondition === "unavailable") {
     dataStatus = "tidak_valid";
     dataStatusReason = corruptReason || (resultsCondition === "unavailable"
       ? (loc === "en" ? "Results data could not be retrieved from Meta API." : "Data hasil tidak berhasil diperoleh dari Meta API.")
-      : (loc === "en" ? "Tracking discrepancy detected between Meta conversions and actual messages." : "Kesenjangan tracking terdeteksi antara konversi Meta dan pesan aktual."));
+      : (loc === "en" ? "Meta result tracking needs review." : "Pencatatan hasil Meta perlu ditinjau."));
   } else if (
     durationDays <= 3 ||
     period === "1d" ||
@@ -301,11 +284,11 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
   let action: DecisionAction = "pantau";
   let mainReason = "";
 
-  if (dataStatus === "tidak_valid" || isTrackingDisconnect || trackingStatus === "unverified" || trackingStatus === "unavailable") {
+  if (dataStatus === "tidak_valid" || trackingStatus === "unverified" || trackingStatus === "unavailable") {
     action = "periksa_tracking";
     mainReason = corruptReason || (loc === "en"
-      ? "Verify tracking link, pixel, or WhatsApp connection before making ad budget changes."
-      : "Periksa tracking tautan, pixel, atau koneksi WhatsApp sebelum mengubah anggaran iklan.");
+      ? "Review the ad destination and Meta result settings before changing the budget."
+      : "Periksa tujuan tautan iklan dan pengaturan hasil Meta sebelum mengubah anggaran.");
   } else if (dataStatus === "terbatas") {
     // When data is limited, NEVER conclude "hentikan_sementara" or permanent failure
     action = "pantau";
@@ -434,10 +417,10 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
   if (action === "periksa_tracking") {
     nextActions.push({
       priority: "high",
-      title: loc === "en" ? "Verify WhatsApp tracking link" : "Periksa tautan pesan WhatsApp",
-      why: loc === "en" ? "Ensure click-to-chat URL and pre-filled message work seamlessly." : "Memastikan URL click-to-chat dan pesan pembuka berfungsi tanpa hambatan.",
-      do: loc === "en" ? "Test ad click directly in Meta Ads preview to verify chat opens." : "Uji klik iklan langsung dari pratinjau Meta untuk verifikasi chat masuk.",
-      stop_loss: loc === "en" ? "Pause delivery if tracking is broken." : "Jeda iklan jika tautan tracking terbukti rusak.",
+      title: loc === "en" ? "Review the ad destination" : "Periksa tujuan tautan iklan",
+      why: loc === "en" ? "A broken or incorrect destination can prevent interested people from continuing." : "Tautan yang salah atau tidak berfungsi dapat menghambat orang yang tertarik untuk melanjutkan.",
+      do: loc === "en" ? "Open the ad destination from Meta Ads preview and confirm it works." : "Buka tujuan iklan dari pratinjau Meta Ads dan pastikan tautannya berfungsi.",
+      stop_loss: loc === "en" ? "Fix the destination before increasing spend." : "Perbaiki tujuan iklan sebelum menambah belanja.",
     });
   } else if (action === "pantau") {
     nextActions.push({

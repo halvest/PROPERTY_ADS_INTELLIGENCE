@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { GET as metaCallbackGet } from "@/app/api/auth/meta/callback/route";
 import { persistMetaUserToken } from "@/lib/marketing/meta/token-storage";
-import { generateOAuthCsrfState, encryptAccessToken } from "@/lib/whatsapp/crypto";
+import { generateOAuthCsrfState, encryptAccessToken } from "@/lib/security/credential-crypto";
 import * as serverSupabase from "@/lib/supabase/server";
 
 describe("Phase 17.1 — Meta OAuth Token Persistence RLS & Multi-Tenant Isolation", () => {
@@ -256,7 +256,10 @@ describe("Phase 17.1 — Meta OAuth Token Persistence RLS & Multi-Tenant Isolati
         } as unknown as Response);
 
       const validState = generateOAuthCsrfState({ organizationId: orgId, userId });
-      const req = new NextRequest(`http://localhost:3000/api/auth/meta/callback?code=valid_meta_code&state=${validState}`);
+      const req = new NextRequest(
+        `http://localhost:3000/api/auth/meta/callback?code=valid_meta_code&state=${validState}`,
+        { headers: { cookie: `meta_oauth_state=${validState}` } }
+      );
       const res = await metaCallbackGet(req);
 
       expect(res.status).toBe(307);

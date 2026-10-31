@@ -7,7 +7,7 @@ import type { Database } from "@/types/database.types";
  * 
  * SECURITY RULES:
  * 1. This client BYPASSES Row Level Security (RLS).
- * 2. It must ONLY be used on the server in authorized routes/workers (e.g., webhooks, system sync).
+ * 2. It must ONLY be used on the server in authorized routes and system sync jobs.
  * 3. It must NEVER be exposed to the browser or imported in client components.
  */
 export function createAdminClient() {

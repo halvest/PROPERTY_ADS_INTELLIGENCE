@@ -142,8 +142,8 @@ export default function LeadsDirectoryPage() {
             </span>{" "}
             <span>
               {locale === "id"
-                ? "Fokus pada input manual sales & unggah spreadsheet (7 kolom inti: Nama & WhatsApp, Domisili, Tanggal Masuk, Kampanye, Tahap Funnel, Label Kualitas, Catatan Singkat). Penilaian AI percakapan & scoring 0–100 ditunda hingga WhatsApp Coexistence terhubung di Tahap 2."
-                : "Focuses on manual sales entry & spreadsheet upload with 7 core fields. Automated AI conversation analysis & 0–100 scoring are deferred until WhatsApp Coexistence is active in Phase 2."}
+                ? "Catat prospek secara manual atau unggah spreadsheet CRM. Analisis hanya memakai informasi yang benar-benar tersedia pada data yang Anda masukkan."
+                : "Add prospects manually or upload a CRM spreadsheet. Analysis uses only information present in the data you provide."}
             </span>
           </div>
         </div>

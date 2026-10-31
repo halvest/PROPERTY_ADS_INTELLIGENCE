@@ -10,41 +10,35 @@ import {
   type NormalizedAdInsight,
 } from "./types";
 import {
-  getMetaMarketingConfig,
-  isMetaMarketingConfigured,
   normalizeAdAccountId,
   sanitizeMarketingLog,
 } from "./config";
-import { MetaMarketingApiClient, getMetaMarketingApiClient } from "./client";
-import { MockMetaMarketingApiClient } from "./mock-client";
+import { MetaMarketingApiClient } from "./client";
 import {
   mapMetaAccountToInternal,
   mapMetaCampaignToInternal,
   mapMetaAdToInternal,
   mapMetaInsightToInternal,
 } from "./mapper";
-import { decryptAccessToken } from "@/lib/whatsapp/crypto";
+import { decryptAccessToken } from "@/lib/security/credential-crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface ExecuteMarketingSyncOptions {
   organizationId: string;
   targetAdAccountId?: string;
   timeRange?: { since: string; until: string };
-  client?: MetaMarketingApiClient | MockMetaMarketingApiClient;
+  client?: Pick<
+    MetaMarketingApiClient,
+    "getAdAccounts" | "getAdAccount" | "getCampaigns" | "getAds" | "getAdInsights"
+  >;
   supabaseClient?: SupabaseClient;
-  allowDemoFallback?: boolean;
-  /**
-   * System env token fallback (META_ACCESS_TOKEN) is only for controlled
-   * background workers, never for tenant-initiated sync. Default: false.
-   */
-  allowEnvTokenFallback?: boolean;
 }
 
 /**
  * Executes a complete, idempotent read-only sync of Meta Marketing data.
  *
  * Steps:
- * 1. Checks configuration (falls back to mock client if unconfigured and allowDemoFallback is true).
+ * 1. Requires a tenant token, or an explicitly injected test client outside production.
  * 2. Fetches Ad Account, Campaigns, Ads, and Insights.
  * 3. Normalizes all responses into internal models.
  * 4. Idempotently upserts records into Supabase tables (ad_accounts, campaigns, ads, ad_insights).
@@ -61,7 +55,6 @@ export async function executeMarketingSync(
       until: new Date().toISOString().split("T")[0],
     },
     supabaseClient,
-    allowDemoFallback = true,
   } = options;
 
   if (!organizationId || organizationId.trim() === "") {
@@ -72,7 +65,6 @@ export async function executeMarketingSync(
     });
   }
 
-  const isEnvConfigured = isMetaMarketingConfigured();
   let liveToken: string | undefined;
   let selectedAccountId: string | undefined = targetAdAccountId;
 
@@ -112,16 +104,23 @@ export async function executeMarketingSync(
           selectedAccountId = selRow.ad_account_id;
         }
       } else {
-        // A caller-supplied ad account must match the tenant's selected asset.
+        // A caller-supplied ad account must belong to this tenant: either the
+        // selected asset or a connected ad account registered for this org.
         const { data: selRow } = await dbClient
           .from("meta_asset_selections")
           .select("ad_account_id")
           .eq("organization_id", organizationId)
           .maybeSingle();
-        if (
+        const { data: accRow } = await dbClient
+          .from("ad_accounts")
+          .select("provider_account_id")
+          .eq("organization_id", organizationId)
+          .eq("provider_account_id", normalizeAdAccountId(selectedAccountId))
+          .maybeSingle();
+        const matchesSelection =
           selRow?.ad_account_id &&
-          normalizeAdAccountId(selRow.ad_account_id) !== normalizeAdAccountId(selectedAccountId)
-        ) {
+          normalizeAdAccountId(selRow.ad_account_id) === normalizeAdAccountId(selectedAccountId);
+        if (!matchesSelection && !accRow) {
           throw new MarketingApiError({
             code: "FORBIDDEN",
             message: "Akun iklan target tidak sesuai dengan aset Meta milik tenant.",
@@ -135,39 +134,23 @@ export async function executeMarketingSync(
     }
   }
 
-  const allowEnvTokenFallback = options.allowEnvTokenFallback === true;
-  const isConfigured =
-    Boolean(liveToken) || (allowEnvTokenFallback && isEnvConfigured);
+  const isInjectedTestProvider = !liveToken && Boolean(options.client) && process.env.NODE_ENV === "test";
 
-  if (!liveToken && !options.client && isEnvConfigured && !allowEnvTokenFallback && !allowDemoFallback) {
+  if (!liveToken && !isInjectedTestProvider) {
     throw new MarketingApiError({
       code: "MISSING_CONFIGURATION",
-      message:
-        "Tenant belum menghubungkan akun Meta. Sinkronisasi tenant wajib memakai token OAuth tenant, bukan token env global.",
-      isRecoverable: false,
-    });
-  }
-  const isDemoMode = !isConfigured && Boolean(allowDemoFallback);
-
-  if (!isConfigured && !isDemoMode) {
-    throw new MarketingApiError({
-      code: "MISSING_CONFIGURATION",
-      message:
-        "Meta Marketing API access token is not configured. Set META_ACCESS_TOKEN and META_AD_ACCOUNT_ID to enable live ad synchronization.",
+      message: "Organisasi ini belum menghubungkan Meta. Hubungkan akun Meta organisasi ini.",
       isRecoverable: false,
     });
   }
 
-  // Select client (live, tenant-authenticated, or explicit mock)
-  const client: MetaMarketingApiClient | MockMetaMarketingApiClient =
-    options.client ||
-    (isDemoMode
-      ? new MockMetaMarketingApiClient()
-      : liveToken
-      ? new MetaMarketingApiClient({ accessToken: liveToken })
-      : getMetaMarketingApiClient());
+  // Test providers may be explicitly injected outside production. Runtime
+  // requests always use the tenant's server-side OAuth token.
+  const client = options.client || new MetaMarketingApiClient({ accessToken: liveToken! });
 
-  if (!selectedAccountId && !isDemoMode && !allowEnvTokenFallback) {
+  if (client instanceof MetaMarketingApiClient) client.lastFetchTruncated = false;
+
+  if (!selectedAccountId) {
     throw new MarketingApiError({
       code: "MISSING_CONFIGURATION",
       message: "Tenant belum memilih akun iklan Meta untuk disinkronkan.",
@@ -175,13 +158,15 @@ export async function executeMarketingSync(
     });
   }
 
-  const accountId = normalizeAdAccountId(
-    selectedAccountId ||
-      (allowEnvTokenFallback
-        ? getMetaMarketingConfig({ requireConfigured: false }).adAccountId
-        : undefined) ||
-      "act_0812999001"
-  );
+  // The account context must be explicitly selected and tenant validated.
+  const accountId = normalizeAdAccountId(selectedAccountId);
+  if (!accountId) {
+    throw new MarketingApiError({
+      code: "MISSING_CONFIGURATION",
+      message: "Pilih akun iklan Meta organisasi ini sebelum menjalankan sinkronisasi.",
+      isRecoverable: false,
+    });
+  }
 
   const syncedAt = new Date().toISOString();
   let syncJobId: string | undefined;
@@ -194,6 +179,33 @@ export async function executeMarketingSync(
   }
   const db = adminClient || supabaseClient || dbClient;
 
+  // 0. Duplicate-sync lock: refuse a second concurrent sync for the same
+  // organization + ad account while one is still running (15-minute window).
+  if (db) {
+    try {
+      const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const { data: running } = await db
+        .from("sync_jobs")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("target_account_id", accountId)
+        .eq("status", "running")
+        .gte("started_at", windowStart)
+        .limit(1);
+      if (running && running.length > 0) {
+        throw new MarketingApiError({
+          code: "SYNC_IN_PROGRESS",
+          message: "Sinkronisasi untuk akun iklan ini sedang berjalan. Tunggu hingga selesai.",
+          isRecoverable: true,
+          statusCode: 409,
+        });
+      }
+    } catch (err) {
+      if (err instanceof MarketingApiError) throw err;
+      // Lock check is best-effort when sync_jobs is unreachable in tests.
+    }
+  }
+
   // 1. Create sync_job record if database is connected
   if (db) {
     try {
@@ -201,13 +213,13 @@ export async function executeMarketingSync(
         .from("sync_jobs")
         .insert({
           organization_id: organizationId,
-          provider: isDemoMode ? "demo" : "meta",
+          provider: "meta",
           job_type: "ad_insights",
           status: "running",
           target_account_id: accountId,
           time_range: timeRange,
           diagnostic_info: {
-            mode: isDemoMode ? "demo" : "live",
+            mode: "live",
             targetAccountId: accountId,
             timeRange,
           },
@@ -236,21 +248,38 @@ export async function executeMarketingSync(
     const paginationTruncated =
       client instanceof MetaMarketingApiClient && client.lastFetchTruncated;
 
-    // Step 2b: Fetch ad insights. If timeRange is not specified, default to last_90d (capturing recent active campaigns in ~2s)
+    // Step 2b: Fetch ad insights for the SAME period recorded on the sync job
+    // (options.timeRange, defaulting to the service-level 30-day range).
     const metaInsights = await client.getAdInsights({
       targetAdAccountId: accountId,
-      timeRange: options.timeRange,
-      datePreset: options.timeRange ? undefined : "last_90d",
+      timeRange,
       timeIncrement: 1, // Store daily records to guarantee mathematical consistency across any date range
-      limit: 50,
+      limit: 100,
+      maxPages: 100,
     });
+    const malformedInsight = metaInsights.some((row) =>
+      !row.ad_id || !row.date_start || !row.date_stop ||
+      row.spend === undefined || row.spend === null ||
+      row.impressions === undefined || row.impressions === null ||
+      row.clicks === undefined || row.clicks === null
+    );
+    if (malformedInsight) {
+      throw new MarketingApiError({
+        code: "UPSTREAM_ERROR",
+        message: "Meta mengembalikan baris Insights tanpa identitas, periode, atau metrik wajib; data yang tersimpan tetap dipertahankan.",
+        isRecoverable: true,
+      });
+    }
+    const insightsTruncated =
+      client instanceof MetaMarketingApiClient && client.lastFetchTruncated;
+    const incompleteProviderFetch = paginationTruncated || insightsTruncated;
 
     // 3. Map to internal normalized representations
     const normalizedAccount: NormalizedAdAccount = mapMetaAccountToInternal(
       metaAccount,
       organizationId
     );
-    normalizedAccount.provider = isDemoMode ? "demo" : "meta";
+    normalizedAccount.provider = "meta";
 
     const normalizedCampaigns: NormalizedCampaign[] = metaCampaigns.map((c) =>
       mapMetaCampaignToInternal(c, organizationId, normalizedAccount.providerAccountId)
@@ -263,15 +292,44 @@ export async function executeMarketingSync(
     const normalizedInsights: NormalizedAdInsight[] = metaInsights.map((i) =>
       mapMetaInsightToInternal(i, {
         organizationId,
-        adId: i.ad_id || "unknown_ad",
+        adId: i.ad_id!,
         currency: normalizedAccount.currency,
-        source: isDemoMode ? "demo" : "meta",
+        source: "meta",
       })
     );
 
     const recordsProcessed = 1 + normalizedCampaigns.length + normalizedAds.length + normalizedInsights.length;
     let recordsRejected = 0;
     let persistenceFailed = false;
+    const warnings: string[] = [];
+
+    // An incomplete provider traversal must not replace any previously valid
+    // rows with partial data. Keep stored data and its successful-sync time.
+    if (incompleteProviderFetch) {
+      if (db && syncJobId) {
+        await db.from("sync_jobs").update({
+          status: "partial",
+          records_processed: recordsProcessed,
+          records_rejected: 0,
+          error_code: "PAGINATION_INCOMPLETE",
+          error_message: "Meta pagination stopped at the configured safety limit; stored data was preserved.",
+          completed_at: new Date().toISOString(),
+        }).eq("id", syncJobId);
+      }
+      return {
+        status: "partial",
+        mode: "live",
+        adAccountsSynced: 0,
+        campaignsSynced: 0,
+        adsSynced: 0,
+        insightsSynced: 0,
+        recordsProcessed: 0,
+        recordsRejected: recordsProcessed,
+        syncedAt,
+        dateRange: timeRange,
+        syncJobId,
+      };
+    }
 
     // 4. Idempotent Upsert into Supabase (if client provided)
     if (db) {
@@ -289,7 +347,6 @@ export async function executeMarketingSync(
                 currency: normalizedAccount.currency,
                 timezone: normalizedAccount.timezone,
                 connection_status: normalizedAccount.connectionStatus,
-                last_synced_at: syncedAt,
                 updated_at: syncedAt,
               },
               { onConflict: "organization_id,provider,provider_account_id" }
@@ -470,24 +527,62 @@ export async function executeMarketingSync(
               });
 
             if (insErr) {
-              recordsRejected += insightRows.length;
+              // Keep core spend and delivery metrics flowing when a deployment
+              // is missing the optional conversion metadata migration. The
+              // metadata columns are added by 20261027000000_p0_security_and_metrics.sql.
+              const missingSchemaColumn = insErr.code === "PGRST204" || insErr.code === "42703";
+              if (missingSchemaColumn) {
+                const coreInsightRows = insightRows.map(
+                  ({ action_breakdown: _breakdown, conversion_action_type: _conversionType, mapping_version: _mappingVersion, ...coreRow }) => coreRow
+                );
+                const { error: coreInsightError } = await db
+                  .from("ad_insights")
+                  .upsert(coreInsightRows, {
+                    onConflict: "organization_id,ad_id,date_start,date_stop,level",
+                  });
+                if (coreInsightError) {
+                  recordsRejected += insightRows.length;
+                } else {
+                  warnings.push(
+                    "Metrik inti tersimpan, tetapi metadata konversi belum tersedia. Terapkan migration 20261027000000_p0_security_and_metrics.sql."
+                  );
+                }
+              } else {
+                recordsRejected += insightRows.length;
+              }
             }
           }
         }
 
-        // G. Mark sync_job as completed
+        // Update account and tenant freshness only when every required upsert
+        // completed successfully. Incomplete runs preserve the previous timestamp.
+        if (recordsRejected === 0 && !persistenceFailed) {
+          const { error: accountFreshnessError } = await db
+            .from("ad_accounts")
+            .update({ last_synced_at: syncedAt, updated_at: syncedAt })
+            .eq("organization_id", organizationId)
+            .eq("provider", "meta")
+            .eq("provider_account_id", normalizedAccount.providerAccountId);
+          if (accountFreshnessError) persistenceFailed = true;
+        }
+
+        // G. Mark the sync job only after all data and freshness writes have
+        // succeeded, so a failed freshness write cannot leave a false success.
         if (syncJobId) {
           const syncJobTable = db.from("sync_jobs");
           if (typeof syncJobTable?.update === "function") {
-            await syncJobTable
+            const isComplete = recordsRejected === 0 && !persistenceFailed;
+            const { error: jobUpdateError } = await syncJobTable
               .update({
-                status: recordsRejected > 0 ? "partial" : "completed",
+                status: isComplete ? "completed" : "partial",
                 records_processed: recordsProcessed,
                 records_rejected: recordsRejected,
+                error_code: isComplete ? null : "PERSISTENCE_PARTIAL",
+                error_message: isComplete ? null : "Meta sync was incomplete; previous data and last successful sync were preserved.",
                 diagnostic_info: {
                   recordsProcessed,
                   recordsRejected,
-                  mode: isDemoMode ? "demo" : "live",
+                  mode: "live",
                   targetAccountId: accountId,
                   timeRange,
                   adAccountsSynced: 1,
@@ -498,24 +593,28 @@ export async function executeMarketingSync(
                 completed_at: new Date().toISOString(),
               })
               .eq("id", syncJobId);
+            if (jobUpdateError) persistenceFailed = true;
           }
         }
 
-        // H. Update canonical integration_connections last_synced_at
+        // H. Update canonical integration_connections freshness only on a
+        // complete sync; partial failures remain visible as an error.
         const connTable = db.from("integration_connections");
         if (typeof connTable?.update === "function") {
           const updateBuilder = connTable
             .update({
-              status: "connected",
-              last_synced_at: syncedAt,
-              error_message: null,
+              status: recordsRejected === 0 && !persistenceFailed ? "connected" : "error",
+              ...(recordsRejected === 0 && !persistenceFailed ? { last_synced_at: syncedAt } : {}),
+              error_message: recordsRejected === 0 && !persistenceFailed
+                ? null
+                : "Meta sync was incomplete; previous data and last successful sync were preserved.",
               updated_at: new Date().toISOString(),
             })
             .eq("organization_id", organizationId);
 
           const builder = updateBuilder as unknown as { eq?: (k: string, v: string) => PromiseLike<unknown> };
           if (typeof builder?.eq === "function") {
-            await builder.eq("provider", isDemoMode ? "demo" : "meta");
+            await builder.eq("provider", "meta");
           } else {
             await updateBuilder;
           }
@@ -527,19 +626,17 @@ export async function executeMarketingSync(
       }
     }
 
-    const insightsTruncated =
-      client instanceof MetaMarketingApiClient && client.lastFetchTruncated;
-
     return {
       status:
-        recordsRejected > 0 || persistenceFailed || paginationTruncated || insightsTruncated
+        recordsRejected > 0 || persistenceFailed
           ? "partial"
           : "success",
-      mode: isDemoMode ? "demo" : "live",
+      mode: "live",
       adAccountsSynced: 1,
       campaignsSynced: normalizedCampaigns.length,
       adsSynced: normalizedAds.length,
       insightsSynced: normalizedInsights.length,
+      ...(warnings.length > 0 ? { warnings } : {}),
       recordsProcessed,
       recordsRejected,
       syncedAt,

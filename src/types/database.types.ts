@@ -19,39 +19,39 @@ export type Database = {
           account_name: string | null
           connection_status: string
           created_at: string
-          currency: string
+          currency: string | null
           id: string
           last_synced_at: string | null
           organization_id: string
           provider: string
           provider_account_id: string
-          timezone: string
+          timezone: string | null
           updated_at: string
         }
         Insert: {
           account_name?: string | null
           connection_status?: string
           created_at?: string
-          currency?: string
+          currency?: string | null
           id?: string
           last_synced_at?: string | null
           organization_id: string
           provider: string
           provider_account_id: string
-          timezone?: string
+          timezone?: string | null
           updated_at?: string
         }
         Update: {
           account_name?: string | null
           connection_status?: string
           created_at?: string
-          currency?: string
+          currency?: string | null
           id?: string
           last_synced_at?: string | null
           organization_id?: string
           provider?: string
           provider_account_id?: string
-          timezone?: string
+          timezone?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -73,7 +73,7 @@ export type Database = {
           clicks: number
           conversions: number
           created_at: string
-          currency: string
+          currency: string | null
           date_start: string
           date_stop: string
           fetched_at: string
@@ -100,7 +100,7 @@ export type Database = {
           clicks?: number
           conversions?: number
           created_at?: string
-          currency?: string
+          currency?: string | null
           date_start: string
           date_stop: string
           fetched_at?: string
@@ -127,7 +127,7 @@ export type Database = {
           clicks?: number
           conversions?: number
           created_at?: string
-          currency?: string
+          currency?: string | null
           date_start?: string
           date_stop?: string
           fetched_at?: string
@@ -1227,6 +1227,18 @@ export type Database = {
     Functions: {
       current_user_org_id: { Args: never; Returns: string }
       current_user_role: { Args: never; Returns: string }
+      reserve_ai_analysis_usage: {
+        Args: { p_user_id: string; p_idempotency_key: string }
+        Returns: { allowed: boolean; reservation_status: string; reservation_id: string | null; used_count: number; reserved_count: number; remaining_count: number; next_available_at: string | null }[]
+      }
+      complete_ai_analysis_usage: {
+        Args: { p_user_id: string; p_reservation_id: string; p_succeeded: boolean; p_failure_code?: string | null }
+        Returns: boolean
+      }
+      get_ai_analysis_usage: {
+        Args: { p_user_id: string }
+        Returns: { used_count: number; reserved_count: number; remaining_count: number; next_available_at: string | null }[]
+      }
     }
     Enums: {
       [_ in never]: never

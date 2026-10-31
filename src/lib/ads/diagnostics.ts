@@ -5,7 +5,7 @@ import { getAdsIntelligenceData } from "./service";
 import { parseDateRange, formatDateInTimezone } from "./date-utils";
 import { MetaMarketingApiClient } from "@/lib/marketing/meta/client";
 import { maskAdAccountId } from "@/lib/marketing/meta/config";
-import { decryptAccessToken } from "@/lib/whatsapp/crypto";
+import { decryptAccessToken } from "@/lib/security/credential-crypto";
 
 export interface MetricComparisonItem {
   metricName: string;
@@ -221,7 +221,7 @@ export async function runAdsDataReconciliation(options: {
     accountName,
     timezone,
     currency,
-    apiVersion: "v21.0",
+    apiVersion: "v26.0",
     reportingPeriod: {
       preset: dateRange,
       since: since || "Lifetime (2023-12-06)",

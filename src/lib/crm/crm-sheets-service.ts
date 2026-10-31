@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { AttributionStatus } from "@/domain/attribution/types";
-import type { LeadListItem } from "@/lib/data/types";
-import { addUploadedDemoLeads } from "@/lib/data/dashboard-service";
 
 /**
  * Computes a deterministic privacy-preserving hash of an E.164 phone number.
@@ -145,9 +143,12 @@ export function normalizeFunnelStage(raw?: string | null): { stage: FunnelStage;
  * Normalizes input text into a recognized AttributionStatus.
  */
 export function normalizeAttributionStatus(raw?: string | null, hasAd = false): AttributionStatus {
-  if (!raw) return hasAd ? "verified" : "unknown";
+  if (!raw) return hasAd ? "inferred" : "unknown";
   const cleaned = raw.toLowerCase().trim();
-  if (cleaned.includes("verif") || cleaned === "terverifikasi") return "verified";
+  if (cleaned.includes("verif") || cleaned === "terverifikasi") {
+    // A spreadsheet label is not official Meta referral evidence.
+    return hasAd ? "inferred" : "unknown";
+  }
   if (cleaned.includes("infer") || cleaned === "perkiraan" || cleaned === "diduga") return "inferred";
   if (cleaned.includes("unknown") || cleaned === "tidak diketahui" || cleaned === "organik") return "unknown";
   return hasAd ? "inferred" : "unknown";
@@ -737,47 +738,49 @@ export async function importCrmLeadsToDatabase(params: {
         notes: lead.catatan || `Diperbarui via CRM Sheets: tahap ${lead.tahapFunnel}`,
       });
 
-      // Upsert lead assessment (scores)
-      const buyerScore = lead.skorProspek ?? (lead.tahapFunnel === "closing" ? 95 : lead.tahapFunnel === "survei" ? 85 : 70);
-      const salesScore = lead.skorPenjualan ?? 75;
-
-      // Check if assessment exists
-      const { data: existingAssessment } = await supabase
-        .from("lead_assessments")
-        .select("id")
-        .eq("conversation_id", conversationId)
-        .maybeSingle();
-
-      if (existingAssessment) {
-        await supabase
+      // Only persist scores explicitly supplied by the client. Funnel stage and
+      // quality labels are not enough evidence to manufacture a Buyer or Sales score.
+      if (lead.skorProspek !== undefined || lead.skorPenjualan !== undefined) {
+        const { data: existingAssessment } = await supabase
           .from("lead_assessments")
-          .update({
-            buyer_score: buyerScore,
-            sales_score: salesScore,
-            summary: lead.catatan || `Diperbarui dari CRM Sheets: tahap ${lead.tahapFunnel}`,
-            completed_at: new Date().toISOString(),
-          })
-          .eq("id", existingAssessment.id);
-      } else {
-        await supabase.from("lead_assessments").insert({
-          organization_id: organizationId,
-          conversation_id: conversationId,
-          buyer_score: buyerScore,
-          sales_score: salesScore,
-          confidence: 0.85,
-          score_completeness: 1.0,
-          status: "completed",
-          missing_information: [],
-          summary: lead.catatan || `Diimpor dari CRM Sheets: tahap ${lead.tahapFunnel}`,
-          provider: "manual_crm",
-          model_id: "crm_sheet_v1",
-          prompt_version: "v1.0",
-          rubric_version: "v1.0",
+          .select("id, buyer_score, sales_score")
+          .eq("conversation_id", conversationId)
+          .maybeSingle();
+
+        const resultingBuyerScore = lead.skorProspek ?? existingAssessment?.buyer_score ?? null;
+        const resultingSalesScore = lead.skorPenjualan ?? existingAssessment?.sales_score ?? null;
+        const suppliedScores = {
+          ...(lead.skorProspek !== undefined ? { buyer_score: lead.skorProspek } : {}),
+          ...(lead.skorPenjualan !== undefined ? { sales_score: lead.skorPenjualan } : {}),
+          confidence: null,
+          score_completeness: 0,
+          status: "needs_review",
+          missing_information: [
+            ...(resultingBuyerScore === null ? ["buyer_score"] : []),
+            ...(resultingSalesScore === null ? ["sales_score"] : []),
+          ],
+          summary: "Skor dimasukkan dari data klien; bukan hasil analisis AI.",
+          provider: "client_import",
+          model_id: "manual_import",
           completed_at: lead.tanggalKontak,
-        });
+        };
+
+        if (existingAssessment) {
+          await supabase
+            .from("lead_assessments")
+            .update(suppliedScores)
+            .eq("id", existingAssessment.id);
+        } else {
+          await supabase.from("lead_assessments").insert({
+            organization_id: organizationId,
+            conversation_id: conversationId,
+            buyer_score: lead.skorProspek ?? null,
+            sales_score: lead.skorPenjualan ?? null,
+            ...suppliedScores,
+          });
+        }
       }
 
-      const orig = leads[idx];
       importedLeads.push({
         id: conversationId,
         name: lead.nama,
@@ -793,65 +796,6 @@ export async function importCrmLeadsToDatabase(params: {
       const message = err instanceof Error ? err.message : "Kesalahan database tidak terduga";
       errors.push({ row: rowNum, error: message });
     }
-  }
-
-  // Also sync to demo store for smooth fallback & immediate UI reactivity
-  try {
-    const demoItems: LeadListItem[] = importedLeads.map((imp) => {
-      const orig = leads.find((l) => l.phoneMasked === imp.phoneMasked);
-      const buyerScore = orig?.skorProspek ?? (orig?.qualityLabel === "Hot" ? 90 : orig?.qualityLabel === "Warm" ? 70 : 45);
-      const salesScore = orig?.skorPenjualan ?? 80;
-
-      return {
-        id: imp.id,
-        name: imp.name,
-        phoneMasked: imp.phoneMasked,
-        domisili: imp.domisili || orig?.domisili || null,
-        funnelStage: imp.funnelStage,
-        qualityLabel: imp.qualityLabel || orig?.qualityLabel || null,
-        notes: imp.notes || orig?.catatan || null,
-        attributionStatus: orig?.statusAtribusi || "verified",
-        adName: orig?.namaIklan || null,
-        campaignName: null,
-        buyerAssessment: {
-          dimension: "buyer",
-          rawPoints: buyerScore,
-          maxRubricPoints: 100,
-          assessedValidWeight: 100,
-          completeness: 1.0,
-          normalizedScore: buyerScore,
-          confidence: 0.9,
-          status: "completed",
-          criteria: {},
-          missingCriteria: [],
-          invalidCriteria: [],
-          missingInformation: [],
-          rubricVersion: "v1.0",
-        },
-        salesAssessment: {
-          dimension: "sales",
-          rawPoints: salesScore,
-          maxRubricPoints: 100,
-          assessedValidWeight: 100,
-          completeness: 1.0,
-          normalizedScore: salesScore,
-          confidence: 0.9,
-          status: "completed",
-          criteria: {},
-          missingCriteria: [],
-          invalidCriteria: [],
-          missingInformation: [],
-          rubricVersion: "v1.0",
-        },
-        lastMessageAt: orig?.tanggalKontak || new Date().toISOString(),
-        messageCount: 1,
-        needsReview: false,
-      };
-    });
-
-    addUploadedDemoLeads(demoItems);
-  } catch {
-    // Non-blocking fallback
   }
 
   return {

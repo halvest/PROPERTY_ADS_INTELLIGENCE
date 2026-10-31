@@ -1,11 +1,12 @@
 # HD Creative — Property Marketing Intelligence
 
-Produk Haspro Digital Creative untuk analitik dan optimasi performa iklan properti berbasis bukti percakapan calon pembeli WhatsApp dan integrasi read-only Meta Marketing API.
+Produk Haspro Digital Creative untuk analitik performa iklan properti dari Meta Marketing API dan data prospek CRM yang dimasukkan atau diunggah oleh klien.
 
 ## Fitur Utama
 
-- **Atribusi Iklan Deterministik:** Mengaitkan calon pembeli WhatsApp dengan materi iklan Meta melalui referral resmi CTWA (*verified*) atau pencocokan kata kunci/headline (*inferred*).
-- **Buyer Intent & Sales SLA Scoring:** Penilaian objektif kesiapan beli (Purchase Intent, Budget Fit, Action Readiness) dan kecepatan respons tim penjualan berdasarkan rubrik terstandar.
+- **Analitik Iklan Meta:** Membaca metrik iklan dan menautkan data CRM ke iklan hanya jika informasi sumber tersedia.
+- **Pengelolaan Data Prospek:** Klien dapat memasukkan prospek manual atau mengunggah spreadsheet CRM.
+- **Analisis berbasis bukti yang tersedia:** Informasi yang tidak disediakan klien tidak ditebak atau dianggap sebagai fakta.
 - **Cost Per Qualified Lead (CPQL):** Metrik efisiensi biaya iklan yang dihitung secara akurat hanya dari lead yang telah terbukti memenuhi ambang batas kualitas.
 - **Rekomendasi Optimasi Iklan Deterministik:** Rekomendasi tindakan alokasi anggaran (*Scale Candidate, Investigate, Hold, Insufficient Data*) tanpa halusinasi LLM.
 - **Persistent Review Audit Trail:** Audit peninjauan rekomendasi yang persisten di PostgreSQL Supabase dengan perlindungan Row Level Security (RLS) multi-tenant.

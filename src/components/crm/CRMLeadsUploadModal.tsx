@@ -176,8 +176,8 @@ export function CRMLeadsUploadModal({
             </div>
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
               {locale === "id"
-                ? "Solusi alternatif cepat untuk mengupdate database prospek sebelum integrasi WhatsApp otomatis terhubung."
-                : "Quick alternative to update prospects and funnel progression before automated WhatsApp connection."}
+                ? "Tambahkan data prospek dan perkembangan funnel dari catatan tim Anda."
+                : "Add prospect details and funnel progress from your team's records."}
             </p>
           </div>
 
@@ -191,18 +191,6 @@ export function CRMLeadsUploadModal({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
-        </div>
-
-        {/* WhatsApp Coexistence Bridge Notice */}
-        <div className="bg-sky-500/10 border-b border-sky-500/20 px-5 py-2.5 flex items-center justify-between text-xs text-sky-800 dark:text-sky-300">
-          <div className="flex items-center gap-2">
-            <span className="shrink-0 text-sky-600 dark:text-sky-400 font-bold">ℹ️ Info:</span>
-            <span>
-              {locale === "id"
-                ? "Koneksi WhatsApp API langsung berstatus 'Segera Hadir' (Coming Soon). Impor spreadsheet ini siap digunakan sebagai sumber data aktif."
-                : "Direct WhatsApp API is marked 'Coming Soon'. This spreadsheet import serves as your active CRM leads source."}
-            </span>
-          </div>
         </div>
 
         {/* Modal Navigation Tabs */}
@@ -468,8 +456,8 @@ export function CRMLeadsUploadModal({
                 </h4>
                 <p className="mt-1 text-xs text-indigo-700 dark:text-indigo-300">
                   {locale === "id"
-                    ? "Fokus pada pengisian manual tim sales: Nama & WA, Domisili, Tanggal Masuk, Kampanye/Iklan, Tahap Funnel, Label Kualitas (Hot/Warm/Cold), dan Catatan Singkat. AI scoring otomatis ditunda hingga integrasi WhatsApp aktif."
-                    : "Focused on core sales manual entry: Name & WA, Domicile, Lead Date, Campaign/Ad, Funnel Stage, Quality Label (Hot/Warm/Cold), and Short Notes. Automated AI scoring is deferred until WhatsApp integration."}
+                    ? "Isi dari data klien: nama dan nomor kontak, domisili, tanggal masuk, kampanye/iklan, tahap funnel, label kualitas, dan catatan. Informasi yang tidak tersedia tidak akan ditebak."
+                    : "Use client-provided data: name and contact number, location, date added, campaign/ad, funnel stage, quality label, and notes. Missing information is not inferred."}
                 </p>
 
                 <div className="mt-3 flex flex-wrap items-center gap-3">

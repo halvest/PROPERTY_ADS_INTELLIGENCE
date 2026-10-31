@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getLeadDetail as getDemoLeadDetail } from "@/lib/data/dashboard-service";
 import { persistAttributionEvent } from "@/lib/data/attribution-history-service";
 import type { LeadDetailView, QualityLabel } from "@/lib/data/types";
 import type { AttributionStatus } from "@/domain/attribution/types";
@@ -16,25 +15,17 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
-    const isDemoId = id.startsWith("lead_syn_") || id.startsWith("demo_");
-
     const supabase = await createClient();
     const {
       data: { user },
+      error: authError,
     } = await supabase.auth.getUser();
 
-    // 1. Return demo detail if requested or synthetic ID
-    if (isDemoId || !user) {
-      const demoLead = getDemoLeadDetail(id);
-      if (demoLead) {
-        return NextResponse.json({ success: true, isDemo: true, data: demoLead });
-      }
-      if (!user) {
-        return NextResponse.json(
-          { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
-          { status: 401 }
-        );
-      }
+    if (authError || !user) {
+      return NextResponse.json(
+        { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
+        { status: 401 }
+      );
     }
 
     const { data: profile } = await supabase
@@ -43,8 +34,11 @@ export async function GET(
       .eq("id", user!.id)
       .maybeSingle();
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     // 2. Query authentic conversation
     const { data: conv, error: convErr } = await supabase
@@ -181,7 +175,7 @@ export async function GET(
       lastMessageAt: conv.last_message_at,
       messageCount: messages?.length || 1,
       needsReview: conv.attribution_status === "inferred",
-      description: assessment?.summary || "Percakapan prospek properti melalui WhatsApp.",
+      description: assessment?.summary || "Catatan prospek properti dari CRM.",
       messages: (messages || []).map((m) => ({
         id: m.id,
         direction: m.sender_type === "buyer" ? ("inbound" as const) : ("outbound" as const),
@@ -237,8 +231,7 @@ export async function POST(
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
-    if ((authError || !user) && isProduction) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -253,8 +246,11 @@ export async function POST(
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     const body = await request.json();
     const { action, newStatus, reason, newStage, qualityLabel, notes, domisili } = body;

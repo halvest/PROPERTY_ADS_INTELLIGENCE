@@ -47,8 +47,6 @@ export const enDictionary: TranslationDictionary = {
     indonesian: "Bahasa Indonesia",
     english: "English",
     workspace: "Workspace",
-    demoMode: "Demo Mode (Synthetic Data)",
-    demoBadgeTooltip: "The data displayed is deterministic synthetic simulation for hackathon evaluation",
     active: "Active",
     connected: "Connected",
     disconnected: "Disconnected",
@@ -94,8 +92,6 @@ export const enDictionary: TranslationDictionary = {
     hasAccount: "Already have an account?",
     signInLink: "Sign in here",
     signUpLink: "Sign up now",
-    demoLoginButton: "Sign In via Demo Mode",
-    demoLoginSubtitle: "Instant evaluation access using a supervisor reviewer on a synthetic tenant.",
     passwordMinLength: "Password must be at least 8 characters.",
     passwordMismatch: "Password confirmation does not match.",
     invalidCredentials: "Invalid email or password.",
@@ -115,7 +111,7 @@ export const enDictionary: TranslationDictionary = {
   },
   dashboard: {
     title: "Ad Performance & Lead Quality Overview",
-    subtitle: "Analyze Meta ad spend effectiveness and WhatsApp prospective buyer handling quality.",
+    subtitle: "Analyze Meta ad spend alongside prospect data entered or uploaded to the CRM.",
     totalSpend: "Total Ad Spend",
     cpqlTitle: "Cost per Qualified Lead (CPQL)",
     buyerScoreTitle: "Average Buyer Score",
@@ -182,7 +178,6 @@ export const enDictionary: TranslationDictionary = {
       sectionTitle: "Deterministic Ad Optimization Recommendations",
       ruleBasedBadge: "Deterministic • No LLM",
       sectionSubtitle: "Actionable budget allocation recommendations based on qualified leads, CPQL, and attribution quality.",
-      dataSourceLabel: "Data Source: Synthetic Demo Mode",
       filterAll: "All",
       scaleCandidate: "Scale Candidate",
       investigate: "Investigate",
@@ -234,8 +229,8 @@ export const enDictionary: TranslationDictionary = {
       dataCompleteness: "Completeness",
       evidenceConfidence: "Evidence Confidence",
       criteriaBreakdownTitle: "Evaluation Criteria Breakdown:",
-      conversationTimelineTitle: "WhatsApp Conversation Timeline (Raw Transcript)",
-      conversationTimelineSubtitle: "Original message data analyzed by the domain evaluation engine.",
+      conversationTimelineTitle: "Available Conversation Notes",
+      conversationTimelineSubtitle: "Messages actually recorded for this prospect.",
       noMessages: "No messages recorded in this scenario.",
       buyerSpeaker: "Prospective Buyer",
       salesSpeaker: "Sales Representative",
@@ -294,9 +289,8 @@ export const enDictionary: TranslationDictionary = {
     changeSelection: "Change Asset Selection",
     disconnectMeta: "Disconnect",
     disconnectConfirm: "Are you sure you want to disconnect Meta assets? Automatic ad metrics sync will be paused.",
-    whatsappCardTitle: "WhatsApp Business Coexistence Connection (GASS-Style)",
     providersTableTitle: "Provider API Adapters",
-    providersTableSubtitle: "Authentication status for Meta Marketing, WhatsApp Cloud, Meta Model API, and Supabase.",
+    providersTableSubtitle: "Status of Meta Ads, CRM data sources, analysis services, and the database.",
     syncButton: "Resync Now",
     syncingButton: "Syncing...",
     lastSynced: "Last Synced:",
@@ -342,7 +336,7 @@ export const enDictionary: TranslationDictionary = {
     meta: {
       title: "HD Creative — Connect property ads with buyer conversations",
       description:
-        "HD Creative helps property teams review Meta ad performance alongside WhatsApp conversations, lead quality, and sales follow-up.",
+        "HD Creative helps property teams review Meta ad performance alongside prospect data entered or uploaded to the CRM.",
     },
     nav: {
       features: "Features",
@@ -358,12 +352,12 @@ export const enDictionary: TranslationDictionary = {
       badge: "Built for property marketing",
       title: "Connect ad performance to buyer conversations.",
       subtitle:
-        "Track Meta ad spend, WhatsApp conversations, and lead follow-up in one clear workflow.",
+        "Review Meta Ads performance alongside CRM data your team records or uploads.",
       ctaPrimary: "Explore the dashboard",
-      note: "Live reporting requires a Meta Ads account and WhatsApp Business.",
+      note: "Connect Meta Ads and upload CRM data to get started.",
       previewLabel: "Sample view",
       previewSpend: "Ad spend",
-      previewLeads: "Inbound conversations",
+      previewLeads: "Recorded prospects",
       previewQualified: "Qualified leads",
       previewCpql: "CPQL (cost per qualified lead)",
       previewBuyerScore: "Buyer Score",
@@ -391,11 +385,11 @@ export const enDictionary: TranslationDictionary = {
       unseenItems: [
         { title: "Compare performance by ad", detail: "Review Meta spend, impressions, clicks, and results by campaign and ad." },
         { title: "Evidence-based attribution", detail: "Link received official referrals to an Ad ID. Keep inferred and unknown sources separate." },
-        { title: "Insights when data is available", detail: "With an active WhatsApp or CRM integration, review recorded needs, sales response, and outcomes." },
+        { title: "Insights when data is available", detail: "Review prospect details and outcomes your team has actually recorded or uploaded." },
       ],
       solutionSummary:
         "See what is supported by evidence, what remains unknown, and which data is needed before changing budgets.",
-      note: "Conversation insights depend on received referral data and an active WhatsApp or CRM integration. Sources without evidence remain clearly marked.",
+      note: "Analysis uses Meta ad data and the CRM information you provide. Missing information stays unknown rather than being guessed.",
     },
     simulator: {
       eyebrow: "Interactive simulator",
@@ -545,8 +539,8 @@ export const enDictionary: TranslationDictionary = {
     },
     workflow: {
       eyebrow: "How it works",
-      title: "From ad data to buyer context.",
-      subtitle: "Connect Meta Ads and WhatsApp, then review performance alongside available conversation context. Lead analysis runs when requested.",
+      title: "From ad performance to prospect data.",
+      subtitle: "Connect Meta Ads, then record or upload CRM data for analysis when you need it.",
       readOnlyNote: "Meta access is read-only. Syncing does not change ads or budgets.",
       steps: [
         {
@@ -554,12 +548,12 @@ export const enDictionary: TranslationDictionary = {
           description: "Sign in through Meta and select an ad account. HD Creative reads performance data with read-only access.",
         },
         {
-          title: "Connect WhatsApp Business",
-          description: "Connect your WhatsApp Business number through Meta Coexistence to receive inbound messages and CTWA referrals.",
+          title: "Upload CRM data",
+          description: "Add prospects manually or upload a spreadsheet from your team.",
         },
         {
           title: "Sync your data",
-          description: "Pull ad metrics from Meta and record messages through the webhook. A conversation is linked to an ad only when referral evidence is available.",
+          description: "Pull ad metrics from Meta and link prospect data to an ad only when source information is available.",
         },
         {
           title: "Analyze and review leads",
@@ -574,11 +568,11 @@ export const enDictionary: TranslationDictionary = {
       items: [
         {
           title: "Connection details are stored securely",
-          description: "Information used to connect Meta and WhatsApp is encrypted while stored and opened only when the service needs it.",
+          description: "HD Creative reads Meta ad metrics. It does not change your ads or budgets.",
         },
         {
-          title: "WhatsApp messages are checked before processing",
-          description: "Incoming WhatsApp data is checked for authenticity first. Messages that fail this check are rejected.",
+          title: "Analysis follows the data you provide",
+          description: "Prospect details come from your CRM input or files. Missing data is not created or guessed.",
         },
         {
           title: "Each organization’s data stays separate",
@@ -589,7 +583,7 @@ export const enDictionary: TranslationDictionary = {
           description: "HD Creative only reads performance data from Meta. Ads and budgets cannot be changed through this connection.",
         },
       ],
-      note: "WhatsApp conversations are stored to help assess prospective buyers. Your organization decides how long data is kept and who on the team can access it.",
+      note: "Prospect data you enter or upload is stored in your organization workspace.",
     },
     faq: {
       eyebrow: "Frequently asked questions",
@@ -609,7 +603,7 @@ export const enDictionary: TranslationDictionary = {
         {
           question: "What do verified, inferred, and unknown attribution mean?",
           answer:
-            "Verified means WhatsApp included an official referral to an ad. Inferred means there is a matching clue but no official referral. Unknown means there is not enough evidence. In that case, the conversation is not assigned to a specific ad.",
+            "Verified attribution requires official Meta referral evidence. Uploaded CRM data is linked to an ad only when the file includes matching source information; otherwise, its source remains unknown.",
         },
         {
           question: "Does HD Creative change my ads or budgets?",
@@ -617,9 +611,9 @@ export const enDictionary: TranslationDictionary = {
             "No. HD Creative only reads performance data from Meta. You stay in control of ad settings and budgets.",
         },
         {
-          question: "What do I need to connect?",
+          question: "What data should I prepare?",
           answer:
-            "Connect Meta Ads to see spend and ad performance. Connect WhatsApp Business to receive messages and ad referrals. Lead assessments need conversation content; viewing or booking outcomes appear only when they are recorded in the system.",
+            "Connect Meta Ads to see spend and ad performance. Upload CRM data to receive messages and ad referrals. Lead assessments need conversation content; viewing or booking outcomes appear only when they are recorded in the system.",
         },
         {
           question: "Can my team review the AI-assisted score?",
@@ -631,7 +625,7 @@ export const enDictionary: TranslationDictionary = {
     cta: {
       eyebrow: "Start with your data",
       title: "Bring ad and conversation data into one dashboard.",
-      subtitle: "Connect Meta Ads and WhatsApp Business to review ad costs, conversation sources, and available follow-up details.",
+      subtitle: "Connect Meta Ads, then upload CRM data to review ad costs and prospect progress.",
       primary: "Explore Dashboard",
       secondary: "Already have an account? Sign in",
     },

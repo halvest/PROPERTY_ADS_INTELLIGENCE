@@ -6,11 +6,13 @@ import type { CampaignDetailData } from "@/components/dashboard/CampaignDetailWo
 import type { RealAdRow } from "@/app/(dashboard)/ads/page";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { useAiQuota } from "@/hooks/useAiQuota";
 
 interface AIAdsPerformanceAnalystProps {
   campaigns: CampaignDetailData[];
   ads: RealAdRow[];
   accountName?: string | null;
+  adAccountId?: string | null;
   currency?: string;
   timezone?: string;
   currentDateRange?: string;
@@ -73,6 +75,7 @@ export function AIAdsPerformanceAnalyst({
   campaigns = [],
   ads = [],
   accountName = "Meta Ads",
+  adAccountId = null,
   currency: _currency = "IDR",
   timezone = "Asia/Jakarta",
   currentDateRange: _currentDateRange,
@@ -81,6 +84,7 @@ export function AIAdsPerformanceAnalyst({
   void _currentDateRange;
   const { addToast } = useToast();
   const { locale, formatNumber } = useI18n();
+  const { quota, refresh: refreshQuota } = useAiQuota();
 
   // Selector states
   const [scope, setScope] = useState<"account" | "campaign" | "ad">("account");
@@ -119,8 +123,12 @@ export function AIAdsPerformanceAnalyst({
   const [showExtraMetrics, setShowExtraMetrics] = useState(false);
   const [showCalculationDetails, setShowCalculationDetails] = useState(false);
 
-  // Request & Output states
-  const [analysis, setAnalysis] = useState<PerformanceAnalysisOutput | null>(null);
+  // Request & Output states. An analysis is only shown for the account it
+  // was computed for; switching accounts hides the previous account's result.
+  const [storedAnalysis, setAnalysis] = useState<PerformanceAnalysisOutput | null>(null);
+  const [analysisAccountId, setAnalysisAccountId] = useState<string | null>(null);
+  const analysis =
+    analysisAccountId === (adAccountId || null) ? storedAnalysis : null;
   const [lastAnalyzedScopeContext, setLastAnalyzedScopeContext] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -276,6 +284,10 @@ export function AIAdsPerformanceAnalyst({
   // Manual Trigger Only
   const runPerformanceAnalysis = async () => {
     if (isAnalyzingRef.current || isLoading) return;
+    if (quota?.remaining === 0) {
+      setError(locale === "id" ? "Kuota analisis gratis Anda telah habis. Lihat waktu reset di Pengaturan." : "Your free analysis quota is exhausted. Check the reset time in Settings.");
+      return;
+    }
     isAnalyzingRef.current = true;
     setIsLoading(true);
     setError(null);
@@ -285,11 +297,12 @@ export function AIAdsPerformanceAnalyst({
     try {
       const res = await fetch("/api/ai/analyze-performance", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           scope,
           period,
           targetId,
+          adAccountId: adAccountId || undefined,
           customSince: period === "custom" && customSince ? customSince : undefined,
           customUntil: period === "custom" && customUntil ? customUntil : undefined,
           targetCpr: targetCpr || undefined,
@@ -305,8 +318,10 @@ export function AIAdsPerformanceAnalyst({
       const json = await res.json();
       if (json.success && json.data) {
         setAnalysis(json.data);
+        setAnalysisAccountId(adAccountId || null);
         setLastAnalyzedScopeContext(currentSelectionLabel);
         setError(null);
+        void refreshQuota();
       } else {
         throw new Error(locale === "id" ? "Format respons tidak valid." : "Invalid response format.");
       }
@@ -321,6 +336,7 @@ export function AIAdsPerformanceAnalyst({
     } finally {
       setIsLoading(false);
       isAnalyzingRef.current = false;
+      void refreshQuota();
     }
   };
 
@@ -777,7 +793,8 @@ export function AIAdsPerformanceAnalyst({
           <button
             type="button"
             onClick={runPerformanceAnalysis}
-            disabled={isLoading}
+            disabled={isLoading || quota?.remaining === 0}
+            title={quota?.remaining === 0 ? (locale === "id" ? "Kuota analisis habis — lihat Pengaturan" : "Analysis quota exhausted — see Settings") : undefined}
             className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 dark:focus-visible:ring-offset-zinc-900 cursor-pointer transition-colors xl:min-w-40"
           >
             {isLoading ? (
@@ -1244,6 +1261,8 @@ export function AIAdsPerformanceAnalyst({
           <button
             type="button"
             onClick={runPerformanceAnalysis}
+            disabled={quota?.remaining === 0}
+            title={quota?.remaining === 0 ? (locale === "id" ? "Kuota analisis habis — lihat Pengaturan" : "Analysis quota exhausted — see Settings") : undefined}
             className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white cursor-pointer transition-colors"
           >
             <span>

@@ -44,7 +44,7 @@ export default function OpengraphImage() {
             See which property ads actually bring you buyers.
           </div>
           <div style={{ marginTop: 22, fontSize: 26, color: "#a3aabb", maxWidth: 880, lineHeight: 1.4 }}>
-            Meta Ads spend connected with WhatsApp conversations: CPQL, Buyer Score, and sales response time.
+            Meta Ads spend alongside CRM data provided by your team.
           </div>
         </div>
         <div style={{ display: "flex", gap: 12 }}>

@@ -5,7 +5,6 @@ import type {
   AdOptimizationRecommendation,
   RecommendationCategory,
 } from "@/domain/recommendations/types";
-import { updateRecommendationStatus } from "@/lib/data/dashboard-service";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
@@ -88,32 +87,6 @@ export function AdOptimizationRecommendations({
         return;
       }
 
-      // If unauthenticated (demo/preview user), safely update mock store and inform user
-      if (res.status === 401 || res.status === 403) {
-        const actorName = locale === "id" ? "Supervisor Demo (Sesi Lokal)" : "Demo Supervisor (Local Session)";
-        updateRecommendationStatus({
-          recommendationId: id,
-          status,
-          actorName,
-          note,
-        });
-        setLocalOverrides((prev) => ({
-          ...prev,
-          [id]: { status, reviewedBy: actorName, reviewedAt: new Date().toISOString() },
-        }));
-
-        addToast(
-          "info",
-          locale === "id" ? "Sesi Demo Diperbarui" : "Demo Session Updated",
-          locale === "id"
-            ? `Status "${adName}" diperbarui di memori lokal. Login Supabase diperlukan untuk persistensi basis data.`
-            : `Status of "${adName}" updated in local state. Sign in required for database persistence.`
-        );
-
-        if (onRefresh) onRefresh();
-        return;
-      }
-
       // Explicit database or validation failure
       addToast(
         "error",
@@ -121,25 +94,12 @@ export function AdOptimizationRecommendations({
         data.error || (locale === "id" ? "Terjadi kesalahan pada basis data." : "Database error occurred.")
       );
     } catch {
-      // Offline / network fallback
-      const actorName = locale === "id" ? "Pengguna Offline (Sesi Lokal)" : "Offline User (Local Session)";
-      updateRecommendationStatus({
-        recommendationId: id,
-        status,
-        actorName,
-        note,
-      });
-      setLocalOverrides((prev) => ({
-        ...prev,
-        [id]: { status, reviewedBy: actorName, reviewedAt: new Date().toISOString() },
-      }));
-
       addToast(
-        "warning",
-        locale === "id" ? "Disimpan Offline" : "Saved Offline",
+        "error",
+        locale === "id" ? "Gagal Menyimpan" : "Failed to Save",
         locale === "id"
-          ? "Perubahan disimpan sementara secara lokal karena koneksi jaringan terputus."
-          : "Changes saved locally due to network interruption."
+          ? "Periksa koneksi lalu coba simpan kembali. Perubahan belum tersimpan."
+          : "Check your connection and retry. The change was not saved."
       );
 
       if (onRefresh) onRefresh();
@@ -195,11 +155,11 @@ export function AdOptimizationRecommendations({
           </p>
         </div>
 
-        {/* Demo/Live Pill */}
+        {/* Recommendation method */}
         <div className="shrink-0">
           <span className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/60 px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-300">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-            {t.common.demoMode}
+            {locale === "id" ? "Berbasis Aturan" : "Rule Based"}
           </span>
         </div>
       </div>

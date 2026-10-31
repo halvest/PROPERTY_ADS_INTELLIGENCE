@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { finishAiAnalysis, requestIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
 import { z } from "zod";
 import { isMetaModelApiConfigured, getMetaConfig } from "@/lib/ai/meta/config";
 import { MetaModelApiClient } from "@/lib/ai/meta/client";
@@ -20,6 +21,7 @@ export const AnalyzePerformanceRequestSchema = z.object({
     .enum(["1d", "3d", "7d", "14d", "30d", "custom", "daily", "weekly", "monthly"])
     .default("7d"),
   targetId: z.string().optional(),
+  adAccountId: z.string().optional(),
   dateRange: z.string().optional(),
   customSince: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   customUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -511,6 +513,7 @@ function buildDeterministicAnalysis(params: {
 }
 
 export async function POST(req: NextRequest) {
+  let quotaReservation: { userId: string; reservationId: string } | null = null;
   try {
     const rl = checkRateLimit(rateLimitKey(req, "ai-analyze-performance"), 20, 60_000);
     if (!rl.allowed) {
@@ -527,14 +530,11 @@ export async function POST(req: NextRequest) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
     if (authError || !user) {
-      if (isProduction) {
-        return NextResponse.json(
-          { success: false, error: "Autentikasi diperlukan", code: "UNAUTHORIZED" },
-          { status: 401 }
-        );
-      }
+      return NextResponse.json(
+        { success: false, error: "Autentikasi diperlukan", code: "UNAUTHORIZED" },
+        { status: 401 }
+      );
     }
 
     const { data: profile } = user
@@ -545,8 +545,7 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || (isProduction ? null : "d2a99e97-b4cd-4e9f-b084-e36214277225");
+    const organizationId = profile?.organization_id || null;
 
     if (!organizationId) {
       return NextResponse.json(
@@ -580,7 +579,36 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { scope, period, targetId, dateRange, customSince, customUntil, targetCpr, locale } = parseResult.data;
+    const { scope, period, targetId, adAccountId, dateRange, customSince, customUntil, targetCpr, locale } = parseResult.data;
+
+
+    // 3b. Resolve the validated ad-account context. Metrics must never mix
+    // accounts: when an account is specified it must belong to this tenant,
+    // and its campaigns bound every scope (including whole-account analysis).
+    let accountCampaignIds: string[] | null = null;
+    let accountName: string | null = adAccount?.account_name || null;
+    if (adAccountId) {
+      const norm = (v: string) => (v.startsWith("act_") ? v : `act_${v}`);
+      const { data: accRow } = await db
+        .from("ad_accounts")
+        .select("id, provider_account_id, account_name")
+        .eq("organization_id", organizationId)
+        .eq("provider_account_id", norm(adAccountId))
+        .maybeSingle();
+      if (!accRow) {
+        return NextResponse.json(
+          { success: false, error: "Akun iklan tidak termasuk milik organisasi ini.", code: "FORBIDDEN" },
+          { status: 403 }
+        );
+      }
+      accountName = accRow.account_name || accountName;
+      const { data: accCampaigns } = await db
+        .from("campaigns")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("ad_account_id", accRow.id);
+      accountCampaignIds = (accCampaigns || []).map((c) => c.id);
+    }
 
     // 4. Resolve Effective Date Range for Chosen Period (Section B specifications)
     let since: string | undefined;
@@ -642,7 +670,7 @@ export async function POST(req: NextRequest) {
         .eq("id", targetId)
         .maybeSingle();
 
-      if (!campaign) {
+      if (!campaign || (accountCampaignIds && !accountCampaignIds.includes(campaign.id))) {
         return NextResponse.json(
           { success: false, error: "Campaign tidak ditemukan atau tidak memiliki hak akses" },
           { status: 404 }
@@ -674,7 +702,10 @@ export async function POST(req: NextRequest) {
         .eq("id", targetId)
         .maybeSingle();
 
-      if (!adRow) {
+      if (
+        !adRow ||
+        (accountCampaignIds && !accountCampaignIds.includes(adRow.campaign_id))
+      ) {
         return NextResponse.json(
           { success: false, error: "Iklan tidak ditemukan atau tidak memiliki hak akses" },
           { status: 404 }
@@ -686,12 +717,19 @@ export async function POST(req: NextRequest) {
       const cmp = adRow.campaigns as { name?: string; objective?: string } | null;
       targetObjective = cmp?.objective || null;
     } else {
-      // Entire Account
-      const { data: allAds } = await db
+      // Entire Account (restricted to the validated account's campaigns)
+      let allAdsQuery = db
         .from("ads")
         .select("id")
         .eq("organization_id", organizationId);
+      if (accountCampaignIds) {
+        allAdsQuery = accountCampaignIds.length
+          ? allAdsQuery.in("campaign_id", accountCampaignIds)
+          : allAdsQuery.eq("campaign_id", "00000000-0000-0000-0000-000000000000");
+      }
+      const { data: allAds } = await allAdsQuery;
       targetAdIds = (allAds || []).map((a) => a.id);
+      if (accountName) targetName = cleanEntityName(accountName) || targetName;
     }
 
     // 6. Fetch Insights from Database
@@ -899,6 +937,21 @@ export async function POST(req: NextRequest) {
       locale,
     };
 
+    const reservation = await reserveAiAnalysis(user.id, requestIdempotencyKey(req.headers.get("Idempotency-Key")));
+    if (!reservation.ok) {
+      if (reservation.unavailable) {
+        return NextResponse.json({ success: false, error: "Kuota analisis sementara tidak tersedia. Coba lagi sebentar.", code: "QUOTA_UNAVAILABLE" }, { status: 503 });
+      }
+      const limitReached = reservation.status === "limit_reached";
+      return NextResponse.json({
+        success: false,
+        error: limitReached ? "Kuota analisis AI untuk periode ini telah habis." : "Permintaan analisis ini sedang diproses atau sudah selesai.",
+        code: limitReached ? "AI_QUOTA_EXHAUSTED" : "AI_ANALYSIS_DUPLICATE",
+        resetAt: reservation.resetAt,
+      }, { status: limitReached ? 429 : 409 });
+    }
+    quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+
     // Calculate deterministic analysis first as ground truth
     const deterministicOutput = buildDeterministicAnalysis(deterministicParams);
 
@@ -1007,6 +1060,10 @@ PRINSIP WAJIB & INTEGRITAS DATA:
               },
             };
 
+            if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+              return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
+            }
+            quotaReservation = null;
             return NextResponse.json({ success: true, data: fullOutput });
           }
         }
@@ -1016,8 +1073,15 @@ PRINSIP WAJIB & INTEGRITAS DATA:
     }
 
     // 10. Deterministic Fallback Strategist Engine
+    if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+      return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
+    }
+    quotaReservation = null;
     return NextResponse.json({ success: true, data: deterministicOutput });
   } catch (error) {
+    if (quotaReservation) {
+      await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, "analysis_failed");
+    }
     const errorMsg = error instanceof Error ? error.message : "Kesalahan server internal";
     return NextResponse.json(
       { success: false, error: `Gagal memproses analisis: ${errorMsg}` },

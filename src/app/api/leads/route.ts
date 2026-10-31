@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getLeadsList as getDemoLeads } from "@/lib/data/dashboard-service";
 import type { LeadListItem, QualityLabel } from "@/lib/data/types";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { AttributionStatus } from "@/domain/attribution/types";
@@ -28,14 +27,13 @@ export async function GET(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     const { searchParams } = request.nextUrl;
-    const isDemoQuery = process.env.DATA_MODE === "demo";
     const dateRange = searchParams.get("dateRange") || "all";
     const funnelStage = searchParams.get("funnelStage") || "all";
     const attributionStatus = searchParams.get("attributionStatus") || "all";
     const qualityLabel = searchParams.get("qualityLabel") || "all";
     const search = searchParams.get("search")?.toLowerCase().trim() || "";
 
-    if ((authError || !user) && !isDemoQuery && process.env.NODE_ENV === "production") {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -50,24 +48,11 @@ export async function GET(request: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
-
-    // 1. If explicit demo mode is requested, return sanitized demo leads
-    if (isDemoQuery) {
-      const demoList = getDemoLeads({
-        dateRange,
-        funnelStage,
-        attributionStatus,
-        qualityLabel,
-        search,
-      });
-      return NextResponse.json({
-        success: true,
-        isDemoMode: true,
-        data: demoList,
-      });
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
     }
+
+    const organizationId = profile.organization_id;
 
     // 2. Live mode: Query authentic database conversations
     let query = supabase
@@ -267,7 +252,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      isDemoMode: false,
       data: filteredLeads,
     });
   } catch (error) {
@@ -281,7 +265,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/leads
- * Handles direct manual input of a single lead by sales (Tahap 1 — Sekarang, tanpa integrasi WhatsApp).
+ * Handles direct manual input of a single lead by sales.
  * Core fields: Nama & WhatsApp, Domisili, Tanggal Masuk, Kampanye/Iklan, Tahap Funnel, Label Kualitas, Catatan Singkat.
  */
 export async function POST(request: NextRequest) {
@@ -292,8 +276,7 @@ export async function POST(request: NextRequest) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
-    if ((authError || !user) && isProduction) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -308,8 +291,11 @@ export async function POST(request: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     const body = await request.json();
 
@@ -350,7 +336,7 @@ export async function POST(request: NextRequest) {
       tahapFunnel: stage,
       qualityLabel,
       catatan,
-      statusAtribusi: (namaIklan ? "verified" : "unknown") as AttributionStatus,
+      statusAtribusi: (namaIklan ? "inferred" : "unknown") as AttributionStatus,
     };
 
     const importResult = await importCrmLeadsToDatabase({

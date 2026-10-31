@@ -261,8 +261,8 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
           </p>
           <p className="leading-relaxed text-sky-800 dark:text-sky-300 text-[11px]">
             {locale === "id"
-              ? "Saat ini tim sales memperbarui tahap funnel, label Hot/Warm/Cold, dan catatan singkat secara manual. Setelah integrasi percakapan WhatsApp terhubung (Tahap 2), AI akan otomatis menganalisis konteks chat untuk memberikan label kualitas objektif, alasan indikator percakapan, ringkasan kebutuhan (budget, tipe properti, lokasi), dan rekomendasi tindak lanjut."
-              : "Currently sales reps manually update funnel stages, Hot/Warm/Cold labels, and short notes. Once WhatsApp conversation integration connects in Phase 2, AI will automatically analyze chat contexts to provide objective quality badges, conversation indicators, requirement summaries, and follow-up recommendations."}
+              ? "Informasi prospek dan tindak lanjut berasal dari input atau file yang diberikan klien. AI hanya dapat menilai bukti yang tercatat; informasi yang tidak tersedia tidak akan ditebak."
+              : "Prospect and follow-up details come from client input or uploaded files. AI can only assess recorded evidence and does not guess missing information."}
           </p>
         </div>
       </div>
@@ -456,8 +456,8 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         </div>
       </div>
 
-      {/* WhatsApp Message Timeline */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
+      {/* Uploaded or previously recorded conversation messages */}
+      {lead.messages.length > 0 && <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
         <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-1">
           {t.leads.detail.conversationTimelineTitle}
         </h2>
@@ -506,7 +506,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
             })}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Attribution Audit History & Corrections */}
       <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">

@@ -13,7 +13,7 @@ export interface CampaignDetailData {
   activeAdsCount: number;
   spend: number;
   impressions: number;
-  reach: number;
+  reach: number | null;
   frequency: number | null;
   results: number;
   costPerResult: number | null;
@@ -24,6 +24,7 @@ export interface CampaignDetailData {
   allCtr: number | null;
   allCpc: number | null;
   cpm: number | null;
+  hasInsights?: boolean;
 }
 
 export interface AdInCampaignItem {
@@ -35,12 +36,13 @@ export interface AdInCampaignItem {
   adsetName: string;
   spend: number;
   impressions: number;
-  reach: number;
+  reach: number | null;
   linkClicks: number;
   linkCtr: number | null;
   linkCpc: number | null;
   results: number;
   costPerResult: number | null;
+  hasInsights?: boolean;
 }
 
 interface CampaignDetailWorkspaceProps {
@@ -305,7 +307,7 @@ export function CampaignDetailWorkspace({
                 Executive Summary
               </span>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Sintesis performa keseluruhan kampanye, evaluasi efisiensi biaya terhadap target volume prospek WhatsApp, serta status delivery saat ini ({campaign.status}).
+                Sintesis performa kampanye, evaluasi biaya terhadap data prospek yang dicatat, serta status delivery saat ini ({campaign.status}).
               </p>
             </div>
 
@@ -338,7 +340,7 @@ export function CampaignDetailWorkspace({
                 Faktor yang Belum Pasti
               </span>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Data mutu percakapan WhatsApp dan Buyer Score masih menunggu integrasi webhook WhatsApp Cloud API yang akan datang.
+                Data prospek, kualitas, dan tindak lanjut hanya tersedia jika dicatat atau diunggah ke CRM.
               </p>
             </div>
 
@@ -360,7 +362,7 @@ export function CampaignDetailWorkspace({
                 Rekomendasi Tindakan
               </span>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Saran taktis: Evaluasi penawaran pembuka WhatsApp (pre-filled message) dan penyesuaian anggaran bertahap (bukan jaminan keuntungan pasti).
+                Saran taktis: Evaluasi penawaran iklan dan tindak lanjut prospek berdasarkan data yang tersedia.
               </p>
             </div>
 

@@ -44,3 +44,6 @@ next-env.d.ts
 # documentation
 /docs/
 
+# Supabase CLI local metadata
+/supabase/.temp/
+

@@ -173,25 +173,6 @@ describe("Audit Section I: 15 Core Test Scenarios for Ads Performance Evaluation
     expect(res.dataStatusReason).toContain("perubahan signifikan");
   });
 
-  // Kasus 9: WhatsApp menerima pesan, tetapi hasil konversi Meta tercatat nol (tracking disconnect)
-  it("Kasus 9: WhatsApp menerima pesan, tetapi konversi Meta tercatat nol — tracking disconnect terdeteksi, aksi periksa_tracking", () => {
-    const res = evaluateAdsPerformance({
-      period: "7d",
-      durationDays: 7,
-      spend: 350000,
-      results: 0, // Meta recorded 0 conversions
-      whatsappMessagesActual: 15, // Actual incoming WhatsApp chats exist
-      targetCpr: 35000,
-      linkClicks: 220,
-      impressions: 18000,
-    });
-
-    expect(res.dataStatus).toBe("tidak_valid");
-    expect(res.performanceStatus).toBe("belum_dapat_dinilai");
-    expect(res.action).toBe("periksa_tracking");
-    expect(res.uncertaintyNotes.some((n) => n.includes("tracking") || n.includes("WhatsApp"))).toBe(true);
-  });
-
   // Kasus 10: Data hasil tidak tersedia akibat kegagalan pengambilan data (null / unavailable)
   it("Kasus 10: Data hasil tidak tersedia (null) — dataStatus tidak_valid, CPR null, aksi periksa_tracking", () => {
     const res = evaluateAdsPerformance({

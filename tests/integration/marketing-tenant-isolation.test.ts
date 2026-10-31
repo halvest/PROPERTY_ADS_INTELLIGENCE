@@ -51,8 +51,13 @@ describe("Meta Marketing Integration - Tenant Isolation & Data Separation", () =
               return { data: [] };
             }),
           }),
-          update: vi.fn().mockReturnValue({
-            eq: vi.fn().mockResolvedValue({ data: null, error: null }),
+          update: vi.fn().mockImplementation(() => {
+            const builder = {
+              eq: vi.fn(() => builder),
+              then: (resolve: (value: { data: null; error: null }) => unknown) =>
+                Promise.resolve({ data: null, error: null }).then(resolve),
+            };
+            return builder;
           }),
         };
       }),
@@ -60,6 +65,7 @@ describe("Meta Marketing Integration - Tenant Isolation & Data Separation", () =
 
     const result = await executeMarketingSync({
       organizationId: orgA,
+      targetAdAccountId: "act_0812999001",
       client: new MockMetaMarketingApiClient(),
       supabaseClient: mockSupabase,
     });
@@ -77,8 +83,6 @@ describe("Meta Marketing Integration - Tenant Isolation & Data Separation", () =
     // Verify data source tag
     const insightRows = insertedRows["ad_insights"];
     expect(insightRows.length).toBeGreaterThan(0);
-    insightRows.forEach((row) => {
-      expect(["meta", "demo"]).toContain(row.source);
-    });
+    insightRows.forEach((row) => expect(row.source).toBe("meta"));
   });
 });

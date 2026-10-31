@@ -341,7 +341,7 @@ export function MetaReconciliationModal({
                 </div>
                 <ul className="list-disc list-inside space-y-1 pl-1 text-[10px]">
                   <li>
-                    <strong>Ground Truth Meta:</strong> Seluruh metrik dihitung langsung dari endpoint resmi Meta Marketing API v21.0 dengan parameter <code className="font-mono bg-zinc-200/60 dark:bg-zinc-700 px-1 rounded">use_account_attribution_setting=true</code>.
+                    <strong>Ground Truth Meta:</strong> Seluruh metrik dihitung langsung dari endpoint resmi Meta Marketing API v26.0 dengan parameter <code className="font-mono bg-zinc-200/60 dark:bg-zinc-700 px-1 rounded">use_account_attribution_setting=true</code>.
                   </li>
                   <li>
                     <strong>Iklan Berjalan Aktif (Today):</strong> Jika rentang waktu mencakup hari ini, impresi dan belanja terus bertambah di server Meta setiap menit. Menekan tombol <em>Sinkronkan Meta</em> akan segera menyerap data akumulasi terbaru ke database dasbor.

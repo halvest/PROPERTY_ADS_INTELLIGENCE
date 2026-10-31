@@ -17,14 +17,11 @@ export default function DashboardPage() {
   const { addToast } = useToast();
 
   const [dateRange, setDateRange] = useState("all");
-  const [isDemoMode, setIsDemoMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [dashboardData, setDashboardData] = useState<LiveDashboardResponse | null>(null);
 
-  // Demo mode is decided by the server (DATA_MODE); the client only reflects
-  // the isDemoMode flag returned in the dashboard response.
   const refreshDashboard = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -33,7 +30,6 @@ export default function DashboardPage() {
         const json = await res.json();
         if (json.success && json.data) {
           setDashboardData(json.data);
-          setIsDemoMode(Boolean(json.data.isDemoMode));
         }
       }
     } catch {
@@ -53,7 +49,6 @@ export default function DashboardPage() {
           const json = await res.json();
           if (isMounted && json.success && json.data) {
             setDashboardData(json.data);
-            setIsDemoMode(Boolean(json.data.isDemoMode));
           }
         }
       } catch {
@@ -76,7 +71,7 @@ export default function DashboardPage() {
       const res = await fetch("/api/marketing/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allowDemoFallback: false }),
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (res.ok && data.status === "success") {
@@ -215,8 +210,8 @@ export default function DashboardPage() {
       {/* 2. Onboarding Status Bar */}
       <OnboardingStatusBar />
 
-      {/* 3. Live vs Demo Environment Banner */}
-      {!isDemoMode && state === "not_connected" ? (
+      {/* 3. Connection state */}
+      {state === "not_connected" ? (
         <div className="rounded-2xl border border-indigo-500/20 bg-indigo-50/50 dark:border-indigo-500/30 dark:bg-indigo-950/20 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-bold text-sm">
@@ -228,19 +223,12 @@ export default function DashboardPage() {
               </h2>
               <p className="mt-0.5 text-xs text-indigo-800 dark:text-indigo-300 leading-relaxed">
                 {locale === "id"
-                  ? "Akun Meta live belum terhubung pada organisasi ini. Anda dapat mengaktifkan 'Mode Demo' untuk meninjau data simulasi eksekutif lengkap, atau menghubungkan akun iklan di Pengaturan."
-                  : "Live Meta account is not yet connected for this organization. You can enable Demo Mode to view simulated executive data, or connect your ad account in Settings."}
+                  ? "Akun Meta belum terhubung pada organisasi ini. Hubungkan akun iklan di Pengaturan untuk memuat data aktual."
+                  : "Meta is not connected for this organization. Connect an ad account in Settings to load actual data."}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setIsDemoMode(true)}
-              className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 transition-colors cursor-pointer"
-            >
-              {locale === "id" ? "Aktifkan Mode Simulasi Demo" : "Enable Demo Simulation"}
-            </button>
             <Link
               href="/settings"
               className="rounded-xl border border-indigo-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-zinc-900 dark:text-indigo-300 dark:hover:bg-zinc-800 transition-colors"
@@ -248,29 +236,6 @@ export default function DashboardPage() {
               {locale === "id" ? "Buka Pengaturan" : "Open Settings"}
             </Link>
           </div>
-        </div>
-      ) : isDemoMode ? (
-        <div className="rounded-2xl border border-amber-300/80 bg-amber-50/70 dark:border-amber-800/60 dark:bg-amber-950/30 p-3.5 px-4 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-sm">⚠️</span>
-            <div>
-              <span className="font-bold uppercase tracking-wider text-[11px] bg-amber-200/60 dark:bg-amber-900/50 px-2 py-0.5 rounded-md mr-2 text-amber-900 dark:text-amber-200">
-                {locale === "id" ? "Mode Simulasi Demo" : "Demo Simulation"}
-              </span>
-              <span>
-                {locale === "id"
-                  ? "Menampilkan portofolio simulasi iklan properti BSD dan data kualifikasi prospek."
-                  : "Displaying simulated property advertising portfolio and prospect qualification metrics."}
-              </span>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsDemoMode(false)}
-            className="rounded-lg bg-amber-600 px-3 py-1 text-xs font-semibold text-white shadow-2xs hover:bg-amber-500 transition-colors shrink-0 cursor-pointer"
-          >
-            {locale === "id" ? "Beralih ke Live Data" : "Switch to Live Data"}
-          </button>
         </div>
       ) : null}
 
@@ -528,9 +493,6 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2">
                 <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-600 dark:text-emerald-400">
                   Spreadsheet CRM
-                </span>
-                <span className="rounded-md bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-zinc-500 dark:text-zinc-400">
-                  WhatsApp (Soon)
                 </span>
               </div>
             </div>

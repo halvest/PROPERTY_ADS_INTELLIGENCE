@@ -26,7 +26,11 @@ export interface GetAdsIntelligenceOptions {
   campaignStatusFilter?: string | null;
   deliveryStatusFilter?: string | null;
   objectiveFilter?: string | null;
+  /** Provider ad account ID (act_...). Validated against this tenant's accounts. */
+  adAccountId?: string | null;
 }
+
+export type InsightsAvailability = "available" | "no_data_for_period" | "no_account_selected";
 
 import { formatDateInTimezone, parseDateRange } from "./date-utils";
 export { formatDateInTimezone, parseDateRange };
@@ -131,18 +135,14 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     campaignStatusFilter,
     deliveryStatusFilter,
     objectiveFilter,
+    adAccountId,
   } = options;
 
   const db = createAdminClient();
 
   // 1. Fetch Organization, Ad Account & Integration Connection Status
-  const [orgRes, adAccountRes, connectionRes] = await Promise.all([
+  const [orgRes, connectionRes] = await Promise.all([
     db.from("organizations").select("id, name").eq("id", organizationId).maybeSingle(),
-    db
-      .from("ad_accounts")
-      .select("id, account_name, provider_account_id, connection_status, last_synced_at, currency, timezone")
-      .eq("organization_id", organizationId)
-      .maybeSingle(),
     db
       .from("integration_connections")
       .select("status, last_synced_at, provider, error_message")
@@ -152,17 +152,49 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
   ]);
 
   const orgName = orgRes.data?.name || "Workspace";
-  const lastSyncedAt =
-    adAccountRes.data?.last_synced_at ||
-    connectionRes.data?.last_synced_at ||
-    null;
+  const lastSyncedAt = connectionRes.data?.last_synced_at || null;
 
-  // 2. Query All Campaigns for this Organization (authoritative campaign statuses from Meta)
-  const { data: dbCampaigns, error: cmpError } = await db
+  // 1b. Resolve the effective ad account for THIS tenant. Data from two
+  // accounts must never be mixed: campaigns are scoped to one account.
+  const { data: tenantAccounts, error: tenantAccountsError } = await db
+    .from("ad_accounts")
+    .select("id, provider_account_id, account_name, connection_status, last_synced_at, currency, timezone")
+    .eq("organization_id", organizationId);
+  if (tenantAccountsError) throw new Error("Gagal memuat akun iklan organisasi ini.");
+  const { data: selectionRow } = await db
+    .from("meta_asset_selections")
+    .select("ad_account_id")
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  const norm = (v?: string | null) =>
+    v ? (v.startsWith("act_") ? v : `act_${v}`) : "";
+  let effectiveAccount = (tenantAccounts || []).find(
+    (a) => a.connection_status === "connected" &&
+      norm(a.provider_account_id) === norm(selectionRow?.ad_account_id)
+  );
+  if (adAccountId) {
+    const requested = (tenantAccounts || []).find(
+      (a) => norm(a.provider_account_id) === norm(adAccountId)
+    );
+    if (!requested || requested.connection_status !== "connected") {
+      throw new Error("FORBIDDEN_AD_ACCOUNT: Akun iklan tidak termasuk milik organisasi ini.");
+    }
+    effectiveAccount = requested;
+  }
+  const effectiveAccountId = effectiveAccount?.id || null;
+
+  // 2. Query Campaigns for this Organization, scoped to the effective account
+  let campaignsQuery = db
     .from("campaigns")
     .select("id, name, status, objective, provider_campaign_id, created_at, updated_at")
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
+  campaignsQuery = campaignsQuery.eq(
+    "ad_account_id",
+    effectiveAccountId || "00000000-0000-0000-0000-000000000000"
+  );
+  const { data: dbCampaigns, error: cmpError } = await campaignsQuery;
 
   if (cmpError) {
     throw new Error(`Gagal memuat kampanye: ${cmpError.message}`);
@@ -189,22 +221,39 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     });
   });
 
-  // 3. Query All Ads for this Organization
-  const { data: dbAds, error: adsError } = await db
+  // 3. Query Ads for this Organization, scoped to the effective account's campaigns
+  let adsQuery = db
     .from("ads")
     .select("id, name, status, provider_ad_id, campaign_id, quality_ranking, engagement_rate_ranking, conversion_rate_ranking, created_at, updated_at")
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
+  const scopedCampaignIds = Array.from(campaignMap.keys());
+  adsQuery = scopedCampaignIds.length
+    ? adsQuery.in("campaign_id", scopedCampaignIds)
+    : adsQuery.eq("campaign_id", "00000000-0000-0000-0000-000000000000");
+  const { data: dbAds, error: adsError } = await adsQuery;
 
   if (adsError) {
     throw new Error(`Gagal memuat iklan: ${adsError.message}`);
   }
 
   // 4. Query Ad Insights with Date Range Filter (using Account Timezone)
-  const timezone = adAccountRes.data?.timezone || "Asia/Jakarta";
+  // Never borrow the first account's locale metadata: every account can use a
+  // different timezone and currency. UTC is only a deterministic date-boundary
+  // fallback when Meta did not provide a timezone.
+  const timezone = effectiveAccount?.timezone || "UTC";
   const { since, until } = parseDateRange(dateRange, timezone);
   const queryInsights = () => {
     let query = db.from("ad_insights").select("*").eq("organization_id", organizationId);
+    const scopedAdIds = (dbAds || []).map((ad) => ad.id);
+    // Insights are stored against internal ad IDs. Restrict at the query layer
+    // to ads belonging to campaigns in the selected account so another
+    // connected account cannot leak into KPIs or daily trends.
+    if (!effectiveAccountId || scopedAdIds.length === 0) {
+      query = query.eq("ad_id", "00000000-0000-0000-0000-000000000000");
+    } else {
+      query = query.in("ad_id", scopedAdIds);
+    }
     if (since && until) query = query.gte("date_start", since).lte("date_stop", until);
     return query;
   };
@@ -214,6 +263,11 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
   if (insError) {
     throw new Error(`Gagal memuat data metrik iklan: ${insError.message}`);
   }
+  const insightsState: InsightsAvailability = !effectiveAccountId
+    ? "no_account_selected"
+    : rawInsights && rawInsights.length > 0
+      ? "available"
+      : "no_data_for_period";
 
   // Track min and max dates observed in the actual data
   let minDate: string | null = null;
@@ -258,7 +312,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
   // Aggregate insights by ad_id
   const insightMap = new Map<string, InsightAggregate>();
   const adReachDates = new Map<string, Set<string>>();
-  let currency = adAccountRes.data?.currency || "IDR";
+  let currency = effectiveAccount?.currency || "";
   let untypedConversionRows = 0;
 
   (rawInsights || []).forEach((i) => {
@@ -453,7 +507,9 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       adsetName: ins.adsetName || "Ad Set Meta",
       spend,
       impressions,
-      reach,
+      // Meta reach is a unique count, not additive across daily insight rows.
+      // Only expose it when this ad has one observed day; otherwise unknown.
+      reach: reachDays <= 1 ? reach : null,
       frequency,
       results,
       conversations,
@@ -473,6 +529,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       conversionRateRanking: ins.conversionRateRanking || (ad as { conversion_rate_ranking?: string | null }).conversion_rate_ranking || null,
       createdAt: ad.created_at,
       updatedAt: ad.updated_at,
+      hasInsights: insightMap.has(ad.id),
     };
   });
 
@@ -491,7 +548,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     adsInCampaign.forEach((a) => {
       cmpSpend += a.spend;
       cmpImpressions += a.impressions;
-      cmpReach += a.reach;
+      cmpReach += a.reach ?? 0;
       cmpLinkClicks += a.linkClicks;
       cmpAllClicks += a.allClicks;
       cmpResults += a.results;
@@ -521,7 +578,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       activeAdsCount: activeAdsInCampaign,
       spend: Math.round(cmpSpend * 100) / 100,
       impressions: cmpImpressions,
-      reach: cmpReach,
+      reach: adsInCampaign.some((a) => a.reach === null) ? null : cmpReach,
       frequency: cmpFrequency,
       results: cmpResults,
       costPerResult: cmpCostPerResult,
@@ -532,6 +589,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       allCtr: cmpAllCtr,
       allCpc: cmpAllCpc,
       cpm: cmpCpm,
+      hasInsights: adsInCampaign.some((a) => a.hasInsights),
     };
   });
 
@@ -607,7 +665,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
   filteredAds.forEach((a) => {
     totalSpend += a.spend;
     totalImpressions += a.impressions;
-    totalReach += a.reach;
+    totalReach += a.reach ?? 0;
     totalLinkClicks += a.linkClicks;
     totalAllClicks += a.allClicks;
     totalResults += a.results;
@@ -649,17 +707,30 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     .slice(0, 6);
 
   return {
+    insightsState,
     organizationId,
     organizationName: orgName,
-    adAccount: adAccountRes.data
+    adAccount: effectiveAccount
       ? {
-          id: adAccountRes.data.provider_account_id,
-          name: adAccountRes.data.account_name,
-          currency: adAccountRes.data.currency,
-          status: adAccountRes.data.connection_status,
-          timezone: adAccountRes.data.timezone,
+          id: effectiveAccount.provider_account_id,
+          name: effectiveAccount.account_name,
+          currency: effectiveAccount.currency,
+          status: effectiveAccount.connection_status,
+          timezone: effectiveAccount.timezone,
+          lastSyncedAt: effectiveAccount.last_synced_at,
         }
       : null,
+    availableAdAccounts: (tenantAccounts || [])
+      .filter((a) => a.connection_status === "connected")
+      .map((a) => ({
+        id: a.provider_account_id,
+        name: a.account_name,
+        status: a.connection_status,
+        currency: a.currency,
+        timezone: a.timezone,
+        lastSyncedAt: a.last_synced_at,
+        isSelected: effectiveAccount?.id === a.id,
+      })),
     lastSyncedAt,
     kpis: {
       totalSpend,
@@ -668,7 +739,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       resultsContainNonConversationActions: totalResults > totalConversations,
       conversationDataIncomplete: untypedConversionRows > 0,
       costPerResult,
-      totalReach,
+      totalReach: filteredAds.some((a) => a.reach === null) ? null : totalReach,
       totalImpressions,
       frequency,
       totalAdReachAccumulated: totalReach,
@@ -702,7 +773,9 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     campaigns: campaignsSummary,
     comparison: topCampaignsComparison,
     ads: filteredAds,
-    dailyTrend: filteredDailyTrend,
+    // Reach is not additive across ads; these daily rows cannot represent a
+    // unique account reach, so expose it as unavailable rather than a sum.
+    dailyTrend: filteredDailyTrend.map((point) => ({ ...point, reach: null })),
     dateRangeContext: {
       dateRange,
       since: since || minDate || null,
@@ -871,7 +944,7 @@ export async function getAdDetailById(organizationId: string, id: string): Promi
   let conversations = 0;
   const resultActionTypes = new Set<string>();
   const reachDates = new Set<string>();
-  let currency = "IDR";
+  let currency = "";
   let earliestDate: string | null = null;
   let latestDate: string | null = null;
 

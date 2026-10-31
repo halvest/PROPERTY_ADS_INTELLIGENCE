@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { DateRangeFilter } from "@/components/dashboard/DateRangeFilter";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useI18n } from "@/lib/i18n/I18nProvider";
@@ -13,6 +13,8 @@ import { DeliveryDiagnosticsPanel } from "@/components/dashboard/DeliveryDiagnos
 import { AdDetailDrawer } from "@/components/dashboard/AdDetailDrawer";
 import { CampaignSearchableDropdown } from "@/components/dashboard/CampaignSearchableDropdown";
 import { AIAdsPerformanceAnalyst } from "@/components/dashboard/AIAdsPerformanceAnalyst";
+import { FetchGuard } from "@/lib/ads/fetch-guard";
+import { parseDateRange } from "@/lib/ads/date-utils";
 
 export interface RealAdRow {
   id: string;
@@ -33,7 +35,7 @@ export interface RealAdRow {
   adsetName: string;
   spend: number;
   impressions: number;
-  reach: number;
+  reach: number | null;
   frequency: number | null;
   results: number;
   conversations?: number;
@@ -53,6 +55,7 @@ export interface RealAdRow {
   conversionRateRanking: string | null;
   createdAt: string;
   updatedAt: string;
+  hasInsights?: boolean;
 }
 
 interface AdsIntelligenceApiResponse {
@@ -60,13 +63,24 @@ interface AdsIntelligenceApiResponse {
   data: {
     organizationId: string;
     organizationName: string;
+    insightsState: "available" | "no_data_for_period" | "no_account_selected";
     adAccount: {
       id: string;
       name: string | null;
       currency: string;
       status: string;
       timezone?: string;
+      lastSyncedAt?: string | null;
     } | null;
+    availableAdAccounts?: Array<{
+      id: string;
+      name: string | null;
+      status: string;
+      currency?: string;
+      timezone?: string;
+      lastSyncedAt?: string | null;
+      isSelected?: boolean;
+    }>;
     lastSyncedAt: string | null;
     kpis: {
       totalSpend: number;
@@ -76,7 +90,7 @@ interface AdsIntelligenceApiResponse {
       resultLabel?: string;
       resultTypeDescription?: string | null;
       costPerResult: number | null;
-      totalReach: number;
+      totalReach: number | null;
       totalImpressions: number;
       frequency: number | null;
       linkClicks: number;
@@ -86,6 +100,7 @@ interface AdsIntelligenceApiResponse {
       allCtr: number | null;
       allCpc: number | null;
       cpm: number | null;
+      hasInsights?: boolean;
       currency: string;
       totalCampaigns: number;
       activeCampaigns: number;
@@ -111,7 +126,7 @@ interface AdsIntelligenceApiResponse {
       date: string;
       spend: number;
       impressions: number;
-      reach: number;
+      reach: number | null;
       linkClicks: number;
       allClicks?: number;
       results: number;
@@ -216,6 +231,7 @@ export default function AdsIntelligencePage() {
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<string>("all");
   const [objectiveFilter, setObjectiveFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedAdAccountId, setSelectedAdAccountId] = useState<string>("");
 
   // Sorting & Pagination State
   const [sortBy, setSortBy] = useState<
@@ -232,44 +248,22 @@ export default function AdsIntelligencePage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isReconciliationOpen, setIsReconciliationOpen] = useState(false);
   const [apiData, setApiData] = useState<AdsIntelligenceApiResponse["data"] | null>(null);
+  const [isStale, setIsStale] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const fetchGuardRef = useRef(new FetchGuard());
 
-  // Manual Refresh / Sync trigger
-  const refreshData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (dateRange) params.set("dateRange", dateRange);
-      if (selectedCampaignId !== "all") params.set("campaignId", selectedCampaignId);
-      if (campaignStatusFilter !== "all") params.set("campaignStatus", campaignStatusFilter);
-      if (deliveryStatusFilter !== "all") params.set("deliveryStatus", deliveryStatusFilter);
-      if (objectiveFilter !== "all") params.set("objective", objectiveFilter);
-
-      const res = await fetch(`/api/ads?${params.toString()}`);
-      if (res.ok) {
-        const json: AdsIntelligenceApiResponse = await res.json();
-        if (json.success && json.data) {
-          setApiData(json.data);
-        }
-      } else {
-        const err = await res.json().catch(() => ({}));
-        addToast("error", "Gagal Memuat Data", err.error || "Gagal menghubungi server");
-      }
-    } catch (err) {
-      addToast(
-        "error",
-        "Kesalahan Jaringan",
-        err instanceof Error ? err.message : "Tidak dapat memuat data iklan"
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [dateRange, selectedCampaignId, campaignStatusFilter, deliveryStatusFilter, objectiveFilter, addToast]);
-
-  // Initial and reactive data load
-  useEffect(() => {
-    let isMounted = true;
-    async function load() {
+  // Single guarded fetch path. Starting a fetch aborts the previous one and
+  // invalidates its sequence, so a stale response for a previously selected
+  // account can never overwrite the latest context.
+  const fetchAds = useCallback(
+    async (opts: { silent?: boolean } = {}) => {
+      const guard = fetchGuardRef.current;
+      const { seq, signal } = guard.begin();
       setIsLoading(true);
+      setLoadError(null);
+      // Previous context's data must not be shown under the new identity.
+      setApiData(null);
+      setIsStale(false);
       try {
         const params = new URLSearchParams();
         if (dateRange) params.set("dateRange", dateRange);
@@ -277,45 +271,115 @@ export default function AdsIntelligencePage() {
         if (campaignStatusFilter !== "all") params.set("campaignStatus", campaignStatusFilter);
         if (deliveryStatusFilter !== "all") params.set("deliveryStatus", deliveryStatusFilter);
         if (objectiveFilter !== "all") params.set("objective", objectiveFilter);
+        if (selectedAdAccountId) params.set("adAccountId", selectedAdAccountId);
 
-        const res = await fetch(`/api/ads?${params.toString()}`);
+        const res = await fetch(`/api/ads?${params.toString()}`, { signal, cache: "no-store" });
+        if (!guard.isCurrent(seq)) return;
         if (res.ok) {
           const json: AdsIntelligenceApiResponse = await res.json();
-          if (isMounted && json.success && json.data) {
+          if (!guard.isCurrent(seq)) return;
+          if (json.success && json.data) {
             setApiData(json.data);
+            setIsStale(
+              json.data.lastSyncedAt
+                ? Date.now() - new Date(json.data.lastSyncedAt).getTime() > 24 * 3600 * 1000
+                : false
+            );
+          } else {
+            setApiData(null);
+            setLoadError(locale === "id" ? "Data iklan tidak tersedia." : "Ad data is unavailable.");
+          }
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setApiData(null);
+          setLoadError(
+            err.error ||
+              (locale === "id" ? "Gagal memuat data iklan." : "Failed to load ad data.")
+          );
+          if (!opts.silent) {
+            addToast("error", locale === "id" ? "Gagal Memuat Data" : "Failed to Load Data", err.error || "");
           }
         }
-      } catch {
-        // Non-blocking fetch error
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
+      } catch (err) {
+        if (!guard.isCurrent(seq)) return; // superseded or aborted request
+        setApiData(null);
+        setLoadError(
+          locale === "id"
+            ? "Kesalahan jaringan saat memuat data iklan."
+            : "Network error while loading ad data."
+        );
+        if (!opts.silent) {
+          addToast(
+            "error",
+            locale === "id" ? "Kesalahan Jaringan" : "Network Error",
+            err instanceof Error ? err.message : ""
+          );
         }
+      } finally {
+        if (guard.isCurrent(seq)) setIsLoading(false);
       }
+    },
+    [dateRange, selectedCampaignId, campaignStatusFilter, deliveryStatusFilter, objectiveFilter, selectedAdAccountId, addToast, locale]
+  );
+
+  const refreshData = useCallback(() => void fetchAds(), [fetchAds]);
+
+  // Context changes clear the previous account's data immediately so it is
+  // never displayed under the new account's identity while loading.
+  useEffect(() => {
+    const guard = fetchGuardRef.current;
+    async function load() {
+      await fetchAds({ silent: true });
     }
     void load();
-    return () => {
-      isMounted = false;
-    };
-  }, [dateRange, selectedCampaignId, campaignStatusFilter, deliveryStatusFilter, objectiveFilter]);
+    return () => guard.cancel();
+  }, [fetchAds]);
 
   // Trigger Real Sync from Meta Marketing API
   const handleTriggerSync = async () => {
     if (isSyncing) return;
+    if (dateRange === "all") {
+      addToast(
+        "warning",
+        "Pilih Periode Sinkronisasi",
+        "Untuk memuat Insights historis, pilih rentang tanggal khusus saat iklan berjalan lalu sinkronkan lagi."
+      );
+      return;
+    }
     setIsSyncing(true);
     try {
+      const syncTimeRange = parseDateRange(
+        dateRange,
+        apiData?.adAccount?.timezone || "Asia/Jakarta"
+      );
       const res = await fetch("/api/marketing/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allowDemoFallback: false }),
+        body: JSON.stringify({
+          targetAdAccountId: selectedAdAccountId || apiData?.adAccount?.id || undefined,
+          ...(syncTimeRange.since && syncTimeRange.until ? { timeRange: syncTimeRange } : {}),
+        }),
       });
       const data = await res.json();
       if (res.ok && data.status === "success") {
         const count = data.syncResult?.recordsProcessed ?? 0;
+        const syncWarnings = data.syncResult?.warnings as string[] | undefined;
+        if (syncWarnings?.length) {
+          addToast("warning", "Metrik Tersimpan dengan Peringatan", syncWarnings.join(" "));
+        } else {
+          addToast(
+            "success",
+            "Sinkronisasi Berhasil",
+            `Meta Ads sinkron: ${count} record berhasil diproses dan disimpan ke basis data.`
+          );
+        }
+        refreshData();
+      } else if (res.ok && data.status === "partial") {
+        const insights = data.syncResult?.insightsSynced ?? 0;
         addToast(
-          "success",
-          "Sinkronisasi Berhasil",
-          `Meta Ads sinkron: ${count} record berhasil diproses dan disimpan ke basis data.`
+          "warning",
+          "Sinkronisasi Sebagian",
+          `Data akun diperbarui, tetapi sinkronisasi belum lengkap. Insights tersimpan: ${insights}. Coba lagi atau periksa detail koneksi Meta.`
         );
         refreshData();
       } else {
@@ -380,8 +444,8 @@ export default function AdsIntelligencePage() {
           valB = b.impressions;
           break;
         case "reach":
-          valA = a.reach;
-          valB = b.reach;
+          valA = a.reach ?? -1;
+          valB = b.reach ?? -1;
           break;
         case "results":
           valA = a.results;
@@ -407,6 +471,7 @@ export default function AdsIntelligencePage() {
   }, [processedAds, safeCurrentPage]);
 
   const kpis = apiData?.kpis;
+  const insightsAvailable = apiData?.insightsState === "available";
   const rawCampaigns = apiData?.campaigns;
   const campaigns = useMemo(() => rawCampaigns || [], [rawCampaigns]);
   const adAccount = apiData?.adAccount;
@@ -414,8 +479,9 @@ export default function AdsIntelligencePage() {
   const formatAdCurrency = useCallback(
     (amount: number | null | undefined) => {
       if (amount === null || amount === undefined || Number.isNaN(amount)) return "—";
-      const currency = adAccount?.currency || kpis?.currency || "IDR";
       const intlLocale = locale === "id" ? "id-ID" : "en-US";
+      const currency = adAccount?.currency || kpis?.currency;
+      if (!currency) return amount.toLocaleString(intlLocale, { maximumFractionDigits: 2 });
       if (currency === "IDR") {
         return `Rp ${Math.round(amount).toLocaleString(intlLocale)}`;
       }
@@ -525,7 +591,7 @@ export default function AdsIntelligencePage() {
         year: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-        timeZone: adAccount?.timezone || "Asia/Jakarta",
+        timeZone: adAccount?.timezone || "UTC",
         timeZoneName: "short",
       }).format(new Date(value));
     },
@@ -614,13 +680,47 @@ export default function AdsIntelligencePage() {
             Ads Performance
           </h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            {(apiData?.availableAdAccounts?.length ?? 0) > 0 ? (
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                <span>{locale === "id" ? "Akun Iklan:" : "Ad Account:"}</span>
+                <select
+                  value={selectedAdAccountId || adAccount?.id || ""}
+                  onChange={(e) => {
+                    setSelectedAdAccountId(e.target.value);
+                    setSelectedCampaignId("all");
+                    setCurrentPage(1);
+                    setActiveDetailAdId(null);
+                  }}
+                  className="rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs font-semibold text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 cursor-pointer"
+                  aria-label={locale === "id" ? "Pilih akun iklan" : "Select ad account"}
+                >
+                  {(apiData?.availableAdAccounts || []).map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.name || acc.id} · {acc.id.replace(/^act_/, "act_•••")}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[11px] text-zinc-400">
+                  {adAccount?.status || ""}
+                  {adAccount?.lastSyncedAt
+                    ? ` · ${locale === "id" ? "Sinkron" : "Synced"} ${formatSyncDate(adAccount.lastSyncedAt)}`
+                    : ""}
+                </span>
+              </label>
+            ) : (
+              <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60">
+                {locale === "id"
+                  ? "Belum ada akun iklan terhubung. Hubungkan Meta di Pengaturan."
+                  : "No ad account connected. Connect Meta in Settings."}
+              </span>
+            )}
             {adAccount && (
               <>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-800 dark:bg-zinc-800/80 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700/60">
                   {adAccount.name || adAccount.id}
                 </span>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-600 dark:bg-zinc-800/80 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/60">
-                  {adAccount.currency} · {adAccount.timezone || "Asia/Jakarta"}
+                  {adAccount.currency || "Currency unavailable"} · {adAccount.timezone || "Timezone unavailable"}
                 </span>
               </>
             )}
@@ -692,6 +792,32 @@ export default function AdsIntelligencePage() {
         </div>
       </div>
 
+      {/* Fetch state: loading / error / stale (stored data, not live) */}
+      {isLoading && (
+        <div role="status" className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-xs font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+          {locale === "id" ? "Memuat data akun iklan…" : "Loading ad account data…"}
+        </div>
+      )}
+      {!isLoading && loadError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
+          <span>
+            {locale === "id"
+              ? `Gagal memuat data. ${loadError} Data akun sebelumnya tidak ditampilkan sebagai data akun ini.`
+              : `Failed to load data. ${loadError} Previous account data is not shown as this account's data.`}
+          </span>
+          <button type="button" onClick={() => refreshData()} className="rounded-lg border border-rose-300 px-2.5 py-1 font-semibold hover:bg-rose-100 dark:border-rose-800 dark:hover:bg-rose-900/40 cursor-pointer">
+            {locale === "id" ? "Coba Lagi" : "Retry"}
+          </button>
+        </div>
+      )}
+      {!isLoading && !loadError && isStale && apiData?.lastSyncedAt && (
+        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+          {locale === "id"
+            ? `Data tersimpan terakhir diperbarui pada ${formatSyncDate(apiData.lastSyncedAt)}. Ini bukan data live; sinkronkan untuk memperbarui.`
+            : `Stored data last updated at ${formatSyncDate(apiData.lastSyncedAt)}. This is not live data; sync to refresh.`}
+        </div>
+      )}
+
       {/* Period Filter Tabs & Date Range Context */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
         <div className="inline-flex p-1 rounded-xl bg-zinc-100 dark:bg-zinc-900/90 border border-zinc-200/80 dark:border-zinc-800/80">
@@ -730,6 +856,18 @@ export default function AdsIntelligencePage() {
       </div>
 
       {/* 2. Executive Performance Summary (4 Cards with Sparklines) */}
+      {apiData?.insightsState === "no_data_for_period" && (
+        <div role="status" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          {locale === "id"
+            ? "Belum ada data Insights tersimpan untuk rentang tanggal ini. Pilih rentang khusus saat iklan pernah berjalan, lalu klik Sinkronkan Meta agar data periode itu dimuat. Metrik tetap ditandai tidak tersedia, bukan nol."
+            : "No Insights are stored for this date range yet. Choose a custom period when ads were running, then click Sync Meta to load it. Metrics stay unavailable rather than being shown as zero."}
+        </div>
+      )}
+      {apiData?.insightsState === "no_account_selected" && (
+        <div role="status" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          {locale === "id" ? "Pilih akun iklan untuk memuat campaign dan Insights." : "Select an ad account to load campaigns and Insights."}
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Card 1: Belanja Iklan */}
         <div className="rounded-2xl border border-zinc-200/90 dark:border-zinc-800/80 bg-white dark:bg-[#0c0d12]/90 backdrop-blur-sm p-4.5 flex flex-col justify-between shadow-2xs">
@@ -738,7 +876,7 @@ export default function AdsIntelligencePage() {
               {locale === "id" ? "Belanja Iklan" : "Ad Spend"}
             </span>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-sans tabular-nums">
-              {isLoading ? "..." : formatAdCurrency(kpis?.totalSpend ?? 0)}
+              {isLoading ? "..." : insightsAvailable ? formatAdCurrency(kpis?.totalSpend) : "—"}
             </div>
             <div className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
               {spendSubtitle}
@@ -761,7 +899,7 @@ export default function AdsIntelligencePage() {
               ) : (
                 <>
                   <span className="text-2xl font-bold tracking-tight text-indigo-600 dark:text-indigo-400 font-sans tabular-nums">
-                    {formatNumber(kpis?.totalResults ?? 0)}
+                    {insightsAvailable ? formatNumber(kpis?.totalResults ?? 0) : "—"}
                   </span>
                   <span className="ml-1.5 text-sm font-normal text-indigo-600/80 dark:text-indigo-400/80">
                     {locale === "id"
@@ -810,7 +948,7 @@ export default function AdsIntelligencePage() {
               {locale === "id" ? "CTR Tautan" : "Link CTR"}
             </span>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-sans tabular-nums">
-              {isLoading ? "..." : formatRate(kpis?.linkCtr)}
+              {isLoading ? "..." : insightsAvailable ? formatRate(kpis?.linkCtr) : "—"}
             </div>
             <div className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
               {isLoading
@@ -926,8 +1064,8 @@ export default function AdsIntelligencePage() {
       {/* 3. Performance Trend Time-Series Chart */}
       <PerformanceTrendChart
         dailyTrend={apiData?.dailyTrend || []}
-        currency={adAccount?.currency || kpis?.currency || "IDR"}
-        timezone={adAccount?.timezone || "Asia/Jakarta"}
+        currency={adAccount?.currency || kpis?.currency || ""}
+        timezone={adAccount?.timezone || "UTC"}
         conversationDataAvailable={!kpis?.conversationDataIncomplete}
         resultLabel={kpis?.resultLabel || "Hasil"}
       />
@@ -966,8 +1104,9 @@ export default function AdsIntelligencePage() {
         campaigns={campaigns}
         ads={apiData?.ads || []}
         accountName={adAccount?.name || adAccount?.id}
-        currency={adAccount?.currency || kpis?.currency || "IDR"}
-        timezone={adAccount?.timezone || "Asia/Jakarta"}
+        adAccountId={selectedAdAccountId || adAccount?.id || null}
+        currency={adAccount?.currency || kpis?.currency || ""}
+        timezone={adAccount?.timezone || "UTC"}
         currentDateRange={dateRange}
       />
 
@@ -1411,11 +1550,13 @@ export default function AdsIntelligencePage() {
                       </td>
 
                       <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums text-zinc-900 dark:text-zinc-100 font-semibold">
-                        {formatAdCurrency(ad.spend)}
+                        {ad.hasInsights ? formatAdCurrency(ad.spend) : "—"}
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums">
                         <div className="font-bold text-zinc-900 dark:text-zinc-100">
-                          {ad.results > 0 ? (
+                          {!ad.hasInsights ? (
+                            <span className="text-zinc-400">—</span>
+                          ) : ad.results > 0 ? (
                             <span className="text-emerald-700 dark:text-emerald-400">{formatNumber(ad.results)} {ad.resultLabel || "Hasil"}</span>
                           ) : (
                             <span className="text-zinc-400">0</span>
@@ -1433,11 +1574,11 @@ export default function AdsIntelligencePage() {
                       <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums">
                         <div>
                           <span className="mr-1 text-[10px] text-zinc-400" title="Akumulasi reach harian per iklan">Reach*</span>
-                          <span className="font-medium text-zinc-800 dark:text-zinc-200">{formatNumber(ad.reach)}</span>
+                          <span className="font-medium text-zinc-800 dark:text-zinc-200">{ad.hasInsights ? formatNumber(ad.reach) : "—"}</span>
                         </div>
                         <div className="mt-0.5 text-[10px] text-zinc-400">
                           <span className="mr-1">Impr.</span>
-                          {formatNumber(ad.impressions)}
+                          {ad.hasInsights ? formatNumber(ad.impressions) : "—"}
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums">
@@ -1510,7 +1651,7 @@ export default function AdsIntelligencePage() {
       {selectedAd && (
         <AdDetailDrawer
           ad={selectedAd}
-          currency={adAccount?.currency || kpis?.currency || "IDR"}
+          currency={adAccount?.currency || kpis?.currency || ""}
           lastSyncedAt={apiData?.lastSyncedAt}
           onClose={() => setActiveDetailAdId(null)}
         />

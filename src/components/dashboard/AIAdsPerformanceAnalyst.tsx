@@ -7,6 +7,7 @@ import type { RealAdRow } from "@/app/(dashboard)/ads/page";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useAiQuota } from "@/hooks/useAiQuota";
+import { IdempotencyKeyManager } from "@/lib/ai/idempotency-key";
 
 interface AIAdsPerformanceAnalystProps {
   campaigns: CampaignDetailData[];
@@ -135,6 +136,7 @@ export function AIAdsPerformanceAnalyst({
 
   // Concurrency guard
   const isAnalyzingRef = useRef(false);
+  const idempotencyRef = useRef(new IdempotencyKeyManager());
 
   const saveTargetCpr = (val: number | null) => {
     setTargetCpr(val);
@@ -295,9 +297,10 @@ export function AIAdsPerformanceAnalyst({
     const targetId = scope === "campaign" ? effectiveCampaignId : scope === "ad" ? effectiveAdId : undefined;
 
     try {
+      const analysisContext = `analyze-performance:${scope}:${targetId || "account"}:${period}:${customSince || ""}:${customUntil || ""}:${adAccountId || ""}`;
       const res = await fetch("/api/ai/analyze-performance", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyRef.current.keyFor(analysisContext) },
         body: JSON.stringify({
           scope,
           period,
@@ -317,6 +320,7 @@ export function AIAdsPerformanceAnalyst({
 
       const json = await res.json();
       if (json.success && json.data) {
+        idempotencyRef.current.complete(analysisContext);
         setAnalysis(json.data);
         setAnalysisAccountId(adAccountId || null);
         setLastAnalyzedScopeContext(currentSelectionLabel);

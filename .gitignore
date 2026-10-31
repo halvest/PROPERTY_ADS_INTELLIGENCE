@@ -42,7 +42,8 @@ yarn-error.log*
 next-env.d.ts
 
 # documentation
-/docs/
+/docs/*
+!/docs/AI_USAGE_QUOTA_MIGRATION_DEPLOYMENT.md
 
 # Supabase CLI local metadata
 /supabase/.temp/

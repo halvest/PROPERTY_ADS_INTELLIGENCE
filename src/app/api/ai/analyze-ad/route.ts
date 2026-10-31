@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { finishAiAnalysis, requestIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
+import { finishAiAnalysis, validateIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
 import { z } from "zod";
 import { isMetaModelApiConfigured, maskApiKey, getMetaConfig } from "@/lib/ai/meta/config";
 import { MetaModelApiClient } from "@/lib/ai/meta/client";
@@ -1033,7 +1033,29 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    const reservation = await reserveAiAnalysis(user.id, requestIdempotencyKey(request.headers.get("Idempotency-Key")));
+    // Deterministic policy: when the AI provider is not configured, the
+    // rule-based engine answers WITHOUT reserving or consuming any AI quota.
+    // Its output is explicitly marked isLiveAi:false / provider
+    // "haspro_intelligence_engine" by generateDeterministicAdAnalysis.
+    const isConfigured = isMetaModelApiConfigured();
+    const config = getMetaConfig({ requireApiKey: false });
+    if (!isConfigured) {
+      const deterministicAnalysis = generateDeterministicAdAnalysis(data, {
+        hasActiveIntegration,
+        metaConversions: data.metrics.results,
+        verifiedInboundMessages,
+        crmLeadsCount,
+        crmSurveysCount,
+        crmClosingsCount,
+      });
+      return NextResponse.json({ success: true, data: deterministicAnalysis });
+    }
+
+    const idempotencyKey = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
+    if (!idempotencyKey) {
+      return NextResponse.json({ success: false, error: "Header Idempotency-Key wajib berupa UUID yang valid agar retry aman.", code: "IDEMPOTENCY_KEY_REQUIRED" }, { status: 400 });
+    }
+    const reservation = await reserveAiAnalysis(user.id, idempotencyKey);
     if (!reservation.ok) {
       if (reservation.unavailable) {
         return NextResponse.json({ success: false, error: "Kuota analisis sementara tidak tersedia. Coba lagi sebentar.", code: "QUOTA_UNAVAILABLE" }, { status: 503 });
@@ -1052,9 +1074,6 @@ export async function POST(request: NextRequest) {
       await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, code);
       quotaReservation = null;
     };
-
-    const isConfigured = isMetaModelApiConfigured();
-    const config = getMetaConfig({ requireApiKey: false });
 
     // 3. Live AI Execution with Strict CTWA Constraints
     if (isConfigured) {
@@ -1319,7 +1338,10 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
       }
     }
 
-    // 4. Default: Deterministic property intelligence engine
+    // 4. Safety net only (unreachable in normal flow: the AI branch above
+    // always returns, and the non-configured case returned earlier).
+    // Deterministic output must never consume AI quota, so release the
+    // reservation instead of completing it as a success.
     const deterministicAnalysis = generateDeterministicAdAnalysis(data, {
       hasActiveIntegration,
       metaConversions: data.metrics.results,
@@ -1329,10 +1351,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
       crmClosingsCount,
     });
 
-    if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
-      return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
-    }
-    quotaReservation = null;
+    await releaseReservation("deterministic_output_no_quota");
     return NextResponse.json({
       success: true,
       data: deterministicAnalysis,

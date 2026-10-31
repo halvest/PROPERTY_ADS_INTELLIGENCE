@@ -104,12 +104,19 @@ declare
 begin
   insert into public.ai_analysis_quota_locks(user_id) values (p_user_id) on conflict do nothing;
   perform 1 from public.ai_analysis_quota_locks where user_id = p_user_id for update;
+  -- A reservation is only completable while still reserved AND unexpired.
+  -- An expired reservation (reserved_until <= now()) can no longer be
+  -- completed as a success: the caller must retry, and the reserve path
+  -- will re-activate the same (user_id, idempotency_key) row. The 5-minute
+  -- TTL is far above the longest AI provider timeout in the app (35s), so
+  -- an active request never loses its reservation prematurely.
   update public.ai_analysis_usage
     set status = case when p_succeeded then 'succeeded' else 'failed' end,
         completed_at = case when p_succeeded then now() else null end,
         reserved_until = null,
         failure_code = case when p_succeeded then null else left(coalesce(p_failure_code, 'analysis_failed'), 80) end
-    where id = p_reservation_id and user_id = p_user_id and status = 'reserved';
+    where id = p_reservation_id and user_id = p_user_id and status = 'reserved'
+      and reserved_until > now();
   get diagnostics v_updated = row_count;
   return v_updated = 1;
 end;

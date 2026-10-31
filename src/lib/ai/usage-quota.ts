@@ -1,11 +1,18 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export function requestIdempotencyKey(value: string | null): string {
-  return value && UUID_RE.test(value) ? value : randomUUID();
+/**
+ * Validates a client-supplied Idempotency-Key.
+ *
+ * Returns the key only when it is a well-formed UUID; otherwise null.
+ * The server NEVER invents a replacement key: a missing or malformed key
+ * must be rejected by the caller, otherwise a retry could silently consume
+ * quota twice under a fresh random key.
+ */
+export function validateIdempotencyKey(value: string | null): string | null {
+  return value && UUID_RE.test(value) ? value : null;
 }
 
 export async function reserveAiAnalysis(userId: string, key: string) {

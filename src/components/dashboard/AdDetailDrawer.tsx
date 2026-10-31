@@ -6,6 +6,7 @@ import type { RealAdRow } from "@/app/(dashboard)/ads/page";
 import type { AIAdAnalysisResponse } from "@/app/api/ai/analyze-ad/route";
 import type { AdDetailResponseData } from "@/app/api/ads/[id]/route";
 import { useAiQuota } from "@/hooks/useAiQuota";
+import { IdempotencyKeyManager } from "@/lib/ai/idempotency-key";
 
 interface AdDetailDrawerProps {
   ad: RealAdRow;
@@ -36,6 +37,7 @@ export function AdDetailDrawer({
 
   // Concurrency guard to strictly prevent double-requests
   const isAnalyzingRef = useRef(false);
+  const idempotencyRef = useRef(new IdempotencyKeyManager());
 
   // Format currency helper
   const formatMoney = (amount: number | null | undefined) => {
@@ -103,9 +105,10 @@ export function AdDetailDrawer({
     setAiError(null);
 
     try {
+      const analysisContext = `analyze-ad:${ad.id}`;
       const res = await fetch("/api/ai/analyze-ad", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyRef.current.keyFor(analysisContext) },
         body: JSON.stringify({
           adId: ad.id,
           adName: ad.adName,
@@ -139,6 +142,7 @@ export function AdDetailDrawer({
       const analysisData: AIAdAnalysisResponse | undefined = json.data || json.analysis;
 
       if (json.success && analysisData && analysisData.executiveSummary) {
+        idempotencyRef.current.complete(`analyze-ad:${ad.id}`);
         setAiAnalysis(analysisData);
         setAiError(null);
         void refreshQuota();

@@ -8,7 +8,7 @@ import { AIProviderError } from "@/lib/ai/providers/types";
 
 import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
-import { finishAiAnalysis, requestIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
+import { finishAiAnalysis, validateIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
 
 const RequestPayloadSchema = z.object({
   conversationId: z.string().uuid().optional(),
@@ -151,7 +151,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const reservation = await reserveAiAnalysis(user.id, requestIdempotencyKey(request.headers.get("Idempotency-Key")));
+    const idempotencyKey = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
+    if (!idempotencyKey) {
+      return NextResponse.json({ status: "error", code: "IDEMPOTENCY_KEY_REQUIRED", message: "Header Idempotency-Key wajib berupa UUID yang valid agar retry aman." }, { status: 400 });
+    }
+    const reservation = await reserveAiAnalysis(user.id, idempotencyKey);
     if (!reservation.ok) {
       if (reservation.unavailable) {
         return NextResponse.json({ status: "error", code: "QUOTA_UNAVAILABLE", message: "Kuota analisis sementara tidak tersedia. Coba lagi sebentar." }, { status: 503 });

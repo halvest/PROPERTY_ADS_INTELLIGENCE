@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { finishAiAnalysis, requestIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
+import { finishAiAnalysis, validateIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
 import { z } from "zod";
 import { isMetaModelApiConfigured, getMetaConfig } from "@/lib/ai/meta/config";
 import { MetaModelApiClient } from "@/lib/ai/meta/client";
@@ -937,7 +937,25 @@ export async function POST(req: NextRequest) {
       locale,
     };
 
-    const reservation = await reserveAiAnalysis(user.id, requestIdempotencyKey(req.headers.get("Idempotency-Key")));
+    // Calculate deterministic analysis first as ground truth
+    const deterministicOutput = buildDeterministicAnalysis(deterministicParams);
+
+    // 9. Try live Meta Model inference (if configured) with deterministic fallback.
+    // Deterministic policy: rule-based output (engine:"rules") never reserves
+    // or consumes AI quota. Quota is only reserved when a live AI call will
+    // actually be attempted.
+    const isConfigured = isMetaModelApiConfigured();
+    const config = getMetaConfig({ requireApiKey: false });
+
+    if (!isConfigured) {
+      return NextResponse.json({ success: true, data: deterministicOutput });
+    }
+
+    const idempotencyKey = validateIdempotencyKey(req.headers.get("Idempotency-Key"));
+    if (!idempotencyKey) {
+      return NextResponse.json({ success: false, error: "Header Idempotency-Key wajib berupa UUID yang valid agar retry aman.", code: "IDEMPOTENCY_KEY_REQUIRED" }, { status: 400 });
+    }
+    const reservation = await reserveAiAnalysis(user.id, idempotencyKey);
     if (!reservation.ok) {
       if (reservation.unavailable) {
         return NextResponse.json({ success: false, error: "Kuota analisis sementara tidak tersedia. Coba lagi sebentar.", code: "QUOTA_UNAVAILABLE" }, { status: 503 });
@@ -951,13 +969,6 @@ export async function POST(req: NextRequest) {
       }, { status: limitReached ? 429 : 409 });
     }
     quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
-
-    // Calculate deterministic analysis first as ground truth
-    const deterministicOutput = buildDeterministicAnalysis(deterministicParams);
-
-    // 9. Try Live Gemini Inference (if configured) with fallback
-    const isConfigured = isMetaModelApiConfigured();
-    const config = getMetaConfig({ requireApiKey: false });
 
     if (isConfigured) {
       try {
@@ -1072,11 +1083,13 @@ PRINSIP WAJIB & INTEGRITAS DATA:
       }
     }
 
-    // 10. Deterministic Fallback Strategist Engine
-    if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
-      return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
+    // 10. Deterministic fallback (provider error/invalid output): explicitly
+    // marked engine:"rules" in its payload. It must NOT consume AI quota, so
+    // the reservation is released instead of completed as a success.
+    if (quotaReservation) {
+      await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, "deterministic_output_no_quota");
+      quotaReservation = null;
     }
-    quotaReservation = null;
     return NextResponse.json({ success: true, data: deterministicOutput });
   } catch (error) {
     if (quotaReservation) {

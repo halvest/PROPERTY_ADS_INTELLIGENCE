@@ -15,9 +15,9 @@ export interface CampaignDetailData {
   impressions: number;
   reach: number | null;
   frequency: number | null;
-  results: number;
+  results: number | null;
   costPerResult: number | null;
-  linkClicks: number;
+  linkClicks: number | null;
   linkCtr: number | null;
   linkCpc: number | null;
   allClicks: number;
@@ -37,10 +37,10 @@ export interface AdInCampaignItem {
   spend: number;
   impressions: number;
   reach: number | null;
-  linkClicks: number;
+  linkClicks: number | null;
   linkCtr: number | null;
   linkCpc: number | null;
-  results: number;
+  results: number | null;
   costPerResult: number | null;
   hasInsights?: boolean;
 }
@@ -166,7 +166,7 @@ export function CampaignDetailWorkspace({
                 {locale === "en" ? "Results / Conversions" : "Hasil Pesan / Conversions"}
               </span>
               <p className="text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-50 font-mono mt-0.5">
-                {campaign.results} {locale === "en" ? "conversations" : "percakapan"}
+                {campaign.results === null ? "—" : campaign.results} {locale === "en" ? "conversations" : "percakapan"}
               </p>
               <span className="text-[10px] text-zinc-400 font-mono">
                 Cost/Result: {campaign.costPerResult !== null ? formatCurrency(campaign.costPerResult) : "—"}
@@ -178,7 +178,7 @@ export function CampaignDetailWorkspace({
                 {locale === "en" ? "Link Clicks & CTR" : "Klik Tautan & Link CTR"}
               </span>
               <p className="text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-50 font-mono mt-0.5">
-                {formatNumber(campaign.linkClicks)} ({campaign.linkCtr !== null ? `${campaign.linkCtr}%` : "—"})
+                {campaign.linkClicks === null ? "—" : formatNumber(campaign.linkClicks)} ({campaign.linkCtr !== null ? `${campaign.linkCtr}%` : "—"})
               </p>
               <span className="text-[10px] text-zinc-400 font-mono">
                 Link CPC: {campaign.linkCpc !== null ? formatCurrency(campaign.linkCpc) : "—"}
@@ -260,10 +260,10 @@ export function CampaignDetailWorkspace({
                     {formatCurrency(ad.spend)}
                   </td>
                   <td className="py-3 px-3 font-mono text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
-                    {ad.results} {locale === "en" ? "messages" : "pesan"}
+                    {ad.results === null ? "—" : ad.results} {locale === "en" ? "messages" : "pesan"}
                   </td>
                   <td className="py-3 px-3 font-mono text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
-                    {formatNumber(ad.linkClicks)} ({ad.linkCtr !== null ? `${ad.linkCtr}%` : "—"})
+                    {ad.linkClicks === null ? "—" : formatNumber(ad.linkClicks)} ({ad.linkCtr !== null ? `${ad.linkCtr}%` : "—"})
                   </td>
                   <td className="py-3 px-3 font-mono text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
                     {ad.linkCpc !== null ? formatCurrency(ad.linkCpc) : "—"}

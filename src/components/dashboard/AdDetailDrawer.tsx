@@ -7,18 +7,56 @@ import type { AIAdAnalysisResponse } from "@/app/api/ai/analyze-ad/route";
 import type { AdDetailResponseData } from "@/app/api/ads/[id]/route";
 import { useAiQuota } from "@/hooks/useAiQuota";
 import { IdempotencyKeyManager } from "@/lib/ai/idempotency-key";
+import { formatMetaDateRange, formatSmartAdIdentity, resolveAdResultMetric, translateMetaTerm } from "@/lib/ads/result-metric";
 
 interface AdDetailDrawerProps {
   ad: RealAdRow;
   currency?: string;
   lastSyncedAt?: string | null;
+  /** Dashboard period preset, forwarded to AI analysis so AI and dashboard aggregate the same range. */
+  dateRange?: string;
   onClose: () => void;
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  highlight = "slate",
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  highlight?: "slate" | "indigo" | "green" | "amber";
+}) {
+  const valueColor = highlight === "indigo"
+    ? "text-indigo-700 dark:text-indigo-300"
+    : highlight === "green"
+      ? "text-emerald-700 dark:text-emerald-300"
+      : highlight === "amber"
+        ? "text-amber-700 dark:text-amber-300"
+        : "text-zinc-900 dark:text-zinc-100";
+  const cardTone = highlight === "indigo"
+    ? "border-indigo-100 bg-indigo-50/50 dark:border-indigo-900/50 dark:bg-indigo-950/20"
+    : highlight === "green"
+      ? "border-emerald-100 bg-emerald-50/50 dark:border-emerald-900/50 dark:bg-emerald-950/20"
+      : highlight === "amber"
+        ? "border-amber-100 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20"
+        : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900/50";
+  return (
+    <div className={`min-w-0 rounded-xl border p-3.5 ${cardTone}`}>
+      <dt className="text-[10px] font-medium leading-snug text-zinc-500 dark:text-zinc-400">{label}</dt>
+      <dd className={`mt-2 truncate text-lg font-bold tracking-tight tabular-nums ${valueColor}`} title={value}>{value}</dd>
+      <dd className="mt-1 truncate text-[10px] text-zinc-500 dark:text-zinc-400" title={detail}>{detail}</dd>
+    </div>
+  );
 }
 
 export function AdDetailDrawer({
   ad,
   currency,
   lastSyncedAt,
+  dateRange,
   onClose,
 }: AdDetailDrawerProps) {
   const { formatNumber, locale } = useI18n();
@@ -50,6 +88,7 @@ export function AdDetailDrawer({
       maximumFractionDigits: new Intl.NumberFormat(intlLocale, { style: "currency", currency }).resolvedOptions().maximumFractionDigits,
     }).format(amount);
   };
+  const formatPercent = (value: number) => `${new Intl.NumberFormat(locale === "id" ? "id-ID" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`;
 
   // Keyboard shortcut Esc to close
   useEffect(() => {
@@ -67,7 +106,11 @@ export function AdDetailDrawer({
       setIsDetailLoading(true);
       setDetailError(null);
       try {
-        const res = await fetch(`/api/ads/${ad.id}`);
+        const res = await fetch(
+          dateRange
+            ? `/api/ads/${ad.id}?dateRange=${encodeURIComponent(dateRange)}`
+            : `/api/ads/${ad.id}`
+        );
         if (!res.ok) {
           const errJson = await res.json().catch(() => ({}));
           throw new Error(errJson.error || "Gagal memuat detail iklan dari server");
@@ -90,7 +133,7 @@ export function AdDetailDrawer({
     return () => {
       ignore = true;
     };
-  }, [ad.id]);
+  }, [ad.id, dateRange]);
 
   // 2. Trigger AI Ad Analysis — Strictly on manual user button click
   const runAiAnalysis = async () => {
@@ -105,7 +148,7 @@ export function AdDetailDrawer({
     setAiError(null);
 
     try {
-      const analysisContext = `analyze-ad:${ad.id}`;
+      const analysisContext = `analyze-ad:${ad.id}:${dateRange || "all"}`;
       const res = await fetch("/api/ai/analyze-ad", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyRef.current.keyFor(analysisContext) },
@@ -114,18 +157,19 @@ export function AdDetailDrawer({
           adName: ad.adName,
           campaignName: ad.campaignName,
           status: ad.deliveryStatus,
+          dateRange: dateRange || undefined,
           metrics: {
             spend: ad.spend,
             impressions: ad.impressions,
             reach: ad.reach,
-            linkClicks: ad.linkClicks,
+            linkClicks: ad.linkClicks ?? 0,
             allClicks: ad.allClicks,
             linkCtr: ad.linkCtr,
             allCtr: ad.allCtr,
             linkCpc: ad.linkCpc,
             allCpc: ad.allCpc,
             cpm: ad.cpm,
-            results: ad.results,
+            results: ad.results ?? 0,
             resultType: ad.resultLabel || "Hasil",
             resultsTrackingStatus: ad.resultActionTypes?.some((action) => action.includes("messaging_conversation_started")) ? "TERVERIFIKASI ADA" : "BELUM TERVERIFIKASI",
             costPerResult: ad.costPerResult,
@@ -142,7 +186,7 @@ export function AdDetailDrawer({
       const analysisData: AIAdAnalysisResponse | undefined = json.data || json.analysis;
 
       if (json.success && analysisData && analysisData.executiveSummary) {
-        idempotencyRef.current.complete(`analyze-ad:${ad.id}`);
+        idempotencyRef.current.complete(`analyze-ad:${ad.id}:${dateRange || "all"}`);
         setAiAnalysis(analysisData);
         setAiError(null);
         void refreshQuota();
@@ -163,18 +207,72 @@ export function AdDetailDrawer({
 
   // Effective status representations from server detail or fallback props
   const campaignStatus = serverDetail?.campaign.status || ad.campaignStatus;
-  const campaignStatusLabel =
-    serverDetail?.campaign.statusLabel ||
-    (campaignStatus === "ACTIVE"
-      ? "Aktif"
-      : campaignStatus === "PAUSED"
-      ? "Dijeda"
-      : campaignStatus === "ARCHIVED"
-      ? "Diarsipkan"
-      : "Tidak diketahui");
+  const adStatus = serverDetail?.ad.adSettingStatus || ad.adSettingStatus;
   const deliveryStatus = serverDetail?.delivery.deliveryStatus || ad.deliveryStatus;
-  const deliveryLabel = serverDetail?.delivery.deliveryLabel || ad.deliveryLabel;
-  const deliveryReason = serverDetail?.delivery.deliveryReason || ad.deliveryReason || "Penayangan Meta";
+  const identity = formatSmartAdIdentity({
+    adName: serverDetail?.ad.name || ad.adName,
+    adSetName: ad.adsetName,
+    campaignName: serverDetail?.campaign.name || ad.campaignName,
+    providerAdId: serverDetail?.ad.providerAdId || ad.providerAdId,
+    creativeFormat: ad.creativeFormat,
+  });
+  const metricSource = serverDetail?.metrics;
+  const metricSpend = metricSource?.spend ?? ad.spend;
+  const metricImpressions = metricSource?.impressions ?? ad.impressions;
+  const metricLinkClicks = metricSource?.linkClicks ?? ad.linkClicks ?? 0;
+  const metricAllClicks = metricSource?.allClicks ?? ad.allClicks;
+  const metricCtr = metricSource?.linkCtr ?? ad.linkCtr ?? (metricImpressions > 0 ? (metricLinkClicks / metricImpressions) * 100 : 0);
+  const metricAllCtr = metricSource?.allCtr ?? ad.allCtr ?? (metricImpressions > 0 ? (metricAllClicks / metricImpressions) * 100 : 0);
+  const metricAllCpc = metricSource?.allCpc ?? ad.allCpc ?? (metricAllClicks > 0 ? metricSpend / metricAllClicks : 0);
+  const metricCpm = metricSource?.cpm ?? ad.cpm ?? (metricImpressions > 0 ? (metricSpend / metricImpressions) * 1000 : 0);
+  const metricResult = resolveAdResultMetric({
+    spend: metricSpend,
+    impressions: metricImpressions,
+    conversions: metricSource?.results ?? ad.results,
+    linkClicks: metricLinkClicks,
+    clicks: metricAllClicks,
+    objective: serverDetail?.campaign.objective || ad.campaignObjective,
+  });
+  const resultValue = metricSource?.resultMetricValue ?? ad.resultMetricValue ?? metricResult.value;
+  const resultLabel = metricSource?.resultMetricLabel || ad.resultMetricLabel || metricResult.label;
+  const resultCost = metricSource?.resultMetricCostPerResult ?? ad.resultMetricCostPerResult ?? metricResult.costPerResult;
+  const resultUnit = metricSource?.resultMetricUnitLabel || ad.resultMetricUnitLabel || metricResult.unitLabel;
+  const statusBadgeText = deliveryStatus === "DELIVERING"
+    ? "Aktif Menayangkan"
+    : campaignStatus === "PAUSED"
+      ? "Nonaktif · Kampanye Dijeda"
+      : adStatus === "PAUSED"
+        ? "Nonaktif · Iklan Dijeda"
+        : campaignStatus === "ARCHIVED" || adStatus === "ARCHIVED"
+          ? "Nonaktif · Diarsipkan"
+          : campaignStatus === "DELETED" || adStatus === "DELETED"
+            ? "Nonaktif · Dihapus"
+            : `Status Tayang · ${translateMetaTerm(deliveryStatus)}`;
+  const statusText = campaignStatus === "PAUSED"
+    ? "Kampanye Dijeda"
+    : campaignStatus === "ARCHIVED"
+      ? "Kampanye Diarsipkan"
+      : campaignStatus === "DELETED"
+        ? "Kampanye Dihapus"
+        : adStatus === "PAUSED"
+          ? "Iklan Dijeda"
+          : adStatus === "ARCHIVED"
+            ? "Iklan Diarsipkan"
+            : adStatus === "DELETED"
+              ? "Iklan Dihapus"
+              : deliveryStatus === "DELIVERING"
+                ? "Aktif Menayangkan"
+                : "Status Tayang Belum Terverifikasi";
+  const dateRangeLabel = formatMetaDateRange(metricSource?.dateRangeStart, metricSource?.dateRangeStop)
+    || "Rentang data belum tersedia";
+  const headerMetadata = [
+    `ID Iklan: ${serverDetail?.ad.providerAdId || ad.providerAdId}`,
+    serverDetail?.campaign.name || ad.campaignName ? `Kampanye: ${serverDetail?.campaign.name || ad.campaignName}` : "",
+    serverDetail?.campaign.providerCampaignId ? `ID Kampanye: ${serverDetail.campaign.providerCampaignId}` : "",
+    ad.adsetName && ad.adsetName !== "Ad Set Meta" ? `Ad Set: ${ad.adsetName}${ad.adsetId ? ` (${ad.adsetId})` : ""}` : "",
+    (serverDetail?.campaign.objective || ad.campaignObjective) ? translateMetaTerm(serverDetail?.campaign.objective || ad.campaignObjective) : "",
+    lastSyncedAt ? `Sinkron ${new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta", timeZoneName: "short" }).format(new Date(lastSyncedAt))}` : "",
+  ].filter(Boolean);
   const renderBudgetDecisionBadge = (decision: string) => {
     switch (decision) {
       case "NAIKKAN":
@@ -247,63 +345,23 @@ export function AdDetailDrawer({
               <h2
                 id="ad-detail-drawer-title"
                 className="text-base sm:text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-50 truncate"
-                title={ad.adName}
+                title={identity.title}
               >
-                {ad.adName}
+                {identity.title}
               </h2>
-              {/* Separate Status Badges (Section 2) */}
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                    campaignStatus === "ACTIVE"
-                      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800"
-                      : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
-                  }`}
-                  title="Status Campaign Induk Meta"
-                >
-                  Campaign: {campaignStatusLabel}
-                </span>
-                <span
-                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                    deliveryStatus === "DELIVERING"
-                      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800"
-                      : "bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800"
-                  }`}
-                  title="Status Penayangan Efektif Iklan"
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      deliveryStatus === "DELIVERING" ? "bg-emerald-500 animate-pulse" : "bg-amber-500"
-                    }`}
-                  />
-                  Delivery: {deliveryLabel}
-                </span>
-              </div>
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500 font-mono">
-              <span>Meta Ad ID: {ad.providerAdId}</span>
-              <span>•</span>
-              <span className="text-zinc-700 dark:text-zinc-300 font-sans truncate max-w-[260px]">
-                {ad.campaignName}
+              {identity.formatBadge && <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{identity.formatBadge}</span>}
+              <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10px] font-bold ${deliveryStatus === "DELIVERING" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300" : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300"}`} title="Status tayang iklan">
+                <span className={`h-1.5 w-1.5 rounded-full ${deliveryStatus === "DELIVERING" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                {statusBadgeText}
               </span>
-              <span className="font-sans">· ID campaign {serverDetail?.campaign.providerCampaignId || "—"}</span>
-              <span className="font-sans">· Ad set: {ad.adsetName || "—"} ({ad.adsetId || "ID tidak tersedia"})</span>
-              {ad.campaignObjective && (
-                <>
-                  <span>•</span>
-                  <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                    {ad.campaignObjective}
-                  </span>
-                </>
-              )}
-              {lastSyncedAt && (
-                <>
-                  <span>•</span>
-                  <span className="text-[10px] text-zinc-400">
-                    Sinkronisasi: {new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta", timeZoneName: "short" }).format(new Date(lastSyncedAt))}
-                  </span>
-                </>
-              )}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
+              {headerMetadata.map((item, index) => (
+                <React.Fragment key={item}>
+                  {index > 0 && <span aria-hidden="true" className="text-zinc-300 dark:text-zinc-700">·</span>}
+                  <span className={index === 0 ? "font-mono" : ""}>{item}</span>
+                </React.Fragment>
+              ))}
               {isDetailLoading && (
                 <span className="text-[10px] text-blue-500 inline-flex items-center gap-1 font-sans">
                   <svg className="h-2.5 w-2.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -334,113 +392,44 @@ export function AdDetailDrawer({
               Info Sinkronisasi: {detailError}. Menggunakan metrik ringkasan iklan yang tersedia.
             </div>
           )}
-          {/* 1. Status Delivery & Periode Rekonsiliasi */}
-          <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="space-y-1">
-                <span className="text-[10px] font-bold tracking-wider text-zinc-400 uppercase">
-                  Diagnostik Delivery Iklan
-                </span>
-                <p className="text-xs font-medium text-zinc-800 dark:text-zinc-200">
-                  {deliveryReason}
-                </p>
+          {/* 1. Status and reporting window */}
+          <section className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-xs font-semibold text-zinc-800 dark:text-zinc-100">Ringkasan Status & Periode Tayang</h3>
+                <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Status: <span className="font-semibold text-zinc-700 dark:text-zinc-200">{statusText}</span></p>
               </div>
-              <div className="text-left sm:text-right text-[11px] text-zinc-500">
-                {serverDetail?.metrics.dateRangeStart && serverDetail?.metrics.dateRangeStop ? (
-                  <span>
-                    Data Insights: {serverDetail.metrics.dateRangeStart} s/d {serverDetail.metrics.dateRangeStop}
-                  </span>
-                ) : lastSyncedAt ? (
-                  <span>Sinkronisasi Terakhir: {new Date(lastSyncedAt).toLocaleString("id-ID")}</span>
-                ) : null}
+              <div className="sm:text-right">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Periode Data Aktif</p>
+                <p className="mt-1 text-xs font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">{dateRangeLabel}</p>
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* 2. Core Metrics Performance Grid */}
-          <section className="space-y-3">
-            <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">
-              Metrik Kinerja Aktual
-            </h3>
-            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">Total Belanja</dt>
-                <dd className="mt-1 font-mono text-xs font-bold text-zinc-900 dark:text-zinc-100">
-                  {formatMoney(ad.spend)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">{ad.resultLabel || "Hasil"}</dt>
-                <dd className="mt-1 font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                  {formatNumber(ad.results)}
-                </dd>
-                {ad.resultActionTypes && ad.resultActionTypes.length > 0 && <dd className="mt-0.5 text-[9px] text-zinc-400">Action: {ad.resultActionTypes.join(", ")}</dd>}
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">Biaya per Hasil</dt>
-                <dd className="mt-1 font-mono text-xs font-bold text-zinc-900 dark:text-zinc-100">
-                  {formatMoney(ad.costPerResult)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">Jangkauan (Reach)</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {formatNumber(ad.reach)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">Tayangan (Impresi)</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {formatNumber(ad.impressions)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">Frekuensi</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {ad.frequency !== null ? `${ad.frequency}x` : "—"}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">Klik Tautan</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {formatNumber(ad.linkClicks)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">CTR Tautan</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                  {ad.linkCtr !== null ? `${ad.linkCtr}%` : "—"}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">CPC Tautan</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {formatMoney(ad.linkCpc)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">CPM (Per 1.000)</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {formatMoney(ad.cpm)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">Semua Klik</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {formatNumber(ad.allClicks)}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">CTR Semua Klik</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                  {ad.allCtr !== null ? `${ad.allCtr}%` : "—"}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <dt className="text-[10px] text-zinc-500 uppercase tracking-wider">CPC Semua Klik</dt>
-                <dd className="mt-1 font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">{formatMoney(ad.allCpc)}</dd>
-              </div>
+          {/* 2. Clear business metrics: highlights and funnel efficiency */}
+          <section className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Ringkasan Kinerja</h3>
+              <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">Belanja, hasil terukur, dan efisiensi iklan pada periode terpilih.</p>
+            </div>
+            <dl className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+              <MetricCard label="Total Belanja" value={formatMoney(metricSpend)} detail="Total anggaran terpakai" highlight="slate" />
+              <MetricCard label="Hasil Tercapai" value={resultValue === null ? "Belum ada data" : formatNumber(resultValue)} detail={resultLabel} highlight="indigo" />
+              <MetricCard label="Biaya per Hasil" value={resultCost === null ? "Belum ada data" : formatMoney(resultCost)} detail={resultCost === null ? "Belum ada hasil terukur" : `Per ${resultUnit}`} highlight="slate" />
+              <MetricCard label="Rasio Klik Tujuan (CTR)" value={formatPercent(metricCtr)} detail="Standar sehat ≥ 1,00%" highlight={metricCtr >= 1 ? "green" : "amber"} />
             </dl>
+
+            <div className="pt-1">
+              <h4 className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Rincian Funnel & Efisiensi</h4>
+              <dl className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-3">
+                <MetricCard label="Jumlah Tayangan" value={formatNumber(metricImpressions)} detail="Total iklan dilihat" />
+                <MetricCard label="Biaya per 1.000 Tayang (CPM)" value={formatMoney(metricCpm)} detail="Harga lelang audiens" />
+                <MetricCard label="Total Interaksi" value={formatNumber(metricAllClicks)} detail="Klik konten dan interaksi iklan" />
+                <MetricCard label="Rasio Interaksi Konten" value={formatPercent(metricAllCtr)} detail="Dari total tayangan" />
+                <MetricCard label="Biaya per Interaksi" value={formatMoney(metricAllCpc)} detail="Rata-rata semua klik" />
+                <MetricCard label="Rasio Minat ke Tombol WA/Tautan" value={formatPercent(metricAllClicks > 0 ? (metricLinkClicks / metricAllClicks) * 100 : 0)} detail={`${formatNumber(metricLinkClicks)} klik tautan dari ${formatNumber(metricAllClicks)} interaksi`} />
+              </dl>
+            </div>
           </section>
 
           {/* 3. Utama: Analisis Kinerja & Rekomendasi AI (Manual Click Only) */}

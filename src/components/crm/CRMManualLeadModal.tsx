@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { QualityLabel } from "@/lib/data/types";
+
+const todayInJakarta = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
 
 interface CRMManualLeadModalProps {
   isOpen: boolean;
@@ -24,23 +26,52 @@ export function CRMManualLeadModal({
   const [nama, setNama] = useState("");
   const [telepon, setTelepon] = useState("");
   const [domisili, setDomisili] = useState("");
-  const [tanggalMasuk, setTanggalMasuk] = useState(
-    () => new Date().toISOString().split("T")[0]
-  );
+  const [tanggalMasuk, setTanggalMasuk] = useState(todayInJakarta);
   const [namaIklan, setNamaIklan] = useState("");
+  const [adId, setAdId] = useState<string | null>(null);
+  const [campaignId, setCampaignId] = useState<string | null>(null);
+  const [sourceOptions, setSourceOptions] = useState<Array<{ adId: string; campaignId: string; adName: string; campaignName: string; adStatus: string }>>([]);
+  const [campaignOptions, setCampaignOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [sourceSearch, setSourceSearch] = useState("");
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const [sourceMode, setSourceMode] = useState<"linked" | "manual" | "organic">("organic");
+  const [smartPasteOpen, setSmartPasteOpen] = useState(false);
+  const [smartPasteText, setSmartPasteText] = useState("");
+  const [keepContext, setKeepContext] = useState(true);
   const [tahapFunnel, setTahapFunnel] = useState<FunnelStage>("baru");
   const [qualityLabel, setQualityLabel] = useState<QualityLabel | "">("");
   const [catatan, setCatatan] = useState("");
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    void fetch("/api/leads/sources")
+      .then(async (response) => {
+        const json = await response.json();
+        if (!response.ok || !json.success) throw new Error(json.error || "Gagal memuat sumber iklan.");
+        setSourceOptions(json.data?.ads || []);
+        setCampaignOptions(json.data?.campaigns || []);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Gagal memuat sumber iklan."));
+  }, [isOpen]);
 
   const resetForm = () => {
     setNama("");
     setTelepon("");
     setDomisili("");
-    setTanggalMasuk(new Date().toISOString().split("T")[0]);
+    setTanggalMasuk(todayInJakarta());
     setNamaIklan("");
+    setAdId(null);
+    setCampaignId(null);
+    setSourceSearch("");
+    setSourceMenuOpen(false);
+    setSourceMode("organic");
+    setSmartPasteOpen(false);
+    setSmartPasteText("");
+    setKeepContext(true);
     setTahapFunnel("baru");
     setQualityLabel("");
     setCatatan("");
@@ -52,8 +83,36 @@ export function CRMManualLeadModal({
     onClose();
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const parseSmartPaste = () => {
+    const text = smartPasteText.trim();
+    if (!text) return;
+    const phoneMatch = text.match(/(?:\+?62|0)(?:[\s().-]*\d){8,13}/);
+    if (!phoneMatch) {
+      setError(locale === "id" ? "Nomor WhatsApp tidak ditemukan. Gunakan nomor 08…, 62…, atau +62…." : "No phone number found. Use 08…, 62…, or +62…." );
+      return;
+    }
+    const beforePhone = text.slice(0, phoneMatch.index || 0).replace(/[\s\-|,;:]+$/g, "").trim();
+    const afterPhone = text.slice((phoneMatch.index || 0) + phoneMatch[0].length).replace(/^[\s\-|,;:]+/g, "").trim();
+    const chunks = afterPhone.split(/\s+[|,;]\s+|\s+-\s+|\n+/).map((part) => part.trim()).filter(Boolean);
+    const notesWords = /\b(tanya|minat|rumah|tipe|kpr|budget|survei|survey|unit|harga|butuh|ingin|cicil|cluster|booking|mencari|jadwal)\b/i;
+    let domicile = "";
+    let notes = afterPhone;
+    if (chunks.length > 1 || (chunks[0] && chunks[0].length <= 40 && !notesWords.test(chunks[0]))) {
+      domicile = chunks[0] || "";
+      notes = chunks.slice(1).join(" · ");
+    }
+    if (beforePhone) setNama(beforePhone.replace(/^[\s\-|,;:]+|[\s\-|,;:]+$/g, ""));
+    setTelepon(phoneMatch[0].trim());
+    if (domicile) setDomisili(domicile);
+    if (notes) setCatatan(notes);
+    setSmartPasteOpen(false);
+    setSmartPasteText("");
+    setError(null);
+    nameInputRef.current?.focus();
+  };
+
+  const submitLead = async (keepOpen: boolean) => {
+    if (isSubmitting) return;
     setError(null);
 
     if (!nama.trim()) {
@@ -78,6 +137,9 @@ export function CRMManualLeadModal({
           domisili: domisili.trim() || undefined,
           tanggalMasuk: tanggalMasuk || undefined,
           namaIklan: namaIklan.trim() || undefined,
+          adId: adId || undefined,
+          campaignId: campaignId || undefined,
+          sourceMode,
           tahapFunnel,
           qualityLabel: qualityLabel || null,
           catatan: catatan.trim() || undefined,
@@ -94,8 +156,26 @@ export function CRMManualLeadModal({
             ? `${nama.trim()} berhasil ditambahkan ke tahap "${tahapFunnel}".`
             : `${nama.trim()} successfully added to stage "${tahapFunnel}".`
         );
-        resetForm();
-        onClose();
+        if (keepOpen) {
+          setNama("");
+          setTelepon("");
+          setCatatan("");
+          if (!keepContext) {
+            setDomisili("");
+            setTanggalMasuk(todayInJakarta());
+            setNamaIklan("");
+            setAdId(null);
+            setCampaignId(null);
+            setSourceSearch("");
+            setSourceMode("organic");
+            setTahapFunnel("baru");
+            setQualityLabel("");
+          }
+          setTimeout(() => nameInputRef.current?.focus(), 0);
+        } else {
+          resetForm();
+          onClose();
+        }
         if (onSuccess) {
           onSuccess();
         }
@@ -108,6 +188,11 @@ export function CRMManualLeadModal({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    void submitLead(true);
   };
 
   return (
@@ -143,6 +228,16 @@ export function CRMManualLeadModal({
           </div>
         )}
 
+        <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900/50 dark:bg-amber-950/20">
+          <button type="button" onClick={() => setSmartPasteOpen((open) => !open)} className="text-left text-xs font-semibold text-amber-900 dark:text-amber-200">
+            ⚡ Tempel Cepat Format Chat/WA (Otomatis Isi Kolom) {smartPasteOpen ? "▴" : "▾"}
+          </button>
+          {smartPasteOpen && <div className="mt-2 space-y-2">
+            <textarea rows={2} value={smartPasteText} onChange={(event) => setSmartPasteText(event.target.value)} placeholder="Budi Santoso - 081234567890 - Sleman - Tanya rumah tipe 45 KPR" className="w-full rounded-lg border border-amber-200 bg-white p-2 text-xs text-zinc-900 dark:border-amber-900 dark:bg-zinc-900 dark:text-zinc-100" />
+            <button type="button" onClick={parseSmartPaste} className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">{locale === "id" ? "Isi Kolom Otomatis" : "Parse and Fill"}</button>
+          </div>}
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
           {/* 1. Nama Lengkap */}
           <div>
@@ -151,6 +246,7 @@ export function CRMManualLeadModal({
             </label>
             <input
               type="text"
+              ref={nameInputRef}
               required
               placeholder="Contoh: Budi Santoso"
               value={nama}
@@ -206,13 +302,49 @@ export function CRMManualLeadModal({
             <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
               {locale === "id" ? "Sumber Kampanye / Iklan" : "Campaign / Source Ad"}
             </label>
-            <input
-              type="text"
-              placeholder="Contoh: Cluster Sapphire BSD - Tipe 72 Hook Siap Huni"
-              value={namaIklan}
-              onChange={(e) => setNamaIklan(e.target.value)}
-              className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                role="combobox"
+                aria-expanded={sourceMenuOpen}
+                aria-controls="crm-source-options"
+                placeholder={locale === "id" ? "Cari kampanye/iklan atau ketik sumber manual/organik" : "Search campaign/ad or type a manual/organic source"}
+                value={sourceSearch}
+                onFocus={() => setSourceMenuOpen(true)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setSourceSearch(value);
+                  setNamaIklan(value);
+                  setAdId(null);
+                  setCampaignId(null);
+                  setSourceMode(value.trim() ? "manual" : "organic");
+                }}
+                onKeyDown={(event) => { if (event.key === "Escape") setSourceMenuOpen(false); }}
+                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100"
+              />
+              {sourceMenuOpen && <div id="crm-source-options" role="listbox" className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                {campaignOptions.filter((campaign) => campaign.name.toLowerCase().includes(sourceSearch.toLowerCase())).slice(0, 15).map((campaign) => (
+                  <button key={`campaign:${campaign.id}`} type="button" role="option" aria-selected={sourceMode === "linked" && campaignId === campaign.id && !adId} onClick={() => {
+                    setAdId(null); setCampaignId(campaign.id); setNamaIklan(campaign.name); setSourceSearch(campaign.name); setSourceMode("linked"); setSourceMenuOpen(false);
+                  }} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-indigo-50 dark:hover:bg-indigo-950/40">
+                    <span className="block truncate text-xs font-semibold text-zinc-800 dark:text-zinc-200">{campaign.name}</span>
+                    <span className="text-[10px] text-zinc-400">{locale === "id" ? "Kampanye" : "Campaign"}</span>
+                  </button>
+                ))}
+                {sourceOptions.filter((source) => `${source.campaignName} ${source.adName}`.toLowerCase().includes(sourceSearch.toLowerCase())).slice(0, 40).map((source) => (
+                  <button key={source.adId} type="button" role="option" aria-selected={adId === source.adId} onClick={() => {
+                    setAdId(source.adId); setCampaignId(source.campaignId); setNamaIklan(source.adName); setSourceSearch(`${source.campaignName} / ${source.adName}`); setSourceMode("linked"); setSourceMenuOpen(false);
+                  }} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-indigo-50 dark:hover:bg-indigo-950/40">
+                    <span className="block truncate text-xs font-semibold text-zinc-800 dark:text-zinc-200">{source.campaignName} / {source.adName}</span>
+                    <span className="text-[10px] text-zinc-400">{source.adStatus}</span>
+                  </button>
+                ))}
+                {sourceSearch.trim() && <button type="button" role="option" aria-selected={sourceMode === "manual"} onClick={() => { setNamaIklan(sourceSearch.trim()); setAdId(null); setCampaignId(null); setSourceMode("manual"); setSourceMenuOpen(false); }} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs font-medium text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950/40">{locale === "id" ? `Gunakan sumber manual: “${sourceSearch.trim()}”` : `Use manual source: “${sourceSearch.trim()}”`}</button>}
+                <button type="button" role="option" aria-selected={sourceMode === "organic"} onClick={() => { setNamaIklan(""); setSourceSearch(""); setAdId(null); setCampaignId(null); setSourceMode("organic"); setSourceMenuOpen(false); }} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">{locale === "id" ? "Organik / Tidak diketahui" : "Organic / Unknown"}</button>
+                {sourceOptions.length === 0 && campaignOptions.length === 0 && <p className="px-2.5 py-2 text-[11px] text-zinc-400">{locale === "id" ? "Referensi iklan belum tersedia." : "No ad references available."}</p>}
+              </div>}
+            </div>
+            <p className="mt-1 text-[10px] text-zinc-400">{sourceMode === "linked" ? (locale === "id" ? "Terhubung ke ID iklan dan kampanye resmi." : "Linked to official ad and campaign IDs.") : sourceMode === "manual" ? (locale === "id" ? "Nama manual dicocokkan; sumber ambigu tidak dipaksa terhubung." : "Manual source is matched; ambiguous sources are not force-linked.") : (locale === "id" ? "Organik atau sumber belum diketahui." : "Organic or unknown source.")}</p>
           </div>
 
           {/* 6. Tahap Funnel */}
@@ -267,6 +399,11 @@ export function CRMManualLeadModal({
           </div>
         </div>
 
+        <label className="flex items-start gap-2 rounded-lg border border-zinc-200 bg-zinc-50/70 px-3 py-2 text-[11px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-300">
+          <input type="checkbox" checked={keepContext} onChange={(event) => setKeepContext(event.target.checked)} className="mt-0.5 accent-indigo-600" />
+          <span>{locale === "id" ? "Pertahankan Sumber Iklan & Tanggal untuk input berikutnya" : "Keep Ad Source & Date for the next entry"}</span>
+        </label>
+
         {/* Action Buttons */}
         <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-zinc-100 dark:border-zinc-800">
           <button
@@ -275,6 +412,9 @@ export function CRMManualLeadModal({
             className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
           >
             {locale === "id" ? "Batal" : "Cancel"}
+          </button>
+          <button type="button" disabled={isSubmitting} onClick={() => void submitLead(false)} className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+            {locale === "id" ? "Simpan & Tutup" : "Save & Close"}
           </button>
           <button
             type="submit"
@@ -290,7 +430,7 @@ export function CRMManualLeadModal({
                 <span>{locale === "id" ? "Menyimpan..." : "Saving..."}</span>
               </>
             ) : (
-              <span>{locale === "id" ? "Simpan Prospek" : "Save Lead"}</span>
+              <span>{locale === "id" ? "Simpan & Tambah Lagi" : "Save & Add Another"}</span>
             )}
           </button>
         </div>

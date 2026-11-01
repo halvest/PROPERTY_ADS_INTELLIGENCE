@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
 import { parseDateRange, getEquivalentPreviousPeriod } from "@/lib/ads/date-utils";
 import { classifyResult } from "@/lib/ads/service";
+import { aggregateAdInsights } from "@/lib/ads/aggregation";
 import {
   evaluateAdsPerformance,
   DataSufficiencyStatus,
@@ -142,21 +143,27 @@ const ModelResponseSchema = z.object({
     .max(3),
 });
 
-function formatRp(amount: number | null | undefined, loc: "id" | "en" = "id"): string {
-  if (amount === null || amount === undefined || Number.isNaN(amount)) return "—";
-  return `Rp${Math.round(amount).toLocaleString(loc === "en" ? "en-US" : "id-ID")}`;
+function formatRp(amount: number | null | undefined, _loc: "id" | "en" = "id"): string {
+  void _loc;
+  if (amount === null || amount === undefined || !Number.isFinite(amount)) return "Tidak tersedia";
+  return `Rp ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Math.round(amount))}`;
 }
 
-function formatPct(value: number | null | undefined, loc: "id" | "en" = "id"): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  const str = value.toFixed(2);
-  return loc === "id" ? `${str.replace(".", ",")}%` : `${str}%`;
+function formatPct(value: number | null | undefined, _loc: "id" | "en" = "id"): string {
+  void _loc;
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Tidak tersedia";
+  return `${new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`;
 }
 
-function formatFreq(value: number | null | undefined, loc: "id" | "en" = "id"): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  const str = value.toFixed(2);
-  return loc === "id" ? `${str.replace(".", ",")}x` : `${str}x`;
+function formatFreq(value: number | null | undefined, _loc: "id" | "en" = "id"): string {
+  void _loc;
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) return "Tidak tersedia";
+  return `${new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}x`;
+}
+
+function forceIndonesianOutputLocale(_requestedLocale: "id" | "en"): "id" | "en" {
+  void _requestedLocale;
+  return "id";
 }
 
 function parseModelJson(raw: string): unknown {
@@ -223,14 +230,13 @@ function buildDeterministicAnalysis(params: {
   timezone: string;
   spend: number;
   results: number;
-  resultLabel: string;
   costPerResult: number | null;
   linkClicks: number;
   linkCtr: number | null;
   linkCpc: number | null;
   cpm: number | null;
   impressions: number;
-  reach: number;
+  reach: number | null;
   frequency: number | null;
   allClicks: number;
   allCtr: number | null;
@@ -252,7 +258,6 @@ function buildDeterministicAnalysis(params: {
     periodLabel,
     spend,
     results,
-    resultLabel,
     costPerResult,
     linkCtr,
     linkCpc,
@@ -276,6 +281,7 @@ function buildDeterministicAnalysis(params: {
     locale = "id",
   } = params;
 
+  // This analyst currently ships Indonesian-only copy and number formatting.
   const loc = locale;
 
   // Run deterministic Senior Meta Ads Intelligence Evaluator engine
@@ -288,7 +294,7 @@ function buildDeterministicAnalysis(params: {
     targetCpr,
     linkClicks: params.linkClicks,
     impressions,
-    reach,
+    reach: reach ?? undefined,
     frequency,
     prevSpend,
     prevResults,
@@ -325,7 +331,9 @@ function buildDeterministicAnalysis(params: {
     evalResult.performanceStatus === "memenuhi_target" &&
     evalResult.dataStatus === "cukup" &&
     results >= 30 &&
-    (frequency === null || frequency < 2.5)
+    targetCpr !== null &&
+    frequency !== null && frequency > 0 &&
+    frequency < 2.5
   ) {
     verdictStatus = "scale";
   } else {
@@ -335,20 +343,14 @@ function buildDeterministicAnalysis(params: {
   const confidenceLevel: "high" | "medium" | "low" =
     evalResult.dataStatus === "cukup" ? "high" : evalResult.dataStatus === "terbatas" ? "medium" : "low";
 
-  // Four Core Metrics using deterministic comparison and safe CPR
-  const localizedResultLabel =
-    loc === "id"
-      ? (resultLabel || "Hasil")
-      : (resultLabel && resultLabel !== "Hasil" ? resultLabel : "Results");
-
   // Safe CTR comparison
   let ctrDeltaPct: number | null = null;
-  let ctrDeltaNote: string | null = loc === "id" ? "Data pembanding belum cukup" : "Insufficient baseline data";
+  let ctrDeltaNote: string | null = "Belum ada data di periode pembanding";
   if (linkCtr !== null && prevLinkCtr !== null && prevLinkCtr > 0) {
     ctrDeltaPct = Number((((linkCtr - prevLinkCtr) / prevLinkCtr) * 100).toFixed(1));
     ctrDeltaNote = `${ctrDeltaPct >= 0 ? "+" : ""}${formatPct(ctrDeltaPct, loc)}`;
   } else if (prevLinkCtr === 0) {
-    ctrDeltaNote = loc === "id" ? "Pembanding 0" : "Baseline 0";
+    ctrDeltaNote = "Belum ada data di periode pembanding";
   }
 
   const cprVsTarget = !targetCpr
@@ -373,7 +375,7 @@ function buildDeterministicAnalysis(params: {
   const metrics: PerformanceAnalysisOutput["metrics"] = [
     {
       key: "spend",
-      label: loc === "id" ? "Belanja" : "Spend",
+      label: "Total Belanja",
       value: spend,
       display: formatRp(spend, loc),
       delta_pct: evalResult.comparisons.spend.percentageDelta,
@@ -383,9 +385,9 @@ function buildDeterministicAnalysis(params: {
     },
     {
       key: "results",
-      label: localizedResultLabel,
+      label: "Hasil Konversi",
       value: results,
-      display: results.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
+      display: results.toLocaleString("id-ID"),
       delta_pct: evalResult.comparisons.results.percentageDelta,
       delta_note: evalResult.comparisons.results.displayDelta,
       vs_target: results > 0 ? "better" : "worse",
@@ -393,7 +395,7 @@ function buildDeterministicAnalysis(params: {
     },
     {
       key: "cpr",
-      label: loc === "id" ? "Biaya/Hasil (CPR)" : "Cost/Result (CPR)",
+      label: "Biaya per Hasil (CPR)",
       value: evalResult.actualCpr ?? 0,
       display: evalResult.actualCpr !== null ? formatRp(evalResult.actualCpr, loc) : (loc === "id" ? "Tidak tersedia" : "Unavailable"),
       delta_pct: evalResult.comparisons.cpr.percentageDelta,
@@ -403,7 +405,7 @@ function buildDeterministicAnalysis(params: {
     },
     {
       key: "ctr",
-      label: loc === "id" ? "CTR Link" : "Link CTR",
+      label: "CTR Tautan",
       value: linkCtr ?? 0,
       display: formatPct(linkCtr, loc),
       delta_pct: ctrDeltaPct,
@@ -416,39 +418,47 @@ function buildDeterministicAnalysis(params: {
   // Extra Metrics for Accordion
   const extra_metrics: PerformanceAnalysisOutput["extra_metrics"] = [
     {
-      label: loc === "id" ? "Frekuensi" : "Frequency",
+      label: "Frekuensi",
       display: formatFreq(frequency, loc),
-      note: loc === "id" ? "Rasio tayangan terhadap jangkauan unik" : "Impression frequency over reach",
+      note: "Rata-rata tayangan per orang",
     },
     {
       label: loc === "id" ? "CPC Tautan" : "Link CPC",
       display: formatRp(linkCpc, loc),
-      note: loc === "id" ? "Biaya rata-rata per klik tautan" : "Average cost per link click",
+      note: "Biaya rata-rata per klik tautan",
     },
     {
       label: "CPM",
       display: formatRp(cpm, loc),
-      note: loc === "id" ? "Biaya per 1.000 penayangan" : "Cost per 1,000 impressions",
+      note: "Biaya per 1.000 tayangan",
     },
     {
-      label: loc === "id" ? "Jangkauan (Reach)" : "Reach",
-      display: reach.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
-      note: loc === "id" ? "Akumulasi pengguna terjangkau" : "Accumulated reach",
+      label: "Jangkauan Unik",
+      display: reach !== null ? reach.toLocaleString("id-ID") : "Tidak tersedia",
+      note: "Tidak dijumlahkan lintas hari",
     },
     {
-      label: loc === "id" ? "Tayangan (Impresi)" : "Impressions",
-      display: impressions.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
-      note: loc === "id" ? "Total frekuensi tampilan materi" : "Total impressions served",
+      label: "Total Tayangan",
+      display: impressions.toLocaleString("id-ID"),
+      note: "Jumlah iklan ditampilkan",
     },
     {
-      label: loc === "id" ? "Semua Klik" : "All Clicks",
-      display: allClicks.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
+      label: "Semua Klik (Interaksi)",
+      display: allClicks.toLocaleString("id-ID"),
       note: `CTR ${formatPct(allCtr, loc)} · CPC ${formatRp(allCpc, loc)}`,
     },
   ];
 
   // Watchouts: Incorporate uncertaintyNotes or performance warnings
   const watchouts: PerformanceAnalysisOutput["watchouts"] = [];
+
+  if (durationDays > 60) {
+    watchouts.push({
+      severity: "warn",
+      title: `Rentang Evaluasi Sangat Panjang (${durationDays} Hari)`,
+      insight: "Data ini menggabungkan performa historis jangka panjang. Untuk keputusan optimasi anggaran harian atau menghentikan iklan yang sedang aktif, gunakan filter 7 atau 14 Hari Terakhir.",
+    });
+  }
 
   evalResult.uncertaintyNotes.forEach((note) => {
     watchouts.push({
@@ -481,8 +491,8 @@ function buildDeterministicAnalysis(params: {
   if (watchouts.length === 0) {
     watchouts.push({
       severity: "ok",
-      title: loc === "id" ? "Metrik penayangan stabil" : "Delivery metrics stable",
-      insight: loc === "id" ? "Tidak ditemukan red flag teknis penayangan pada periode ini." : "No technical delivery red flags detected in this period.",
+      title: "Distribusi Tayangan Stabil",
+      insight: "Tidak ditemukan kendala teknis pada pengiriman iklan di periode ini.",
     });
   }
 
@@ -502,7 +512,7 @@ function buildDeterministicAnalysis(params: {
     watchouts: watchouts.slice(0, 3),
     actions: evalResult.nextActions.slice(0, 3),
     meta: {
-      source: "Meta Marketing API",
+      source: "Meta Ads Insights (Snapshot Tersinkron)",
       generated_at: new Date().toISOString(),
       engine: "rules",
       period: periodLabel,
@@ -579,7 +589,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { scope, period, targetId, adAccountId, dateRange, customSince, customUntil, targetCpr, locale } = parseResult.data;
+    const { scope, period, targetId, adAccountId, dateRange, customSince, customUntil, targetCpr } = parseResult.data;
+    const locale = forceIndonesianOutputLocale(parseResult.data.locale);
 
 
     // 3b. Resolve the validated ad-account context. Metrics must never mix
@@ -745,23 +756,31 @@ export async function POST(req: NextRequest) {
 
     // Only query if entire account OR we have matching ads for the entity
     if (scope === "account" || targetAdIds.length > 0) {
-      let currentInsightsQuery = db
-        .from("ad_insights")
-        .select("spend, impressions, clicks, reach, link_clicks, conversions, date_start")
-        .eq("organization_id", organizationId);
-
-      if (since) currentInsightsQuery = currentInsightsQuery.gte("date_start", since);
-      if (until) currentInsightsQuery = currentInsightsQuery.lte("date_stop", until);
-      if (targetAdIds.length > 0) currentInsightsQuery = currentInsightsQuery.in("ad_id", targetAdIds);
-
-      const { data: insData, error: insError } = await currentInsightsQuery;
+      const buildCurrentQuery = (columns: string) => {
+        let q = db
+          .from("ad_insights")
+          .select(columns)
+          .eq("organization_id", organizationId);
+        if (since) q = q.gte("date_start", since);
+        if (until) q = q.lte("date_stop", until);
+        if (targetAdIds.length > 0) q = q.in("ad_id", targetAdIds);
+        return q;
+      };
+      // action_breakdown/conversion_action_type arrive with migration
+      // 20261027000000 (not applied everywhere yet): fall back to core
+      // columns rather than failing the whole analysis.
+      let currentResult = await buildCurrentQuery("spend, impressions, clicks, reach, link_clicks, conversions, action_breakdown, conversion_action_type, date_start");
+      if (currentResult.error) {
+        currentResult = await buildCurrentQuery("spend, impressions, clicks, reach, link_clicks, conversions, date_start");
+      }
+      const { data: insData, error: insError } = currentResult;
       if (insError) {
         return NextResponse.json(
           { success: false, error: "Gagal membaca insight iklan dari basis data" },
           { status: 500 }
         );
       }
-      if (insData) currentInsights = insData;
+      if (insData) currentInsights = insData as unknown as typeof currentInsights;
     }
 
     // Previous Insights
@@ -790,30 +809,24 @@ export async function POST(req: NextRequest) {
       if (pData) prevInsights = pData;
     }
 
-    // 7. Aggregate Current Metrics & Daily Trends
-    let currSpend = 0;
-    let currImpressions = 0;
-    let currClicks = 0;
-    let currReach = 0;
-    let currLinkClicks = 0;
-    let currResults = 0;
+    // 7. Aggregate Current Metrics & Daily Trends.
+    // Totals come from the SHARED aggregation (AI-02) so this endpoint can
+    // never disagree with the dashboard; the daily map only feeds trends.
+    const currAgg = aggregateAdInsights(currentInsights || []);
+    const currSpend = currAgg.spend;
+    const currImpressions = currAgg.impressions;
+    const currClicks = currAgg.allClicks;
+    const currReach = currAgg.reach;
+    const currLinkClicks = currAgg.linkClicks ?? 0;
+    const currResults = currAgg.results ?? 0;
 
     const dailyMap = new Map<string, { spend: number; results: number; clicks: number; impressions: number }>();
 
     (currentInsights || []).forEach((row) => {
       const s = Number(row.spend) || 0;
       const imp = Number(row.impressions) || 0;
-      const clk = Number(row.clicks) || 0;
-      const r = Number(row.reach) || 0;
       const lk = Number(row.link_clicks) || 0;
       const conv = Number(row.conversions) || 0;
-
-      currSpend += s;
-      currImpressions += imp;
-      currClicks += clk;
-      currReach += r;
-      currLinkClicks += lk;
-      currResults += conv;
 
       const d = String(row.date_start || "").slice(0, 10);
       if (d) {
@@ -826,21 +839,13 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    currSpend = Math.round(currSpend * 100) / 100;
-    const currLinkCtr = currImpressions > 0 ? Number(((currLinkClicks / currImpressions) * 100).toFixed(2)) : null;
-    const currLinkCpc = currLinkClicks > 0 ? Number((currSpend / currLinkClicks).toFixed(2)) : null;
-    const currAllCtr = currImpressions > 0 ? Number(((currClicks / currImpressions) * 100).toFixed(2)) : null;
-    const currAllCpc = currClicks > 0 ? Number((currSpend / currClicks).toFixed(2)) : null;
-    const currCpm = currImpressions > 0 ? Number(((currSpend / currImpressions) * 1000).toFixed(2)) : null;
-    const currCpr = currResults > 0 ? Number((currSpend / currResults).toFixed(2)) : null;
-    // Frequency valid only for single-day reach; summed multi-day reach is not unique.
-    const reachDayCount = new Set(
-      (currentInsights || []).map((r) => String(r.date_start || "").slice(0, 10)).filter(Boolean)
-    ).size;
-    const currFrequency =
-      reachDayCount <= 1 && currReach > 0
-        ? Number((currImpressions / currReach).toFixed(2))
-        : null;
+    const currLinkCtr = currAgg.linkCtr;
+    const currLinkCpc = currAgg.linkCpc;
+    const currAllCtr = currAgg.allCtr;
+    const currAllCpc = currAgg.allCpc;
+    const currCpm = currAgg.cpm;
+    const currCpr = currAgg.costPerResult;
+    const currFrequency = currAgg.frequency;
 
     // Daily Sparkline Trend Arrays
     const sortedDays = Array.from(dailyMap.keys()).sort();
@@ -859,36 +864,18 @@ export async function POST(req: NextRequest) {
 
     const classification = classifyResult(currResults, [], targetObjective);
 
-    // 8. Aggregate Previous Metrics
-    let prevSpend = 0;
-    let prevResults = 0;
-    let prevImpressions = 0;
-    let prevLinkClicks = 0;
+    // 8. Aggregate Previous Metrics (same shared aggregation)
+    const prevAgg = aggregateAdInsights(prevInsights || []);
+    const prevSpend = prevAgg.spend;
+    const prevResults = prevAgg.results ?? 0;
+    const prevImpressions = prevAgg.impressions;
+    const prevLinkClicks = prevAgg.linkClicks ?? 0;
 
-    (prevInsights || []).forEach((row) => {
-      prevSpend += Number(row.spend) || 0;
-      prevResults += Number(row.conversions) || 0;
-      prevImpressions += Number(row.impressions) || 0;
-      prevLinkClicks += Number(row.link_clicks) || 0;
-    });
-
-    const prevCpr = prevResults > 0 ? Number((prevSpend / prevResults).toFixed(2)) : null;
+    const prevCpr = prevAgg.costPerResult;
     const prevLinkCtr = prevImpressions > 0 ? Number(((prevLinkClicks / prevImpressions) * 100).toFixed(2)) : null;
     const periodName =
-      locale === "en"
-        ? period === "1d" || period === "daily"
-          ? "1 Day (Monitoring)"
-          : period === "3d"
-          ? "3 Days (Early Diagnostic)"
-          : period === "7d" || period === "weekly"
-          ? "7 Days (Routine)"
-          : period === "14d"
-          ? "14 Days (In-Depth)"
-          : period === "30d" || period === "monthly"
-          ? "30 Days (Business)"
-          : "Custom Range"
-        : period === "1d" || period === "daily"
-        ? "1 Hari (Monitoring)"
+      period === "1d" || period === "daily"
+        ? "1 Hari (Pemantauan)"
         : period === "3d"
         ? "3 Hari (Diagnostik Awal)"
         : period === "7d" || period === "weekly"
@@ -911,7 +898,6 @@ export async function POST(req: NextRequest) {
       timezone,
       spend: currSpend,
       results: currResults,
-      resultLabel: classification.resultLabel,
       costPerResult: currCpr,
       linkClicks: currLinkClicks,
       linkCtr: currLinkCtr,
@@ -968,7 +954,9 @@ export async function POST(req: NextRequest) {
         resetAt: reservation.resetAt,
       }, { status: limitReached ? 429 : 409 });
     }
-    quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    if (reservation.reservationId) {
+      quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    }
 
     if (isConfigured) {
       try {
@@ -979,20 +967,23 @@ export async function POST(req: NextRequest) {
           timeoutMs: 15000,
         });
 
-        const systemPrompt = `Kamu adalah Senior Meta Ads Strategist untuk bisnis properti di Indonesia (10+ tahun pengalaman, biasa handle budget ratusan juta/bulan).
+        const systemPrompt = `Kamu adalah Senior Meta Ads Strategist untuk bisnis properti di Indonesia (10+ tahun pengalaman, biasa mengelola anggaran besar).
 Tugasmu: menghasilkan output analisis iklan yang SINGKAT, TAJAM, dan MUDAH DISCAN dalam 10 detik.
 
-${locale === "en" ? "LANGUAGE REQUIREMENT: Respond in clear, professional English for performance marketers." : "BAHASA: Bahasa Indonesia profesional untuk performance marketer."}
+BAHASA: Gunakan Bahasa Indonesia profesional secara konsisten. Jangan menulis kalimat atau label dalam Bahasa Inggris; istilah CPR, CTR, CPM, Ad Set, dan Stop-Loss boleh dipertahankan.
 
 PRINSIP WAJIB & INTEGRITAS DATA:
 1. Verdict dulu, detail belakangan.
 2. Gaya bahasa advertiser/performance marketer profesional (istilah: CPR, CTR, CPM, scaling, fatigue, hook, stop-loss).
 3. Kalimat pendek, aktif, to the point. Maksimal 20 kata per kalimat. Hindari jargon kaku ("denominator", "mengindikasikan", "adapun").
-4. Format angka: Rp6.811 (tanpa spasi), 0,68% (koma desimal Indonesia jika ID, titik jika EN), 1,04x.
+4. Format angka: Rp 6.811 (spasi setelah Rp), 0,68% (koma desimal Indonesia), 1,04x.
 5. JANGAN PERNAH menyimpulkan iklan "boncos" atau menyarankan mematikan iklan jika status data adalah "terbatas" atau durasi <= 1 hari.
 6. HANYA rekomendasikan uji hook baru jika CTR link < 0.8% DAN CPR di atas target, atau frekuensi >= 2.5. Jika CPR sudah bagus, JANGAN sarankan perbaiki CTR.
-7. Status Learning: Selalu tampilkan "Status Learning tidak tersedia" (jangan asumsikan dari umur kampanye).
+7. Fase Learning: Tampilkan "Hanya berlaku pada level Ad Set yang sedang aktif tayang".
 8. JANGAN membuat kesimpulan atau rekomendasi berdasarkan CRM, kualitas lead penjualan, survei, atau closing karena bukan dari sumber data Meta Ads.
+9. Jika frekuensi tidak tersedia, JANGAN menyebut frekuensi/frequency di headline, subtext, watchouts, why, do, atau stop_loss. Gunakan CPR aktual, batas CPR sebesar 130% dari CPR aktual dibulatkan ke Rp 100 terdekat, dan CTR tautan.
+10. Bedakan CPR aktual dari target CPR. Sebut hasil Meta sebagai "hasil tercatat", bukan "hasil terverifikasi".
+11. Jika periode lebih dari 60 hari, tambahkan watchout rentang evaluasi sangat panjang dan sarankan filter 7 atau 14 hari terakhir.
 9. Format output WAJIB JSON persis sesuai schema berikut:
 {
   "verdict": {
@@ -1014,18 +1005,21 @@ PRINSIP WAJIB & INTEGRITAS DATA:
 - Periode: ${periodLabel} (${durationDays} hari, Timezone: ${timezone})
 - Target CPR: ${targetCpr ? formatRp(targetCpr, locale) : "Belum diatur"}
 - Belanja: ${formatRp(currSpend, locale)}
-- Hasil Valid: ${currResults} ${classification.resultLabel}
+- Hasil Meta Tercatat: ${currResults} ${classification.resultLabel}
 - CPR Aktual: ${currCpr !== null ? formatRp(currCpr, locale) : "Tidak tersedia"}
 - CTR Link: ${formatPct(currLinkCtr, locale)}
 - Frekuensi: ${formatFreq(currFrequency, locale)}
-- Jangkauan: ${currReach.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
+- Jangkauan: ${currReach !== null ? currReach.toLocaleString(locale === "en" ? "en-US" : "id-ID") : "Tidak tersedia (reach multi-hari tidak dijumlahkan sebagai reach unik)"}
+- Percakapan Messaging: ${currAgg.messagingConversations !== null ? currAgg.messagingConversations : "Tidak tersedia"} (biaya per percakapan: ${currAgg.costPerMessagingConversation !== null ? formatRp(currAgg.costPerMessagingConversation, locale) : "Tidak tersedia"})
+- Leads Meta: ${currAgg.leads !== null ? currAgg.leads : "Tidak tersedia"} (biaya per lead: ${currAgg.costPerLead !== null ? formatRp(currAgg.costPerLead, locale) : "Tidak tersedia"})
+- Kualitas Lead / CPQL: Tidak tersedia (tidak ada sumber kualitas lead yang terverifikasi; jangan menyimpulkan kualitas lead atau performa sales)
 - Data Pembanding: Belanja ${formatRp(prevSpend, locale)}, Hasil ${prevResults}, CPR ${formatRp(prevCpr, locale)}
 - Status Evaluasi Sistem:
   * Status Data: ${deterministicOutput.evaluator.data_status} (${deterministicOutput.evaluator.data_status_reason})
   * Status Performa: ${deterministicOutput.evaluator.performance_status}
   * Tindakan Disarankan: ${deterministicOutput.evaluator.action}
-  * Status Learning: ${deterministicOutput.evaluator.learning_status}
-  * Status Tracking: ${deterministicOutput.evaluator.tracking_status}`;
+  * Fase Learning: ${deterministicOutput.evaluator.learning_status}
+  * Sumber Konversi: ${deterministicOutput.evaluator.tracking_status}`;
 
         const response = await client.createChatCompletion({
           messages: [
@@ -1044,34 +1038,43 @@ PRINSIP WAJIB & INTEGRITAS DATA:
 
           if (validated.success) {
             const data = validated.data;
+            const generatedText = [
+              data.verdict.headline,
+              data.verdict.subtext,
+              data.verdict.confidence.reason,
+              ...data.watchouts.flatMap((item) => [item.title, item.insight]),
+              ...data.actions.flatMap((item) => [item.title, item.why, item.do, item.stop_loss]),
+            ].join(" ");
+            const missingFrequency = currFrequency === null || currFrequency <= 0;
+            const containsEnglishSentence = /\b(the|and|with|from|this|that|these|those|is|are|was|were|should|could|would|because|while|when|above|below|maintain|increase|decrease|pause|review|results|verified|frequency|performance|campaign|creative|budget|delivery|link|click|cost|good|high|low|healthy|recommend|focus|check|spend|lead|scale|stop|monitor|impression|reach|learning|tracking|conversion|ad\s+set)\b/i.test(generatedText);
+            const mentionsUnavailableFrequency = missingFrequency && /\b(frequency|frekuensi)\b/i.test(generatedText);
+            const hasNonIndonesianNumberFormat = /Rp(?!\s)\d|Rp\s+\d{1,3}(?:,\d{3})+|\b\d+\.\d{1,2}%/.test(generatedText);
+            const useDeterministicNarrative = containsEnglishSentence || mentionsUnavailableFrequency || missingFrequency || hasNonIndonesianNumberFormat;
+            const deterministicWarning = deterministicOutput.watchouts.find((item) => item.title.startsWith("Rentang Evaluasi Sangat Panjang"));
             const fullOutput: PerformanceAnalysisOutput = {
-              verdict: data.verdict,
+              verdict: useDeterministicNarrative ? deterministicOutput.verdict : data.verdict,
               evaluator: deterministicOutput.evaluator,
-              metrics: data.metrics.map((m) => {
-                let trend: number[] | null = null;
-                if (m.key === "spend" && trendSpend.length > 0) trend = trendSpend;
-                else if (m.key === "results" && trendResults.length > 0) trend = trendResults;
-                else if (m.key === "cpr" && trendCpr.length > 0) trend = trendCpr;
-                else if (m.key === "ctr" && trendCtr.length > 0) trend = trendCtr;
-                return {
-                  ...m,
-                  trend_7d: trend,
-                };
-              }),
-              extra_metrics: data.extra_metrics,
-              watchouts: data.watchouts.slice(0, 3),
-              actions: data.actions.slice(0, 3),
+              // Labels, values and formatted metrics always come from the
+              // deterministic source of truth, even when narrative uses LLM.
+              metrics: deterministicOutput.metrics,
+              extra_metrics: deterministicOutput.extra_metrics,
+              watchouts: deterministicWarning
+                ? [deterministicWarning, ...data.watchouts.filter((item) => !item.title.startsWith("Rentang Evaluasi Sangat Panjang")).slice(0, 2)]
+                : (useDeterministicNarrative ? deterministicOutput.watchouts : data.watchouts.slice(0, 3)),
+              actions: useDeterministicNarrative
+                ? deterministicOutput.actions
+                : data.actions.slice(0, 3),
               meta: {
-                source: "Meta Marketing API",
+                source: "Meta Ads Insights (Snapshot Tersinkron)",
                 generated_at: new Date().toISOString(),
-                engine: "llm",
+                engine: useDeterministicNarrative ? "rules" : "llm",
                 period: periodLabel,
                 scope,
                 target_cpr: targetCpr ?? null,
               },
             };
 
-            if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+            if (reservation.reservationId && !(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
               return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
             }
             quotaReservation = null;

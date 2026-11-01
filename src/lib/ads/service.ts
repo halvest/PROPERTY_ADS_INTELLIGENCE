@@ -33,6 +33,9 @@ export interface GetAdsIntelligenceOptions {
 export type InsightsAvailability = "available" | "no_data_for_period" | "no_account_selected";
 
 import { formatDateInTimezone, parseDateRange } from "./date-utils";
+import { aggregateAdInsights } from "./aggregation";
+import { resolveAdResultMetric, translateMetaTerm } from "./result-metric";
+import { describeMetaAction, primaryActionType } from "@/lib/marketing/meta/action-catalog";
 export { formatDateInTimezone, parseDateRange };
 
 export interface ResultClassification {
@@ -109,7 +112,7 @@ export function classifyResult(
   if (resultActionTypes.length > 0) {
     return {
       resultLabel: "Hasil",
-      resultTypeDescription: resultActionTypes.join(", "),
+      resultTypeDescription: Array.from(new Set(resultActionTypes.map((action) => describeMetaAction(action).label))).join(" · "),
       isLeads: false,
       isConversation: false,
     };
@@ -117,7 +120,7 @@ export function classifyResult(
 
   return {
     resultLabel: "Hasil",
-    resultTypeDescription: "Jenis hasil belum teridentifikasi",
+    resultTypeDescription: null,
     isLeads: false,
     isConversation: false,
   };
@@ -263,6 +266,51 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
   if (insError) {
     throw new Error(`Gagal memuat data metrik iklan: ${insError.message}`);
   }
+
+  const hasSubsetFilters = [
+    selectedCampaignId,
+    campaignStatusFilter,
+    deliveryStatusFilter,
+    objectiveFilter,
+  ].some((value) => Boolean(value && value !== "all"));
+  let accountMetricsState: "available" | "sync_required" | "source_unavailable" | "filtered_scope" | "range_not_supported" | "no_account_selected" =
+    !effectiveAccountId
+      ? "no_account_selected"
+      : hasSubsetFilters
+        ? "filtered_scope"
+        : since && until
+          ? "sync_required"
+          : "range_not_supported";
+  let accountLevelReach: number | null = null;
+  let accountLevelFrequency: number | null = null;
+
+  // The account snapshot is requested from Meta for this exact all-days date
+  // range during sync. Never infer unique reach or frequency from daily/ad
+  // rows, and never reuse an account-wide value when the user narrowed scope.
+  if (effectiveAccountId && !hasSubsetFilters && since && until) {
+    const { data: accountInsight, error: accountInsightError } = await db
+      .from("ad_account_insights")
+      .select("reach, frequency")
+      .eq("organization_id", organizationId)
+      .eq("ad_account_id", effectiveAccountId)
+      .eq("date_start", since)
+      .eq("date_stop", until)
+      .maybeSingle();
+
+    if (accountInsightError) {
+      // The app can be rolled out before its additive migration. Keep regular
+      // ad metrics available and explain that account metrics need a sync.
+      if (accountInsightError.code !== "PGRST205" && accountInsightError.code !== "42P01") {
+        throw new Error(`Gagal memuat jangkauan dan frekuensi tingkat akun: ${accountInsightError.message}`);
+      }
+    } else if (accountInsight) {
+      accountLevelReach = accountInsight.reach;
+      accountLevelFrequency = accountInsight.frequency;
+      accountMetricsState = accountInsight.reach !== null || accountInsight.frequency !== null
+        ? "available"
+        : "source_unavailable";
+    }
+  }
   const insightsState: InsightsAvailability = !effectiveAccountId
     ? "no_account_selected"
     : rawInsights && rawInsights.length > 0
@@ -309,7 +357,23 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     }
   }
 
-  // Aggregate insights by ad_id
+  // Aggregate insights by ad_id using the SHARED aggregation (AI-02):
+  // spend/impressions/clicks/reach/frequency/ratios and the separated
+  // messaging/leads result types are computed identically to the ad detail
+  // view and both AI endpoints. Rows were already tenant- and
+  // account-filtered by the queries above.
+  const rowsByAd = new Map<string, NonNullable<typeof rawInsights>>();
+  (rawInsights || []).forEach((i) => {
+    const list = rowsByAd.get(i.ad_id) || [];
+    list.push(i);
+    rowsByAd.set(i.ad_id, list);
+  });
+  const adAggMap = new Map<string, ReturnType<typeof aggregateAdInsights>>();
+  rowsByAd.forEach((rows, adId) => {
+    adAggMap.set(adId, aggregateAdInsights(rows));
+  });
+
+  // Per-ad metadata that is not part of metric aggregation.
   const insightMap = new Map<string, InsightAggregate>();
   const adReachDates = new Map<string, Set<string>>();
   let currency = effectiveAccount?.currency || "";
@@ -374,12 +438,10 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       adReachDates.get(i.ad_id)!.add(i.date_start);
     }
     const agg = insightMap.get(i.ad_id)!;
-    agg.spend += sp;
-    agg.impressions += imp;
-    agg.clicks += clk;
-    agg.reach += rch;
-    agg.linkClicks += lnk;
-    agg.conversions += conv;
+    // Metric numbers intentionally NOT accumulated here: adAggMap (shared
+    // aggregation) is the single source for them. This map only carries
+    // per-ad metadata (adset, rankings, result action types, conversations
+    // compat derived from the conversion action type).
     if (i.conversion_action_type) {
       if (!agg.resultActionTypes.includes(i.conversion_action_type)) agg.resultActionTypes.push(i.conversion_action_type);
       if (i.conversion_action_type.includes("messaging_conversation_started")) agg.conversations += conv;
@@ -393,12 +455,14 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
 
   const observedMinDate = minDate as string | null;
   const observedMaxDate = maxDate as string | null;
-  if (observedMinDate && observedMaxDate) {
-    for (const date of trendMap.keys()) {
-      if (date < observedMinDate || date > observedMaxDate) trendMap.delete(date);
+  if (!(since && until)) {
+    if (observedMinDate && observedMaxDate) {
+      for (const date of trendMap.keys()) {
+        if (date < observedMinDate || date > observedMaxDate) trendMap.delete(date);
+      }
+    } else {
+      trendMap.clear();
     }
-  } else {
-    trendMap.clear();
   }
 
   // 5. Assemble Ads with Strict Status Hierarchy (Section 2: Campaign status vs Delivery status)
@@ -467,26 +531,58 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       }
     }
 
-    const spend = Math.round(ins.spend * 100) / 100;
-    const impressions = ins.impressions;
-    const reach = ins.reach;
-    const allClicks = ins.clicks;
-    const linkClicks = ins.linkClicks;
-    const results = ins.conversions;
-    const conversations = ins.conversations;
+    // All metric numbers come from the shared aggregation for this ad.
+    const agg = adAggMap.get(ad.id) ?? aggregateAdInsights([]);
+    const spend = agg.spend;
+    const impressions = agg.impressions;
+    const reach = agg.reach;
+    const allClicks = agg.allClicks;
+    const linkClicks = agg.linkClicks;
+    const results = agg.results;
+    const conversations = agg.messagingConversations;
 
-    const linkCtr = impressions > 0 ? Number(((linkClicks / impressions) * 100).toFixed(2)) : null;
-    const linkCpc = linkClicks > 0 ? Number((spend / linkClicks).toFixed(2)) : null;
-    const allCtr = impressions > 0 ? Number(((allClicks / impressions) * 100).toFixed(2)) : null;
-    const allCpc = allClicks > 0 ? Number((spend / allClicks).toFixed(2)) : null;
-    const cpm = impressions > 0 ? Number(((spend / impressions) * 1000).toFixed(2)) : null;
-    const costPerResult = results > 0 ? Number((spend / results).toFixed(2)) : null;
-    // Frequency is only valid for a single-day reach. Summed daily reach over
-    // multiple days is not unique reach, so frequency must be null (unknown).
-    const reachDays = adReachDates.get(ad.id)?.size ?? 0;
-    const frequency =
-      reachDays <= 1 && reach > 0 ? Number((impressions / reach).toFixed(2)) : null;
-    const classification = classifyResult(results, ins.resultActionTypes, cmp?.objective);
+    const linkCtr = agg.linkCtr;
+    const linkCpc = agg.linkCpc;
+    const allCtr = agg.allCtr;
+    const allCpc = agg.allCpc;
+    const cpm = agg.cpm;
+    const frequency = agg.frequency;
+    const resultMetric = resolveAdResultMetric({
+      spend,
+      impressions,
+      conversions: agg.results,
+      linkClicks,
+      clicks: allClicks,
+      objective: cmp?.objective,
+    });
+    const classification = classifyResult(results ?? 0, ins.resultActionTypes, cmp?.objective);
+    const actionCounts: Record<string, number> = {};
+    const actionCostWeighted: Record<string, number> = {};
+    const actionCostWeights: Record<string, number> = {};
+    for (const row of rowsByAd.get(ad.id) || []) {
+      const counts = row.action_breakdown && typeof row.action_breakdown === "object" ? row.action_breakdown as Record<string, unknown> : {};
+      const costs = (row as typeof row & { cost_per_action_type?: unknown }).cost_per_action_type;
+      const costMap = costs && typeof costs === "object" ? costs as Record<string, unknown> : {};
+      for (const [type, rawCount] of Object.entries(counts)) {
+        const count = Number(rawCount);
+        if (!Number.isFinite(count)) continue;
+        actionCounts[type] = (actionCounts[type] || 0) + count;
+        const cost = Number(costMap[type]);
+        if (Number.isFinite(cost) && cost >= 0 && count > 0) {
+          actionCostWeighted[type] = (actionCostWeighted[type] || 0) + cost * count;
+          actionCostWeights[type] = (actionCostWeights[type] || 0) + count;
+        }
+      }
+    }
+    const primaryType = primaryActionType(actionCounts, cmp?.objective);
+    const detailTypes = primaryType
+      ? [primaryType]
+      : Object.keys(actionCounts).filter((type) => !["other", "link_click"].includes(describeMetaAction(type).category) && actionCounts[type] > 0);
+    const resultDetails = detailTypes.map((type) => ({
+      ...describeMetaAction(type),
+      count: actionCounts[type],
+      costPerResult: actionCostWeights[type] ? actionCostWeighted[type] / actionCostWeights[type] : spend / actionCounts[type],
+    }));
 
     return {
       id: ad.id,
@@ -507,16 +603,27 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       adsetName: ins.adsetName || "Ad Set Meta",
       spend,
       impressions,
-      // Meta reach is a unique count, not additive across daily insight rows.
-      // Only expose it when this ad has one observed day; otherwise unknown.
-      reach: reachDays <= 1 ? reach : null,
+      // Shared aggregation already returns null for multi-day reach.
+      reach,
       frequency,
-      results,
+      results: resultDetails.length === 1 ? resultDetails[0].count : null,
+      resultMetricValue: resultMetric.value,
+      resultMetricLabel: resultMetric.label,
+      resultMetricCostPerResult: resultMetric.costPerResult,
+      resultMetricKind: resultMetric.kind,
+      resultMetricUnitLabel: resultMetric.unitLabel,
       conversations,
+      // BL-01 separated result types for dashboard/AI consumers.
+      messagingConversations: agg.messagingConversations,
+      leads: agg.leads,
+      costPerMessagingConversation: agg.costPerMessagingConversation,
+      costPerLead: agg.costPerLead,
       resultActionTypes: ins.resultActionTypes,
       resultLabel: classification.resultLabel,
       resultTypeDescription: classification.resultTypeDescription,
-      costPerResult,
+      resultDetails,
+      actionCounts,
+      costPerResult: resultDetails.length === 1 ? resultDetails[0].costPerResult : null,
       linkClicks,
       linkCtr,
       linkCpc,
@@ -529,7 +636,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       conversionRateRanking: ins.conversionRateRanking || (ad as { conversion_rate_ranking?: string | null }).conversion_rate_ranking || null,
       createdAt: ad.created_at,
       updatedAt: ad.updated_at,
-      hasInsights: insightMap.has(ad.id),
+      hasInsights: rowsByAd.has(ad.id),
     };
   });
 
@@ -540,33 +647,33 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
 
     let cmpSpend = 0;
     let cmpImpressions = 0;
-    let cmpReach = 0;
     let cmpLinkClicks = 0;
+    let cmpLinkClicksAvailable = adsInCampaign.some((a) => a.hasInsights);
     let cmpAllClicks = 0;
     let cmpResults = 0;
+    let cmpResultsAvailable = adsInCampaign.some((a) => a.hasInsights);
 
     adsInCampaign.forEach((a) => {
       cmpSpend += a.spend;
       cmpImpressions += a.impressions;
-      cmpReach += a.reach ?? 0;
-      cmpLinkClicks += a.linkClicks;
+      if (a.hasInsights && a.linkClicks === null) cmpLinkClicksAvailable = false;
+      cmpLinkClicks += a.linkClicks ?? 0;
       cmpAllClicks += a.allClicks;
-      cmpResults += a.results;
+      if (a.hasInsights && a.results === null) cmpResultsAvailable = false;
+      cmpResults += a.results ?? 0;
     });
 
-    const cmpLinkCtr = cmpImpressions > 0 ? Number(((cmpLinkClicks / cmpImpressions) * 100).toFixed(2)) : null;
-    const cmpLinkCpc = cmpLinkClicks > 0 ? Number((cmpSpend / cmpLinkClicks).toFixed(2)) : null;
+    const cmpLinkCtr = cmpLinkClicksAvailable && cmpImpressions > 0 ? Number(((cmpLinkClicks / cmpImpressions) * 100).toFixed(2)) : null;
+    const cmpLinkCpc = cmpLinkClicksAvailable && cmpLinkClicks > 0 ? Number((cmpSpend / cmpLinkClicks).toFixed(2)) : null;
     const cmpAllCtr = cmpImpressions > 0 ? Number(((cmpAllClicks / cmpImpressions) * 100).toFixed(2)) : null;
     const cmpAllCpc = cmpAllClicks > 0 ? Number((cmpSpend / cmpAllClicks).toFixed(2)) : null;
     const cmpCpm = cmpImpressions > 0 ? Number(((cmpSpend / cmpImpressions) * 1000).toFixed(2)) : null;
-    const cmpCostPerResult = cmpResults > 0 ? Number((cmpSpend / cmpResults).toFixed(2)) : null;
-    const cmpReachDays = new Set(
-      adsInCampaign.flatMap((a) => Array.from(adReachDates.get(a.id) ?? []))
-    ).size;
-    const cmpFrequency =
-      cmpReachDays <= 1 && cmpReach > 0
-        ? Number((cmpImpressions / cmpReach).toFixed(2))
-        : null;
+    const cmpCostPerResult = cmpResultsAvailable && cmpResults > 0 ? Number((cmpSpend / cmpResults).toFixed(2)) : null;
+    // Unique reach is never summed across ads: with more than one ad there is
+    // no valid unique-reach source, so it stays unavailable. A single ad keeps
+    // its shared-aggregation reach/frequency (null for multi-day rows).
+    const cmpReach = adsInCampaign.length === 1 ? adsInCampaign[0].reach : null;
+    const cmpFrequency = adsInCampaign.length === 1 ? adsInCampaign[0].frequency : null;
 
     return {
       id: cmp.id,
@@ -578,11 +685,11 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       activeAdsCount: activeAdsInCampaign,
       spend: Math.round(cmpSpend * 100) / 100,
       impressions: cmpImpressions,
-      reach: adsInCampaign.some((a) => a.reach === null) ? null : cmpReach,
+      reach: cmpReach,
       frequency: cmpFrequency,
-      results: cmpResults,
+      results: cmpResultsAvailable ? cmpResults : null,
       costPerResult: cmpCostPerResult,
-      linkClicks: cmpLinkClicks,
+      linkClicks: cmpLinkClicksAvailable ? cmpLinkClicks : null,
       linkCtr: cmpLinkCtr,
       linkCpc: cmpLinkCpc,
       allClicks: cmpAllClicks,
@@ -648,52 +755,61 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     if (insight.conversion_action_type?.includes("messaging_conversation_started")) point.conversations += Number(insight.conversions) || 0;
   });
   const orderedFilteredTrend = Array.from(filteredTrendMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-  const datesWithInsights = orderedFilteredTrend.filter((point) => point.spend !== 0 || point.impressions !== 0 || point.linkClicks !== 0 || point.allClicks !== 0 || point.results !== 0);
-  const filteredDailyTrend = datesWithInsights.length > 0
-    ? orderedFilteredTrend.filter((point) => point.date >= datesWithInsights[0].date && point.date <= datesWithInsights[datesWithInsights.length - 1].date)
-    : [];
+  const filteredDailyTrend = since && until
+    ? orderedFilteredTrend
+    : orderedFilteredTrend.filter((point) => point.spend !== 0 || point.impressions !== 0 || point.linkClicks !== 0 || point.allClicks !== 0 || point.results !== 0);
 
   // 8. Mathematically Weighted Aggregate KPIs
   let totalSpend = 0;
   let totalImpressions = 0;
   let totalReach = 0;
   let totalLinkClicks = 0;
+  let totalLinkClicksAvailable = filteredAds.some((a) => a.hasInsights);
   let totalAllClicks = 0;
-  let totalResults = 0;
+  const resultTotals = new Map<string, { label: string; category: string; count: number; weightedCost: number; costWeight: number }>();
   let totalConversations = 0;
+  let totalConversationsAvailable = filteredAds.some((a) => a.hasInsights);
 
   filteredAds.forEach((a) => {
     totalSpend += a.spend;
     totalImpressions += a.impressions;
     totalReach += a.reach ?? 0;
-    totalLinkClicks += a.linkClicks;
+    if (a.hasInsights && a.linkClicks === null) totalLinkClicksAvailable = false;
+    totalLinkClicks += a.linkClicks ?? 0;
     totalAllClicks += a.allClicks;
-    totalResults += a.results;
-    totalConversations += a.conversations;
+    for (const detail of (a.resultDetails || []) as Array<{ type: string; label: string; category: string; count: number; costPerResult: number }>) {
+      const current = resultTotals.get(detail.type) || { label: detail.label, category: detail.category, count: 0, weightedCost: 0, costWeight: 0 };
+      current.count += detail.count;
+      current.weightedCost += detail.costPerResult * detail.count;
+      current.costWeight += detail.count;
+      resultTotals.set(detail.type, current);
+    }
+    if (a.hasInsights && a.conversations === null) totalConversationsAvailable = false;
+    totalConversations += a.conversations ?? 0;
   });
 
   totalSpend = Math.round(totalSpend * 100) / 100;
 
-  const weightedLinkCtr = totalImpressions > 0 ? Number(((totalLinkClicks / totalImpressions) * 100).toFixed(2)) : null;
-  const weightedLinkCpc = totalLinkClicks > 0 ? Number((totalSpend / totalLinkClicks).toFixed(2)) : null;
+  const weightedLinkCtr = totalLinkClicksAvailable && totalImpressions > 0 ? Number(((totalLinkClicks / totalImpressions) * 100).toFixed(2)) : null;
+  const weightedLinkCpc = totalLinkClicksAvailable && totalLinkClicks > 0 ? Number((totalSpend / totalLinkClicks).toFixed(2)) : null;
   const weightedAllCtr = totalImpressions > 0 ? Number(((totalAllClicks / totalImpressions) * 100).toFixed(2)) : null;
   const weightedAllCpc = totalAllClicks > 0 ? Number((totalSpend / totalAllClicks).toFixed(2)) : null;
   const weightedCpm = totalImpressions > 0 ? Number(((totalSpend / totalImpressions) * 1000).toFixed(2)) : null;
+  const resultBreakdown = Array.from(resultTotals.entries()).map(([type, item]) => ({ type, ...item, costPerResult: item.costWeight ? Number((item.weightedCost / item.costWeight).toFixed(2)) : null }));
+  // Match the exact result total used by the daily trend chart. Action
+  // breakdowns decorate this number; they never suppress or replace it.
+  const totalResults = filteredDailyTrend.reduce(
+    (sum, point) => sum + (point.results > 0 ? point.results : point.conversations ?? 0),
+    0
+  );
   const costPerResult = totalResults > 0 ? Number((totalSpend / totalResults).toFixed(2)) : null;
-  const totalReachDays = new Set(
-    filteredAds.flatMap((a) => Array.from(adReachDates.get(a.id) ?? []))
-  ).size;
-  const frequency =
-    totalReachDays <= 1 && totalReach > 0
-      ? Number((totalImpressions / totalReach).toFixed(2))
-      : null;
-
   const activeCampaignsCount = campaignsSummary.filter((c) => c.status === "ACTIVE").length;
   const pausedCampaignsCount = campaignsSummary.filter((c) => c.status === "PAUSED").length;
   const archivedCampaignsCount = campaignsSummary.filter((c) => c.status === "ARCHIVED").length;
   const otherCampaignsCount = campaignsSummary.length - activeCampaignsCount - pausedCampaignsCount - archivedCampaignsCount;
 
   const deliveringAdsCount = allAds.filter((a) => a.deliveryStatus === "DELIVERING").length;
+  const classifiedAdsCount = allAds.filter((a) => Boolean(a.campaignObjective) && a.hasInsights).length;
   const notDeliveringAdsCount = allAds.filter((a) => a.deliveryStatus === "NOT_DELIVERING").length;
   const unknownDeliveryAdsCount = allAds.filter((a) => a.deliveryStatus === "UNKNOWN").length;
 
@@ -708,6 +824,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
 
   return {
     insightsState,
+    accountMetricsState,
     organizationId,
     organizationName: orgName,
     adAccount: effectiveAccount
@@ -735,15 +852,19 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     kpis: {
       totalSpend,
       totalResults,
-      totalConversations,
-      resultsContainNonConversationActions: totalResults > totalConversations,
+      resultBreakdown,
+      totalConversations: totalConversationsAvailable ? totalConversations : null,
+      resultsContainNonConversationActions: totalResults !== null && totalResults > totalConversations,
       conversationDataIncomplete: untypedConversionRows > 0,
       costPerResult,
-      totalReach: filteredAds.some((a) => a.reach === null) ? null : totalReach,
+      totalReach: accountLevelReach,
       totalImpressions,
-      frequency,
+      frequency: accountLevelFrequency,
+      // Legacy API field, retained for contract compatibility only. No UI or
+      // test consumes it (traced 2026-10-31); it is NOT a unique reach and
+      // must never be displayed as one. Removal needs a separate API change.
       totalAdReachAccumulated: totalReach,
-      linkClicks: totalLinkClicks,
+      linkClicks: totalLinkClicksAvailable ? totalLinkClicks : null,
       linkCtr: weightedLinkCtr,
       linkCpc: weightedLinkCpc,
       allClicks: totalAllClicks,
@@ -751,14 +872,15 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       allCpc: weightedAllCpc,
       cpm: weightedCpm,
       currency,
-      resultLabel: totalConversations === totalResults && totalResults > 0 ? "Percakapan" : "Hasil",
-      resultTypeDescription: untypedConversionRows > 0 && totalResults > 0 ? "Sebagian jenis hasil belum teridentifikasi" : null,
+      resultLabel: resultBreakdown.length === 1 ? resultBreakdown[0].label : "Hasil",
+      resultTypeDescription: resultBreakdown.slice(0, 2).map((item) => `${item.count} ${item.label}`).join(" · ") || null,
       totalCampaigns: campaignsSummary.length,
       activeCampaigns: activeCampaignsCount,
       pausedCampaigns: pausedCampaignsCount,
       archivedCampaigns: archivedCampaignsCount,
       otherCampaigns: otherCampaignsCount,
       totalAds: allAds.length,
+      classifiedAds: classifiedAdsCount,
       deliveringAds: deliveringAdsCount,
       notDeliveringAds: notDeliveringAdsCount,
       unknownDeliveryAds: unknownDeliveryAdsCount,
@@ -805,6 +927,7 @@ export interface AdDetailResponseData {
     status: "ACTIVE" | "PAUSED" | "ARCHIVED" | "DELETED" | "UNKNOWN";
     statusLabel: string;
     objective: string | null;
+    objectiveLabel: string;
   };
   delivery: {
     deliveryStatus: "DELIVERING" | "NOT_DELIVERING" | "UNKNOWN";
@@ -814,19 +937,30 @@ export interface AdDetailResponseData {
   metrics: {
     spend: number;
     impressions: number;
-    reach: number;
+    /** Null when reach is unavailable or spans multiple days (unique reach cannot be summed). */
+    reach: number | null;
     frequency: number | null;
-    linkClicks: number;
+    linkClicks: number | null;
     linkCtr: number | null;
     linkCpc: number | null;
     allClicks: number;
     allCtr: number | null;
     allCpc: number | null;
     cpm: number | null;
-    results: number;
+    results: number | null;
+    resultMetricValue: number | null;
+    resultMetricLabel: string;
+    resultMetricCostPerResult: number | null;
+    resultMetricKind: ReturnType<typeof resolveAdResultMetric>["kind"];
+    resultMetricUnitLabel: string;
     resultLabel: string;
     resultTypeDescription: string | null;
-    conversations: number;
+    conversations: number | null;
+    /** BL-01: separated result types and their per-type costs. */
+    messagingConversations: number | null;
+    leads: number | null;
+    costPerMessagingConversation: number | null;
+    costPerLead: number | null;
     resultActionTypes: string[];
     costPerResult: number | null;
     currency: string;
@@ -839,7 +973,11 @@ export interface AdDetailResponseData {
  * Retrieves authentic, tenant-isolated ad details, delivery reconciliation, and Meta relevance diagnostics.
  * ID can be internal database UUID or Meta provider_ad_id.
  */
-export async function getAdDetailById(organizationId: string, id: string): Promise<
+export async function getAdDetailById(
+  organizationId: string,
+  id: string,
+  options?: { dateRange?: string }
+): Promise<
   | { success: true; data: AdDetailResponseData }
   | { success: false; error: string; code: "NOT_FOUND" | "FORBIDDEN" | "DB_ERROR" }
 > {
@@ -897,17 +1035,20 @@ export async function getAdDetailById(organizationId: string, id: string): Promi
     status: "UNKNOWN" as "ACTIVE" | "PAUSED" | "ARCHIVED" | "DELETED" | "UNKNOWN",
     statusLabel: "Tidak diketahui",
     objective: null as string | null,
+    objectiveLabel: "",
   };
 
+  let campaignAccountId: string | null = null;
   if (ad.campaign_id) {
     const { data: cmp } = await db
       .from("campaigns")
-      .select("id, provider_campaign_id, name, status, objective")
+      .select("id, provider_campaign_id, name, status, objective, ad_account_id")
       .eq("id", ad.campaign_id)
       .eq("organization_id", organizationId)
       .maybeSingle();
 
     if (cmp) {
+      campaignAccountId = cmp.ad_account_id || null;
       const rawCmpStatus = (cmp.status || "UNKNOWN").toUpperCase();
       let cmpStatusLabel = "Tidak diketahui";
       if (rawCmpStatus === "ACTIVE") cmpStatusLabel = "Aktif";
@@ -922,64 +1063,70 @@ export async function getAdDetailById(organizationId: string, id: string): Promi
         status: rawCmpStatus as "ACTIVE" | "PAUSED" | "ARCHIVED" | "DELETED" | "UNKNOWN",
         statusLabel: cmpStatusLabel,
         objective: cmp.objective || null,
+        objectiveLabel: translateMetaTerm(cmp.objective),
       };
     }
   }
 
-  // 4. Query Aggregated Insights for this Ad
-  const queryAdInsights = () => db
-    .from("ad_insights")
-    .select("*")
-    .eq("ad_id", ad.id)
-    .eq("organization_id", organizationId);
+  // 4. Query Aggregated Insights for this Ad, bounded to the SAME period the
+  // dashboard is showing. The account timezone comes from the ad's own
+  // account (never another tenant's), matching parseDateRange on the list.
+  let accountTimezone = "UTC";
+  if (campaignAccountId) {
+    const { data: accountRow } = await db
+      .from("ad_accounts")
+      .select("timezone")
+      .eq("id", campaignAccountId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (accountRow?.timezone) accountTimezone = accountRow.timezone;
+  }
+  const detailRange = parseDateRange(options?.dateRange, accountTimezone);
+  const queryAdInsights = () => {
+    let query = db
+      .from("ad_insights")
+      .select("*")
+      .eq("ad_id", ad.id)
+      .eq("organization_id", organizationId);
+    if (detailRange.since && detailRange.until) {
+      query = query.gte("date_start", detailRange.since).lte("date_stop", detailRange.until);
+    }
+    return query;
+  };
   const { data: insights, error: insightError } = await queryAdInsights();
   if (insightError) return { success: false, error: `Gagal memuat detail metrik: ${insightError.message}`, code: "DB_ERROR" };
 
-  let spend = 0;
-  let impressions = 0;
-  let reach = 0;
-  let linkClicks = 0;
-  let allClicks = 0;
-  let results = 0;
-  let conversations = 0;
+  // Shared aggregation (AI-02): identical math to the dashboard and AI
+  // analysis. Reach is NOT summed across days; result types stay separate.
+  const agg = aggregateAdInsights(insights || []);
+  const spend = agg.spend;
+  const impressions = agg.impressions;
+  const reach = agg.reach;
+  const linkClicks = agg.linkClicks;
+  const allClicks = agg.allClicks;
+  const results = agg.results;
+  const conversations = agg.messagingConversations;
   const resultActionTypes = new Set<string>();
-  const reachDates = new Set<string>();
   let currency = "";
   let earliestDate: string | null = null;
   let latestDate: string | null = null;
 
   (insights || []).forEach((ins) => {
-    spend += Number(ins.spend) || 0;
-    impressions += Number(ins.impressions) || 0;
-    reach += Number(ins.reach) || 0;
-    linkClicks += Number(ins.link_clicks) || 0;
-    allClicks += Number(ins.clicks) || 0;
-    results += Number(ins.conversions) || 0;
-    if (ins.conversion_action_type) {
-      resultActionTypes.add(ins.conversion_action_type);
-      if (ins.conversion_action_type.includes("messaging_conversation_started")) conversations += Number(ins.conversions) || 0;
-    }
+    if (ins.conversion_action_type) resultActionTypes.add(ins.conversion_action_type);
     if (ins.currency) currency = ins.currency;
-
-    if (ins.date_start) {
-      reachDates.add(ins.date_start);
-      if (!earliestDate || ins.date_start < earliestDate) earliestDate = ins.date_start;
-    }
-    if (ins.date_stop) {
-      if (!latestDate || ins.date_stop > latestDate) latestDate = ins.date_stop;
-    }
+    if (ins.date_start && (!earliestDate || ins.date_start < earliestDate)) earliestDate = ins.date_start;
+    if (ins.date_stop && (!latestDate || ins.date_stop > latestDate)) latestDate = ins.date_stop;
   });
 
-  spend = Math.round(spend * 100) / 100;
-  const linkCtr = impressions > 0 ? Number(((linkClicks / impressions) * 100).toFixed(2)) : null;
-  const linkCpc = linkClicks > 0 ? Number((spend / linkClicks).toFixed(2)) : null;
-  const allCtr = impressions > 0 ? Number(((allClicks / impressions) * 100).toFixed(2)) : null;
-  const allCpc = allClicks > 0 ? Number((spend / allClicks).toFixed(2)) : null;
-  const cpm = impressions > 0 ? Number(((spend / impressions) * 1000).toFixed(2)) : null;
-  const costPerResult = results > 0 ? Number((spend / results).toFixed(2)) : null;
-  const frequency =
-    reachDates.size <= 1 && reach > 0 ? Number((impressions / reach).toFixed(2)) : null;
-  const classification = classifyResult(results, Array.from(resultActionTypes), campaign.objective);
+  const linkCtr = agg.linkCtr;
+  const linkCpc = agg.linkCpc;
+  const allCtr = agg.allCtr;
+  const allCpc = agg.allCpc;
+  const cpm = agg.cpm;
+  const costPerResult = agg.costPerResult;
+  const frequency = agg.frequency;
+  const resultMetric = resolveAdResultMetric({ spend, impressions, conversions: results, linkClicks, clicks: allClicks, objective: campaign.objective });
+  const classification = classifyResult(results ?? 0, Array.from(resultActionTypes), campaign.objective);
 
   // 5. Strict Status Standardization (Section 2)
   const adRawStatus = (ad.status || "ACTIVE").toUpperCase();
@@ -1050,9 +1197,18 @@ export async function getAdDetailById(organizationId: string, id: string): Promi
       allCpc,
       cpm,
       results,
+      resultMetricValue: resultMetric.value,
+      resultMetricLabel: resultMetric.label,
+      resultMetricCostPerResult: resultMetric.costPerResult,
+      resultMetricKind: resultMetric.kind,
+      resultMetricUnitLabel: resultMetric.unitLabel,
       resultLabel: classification.resultLabel,
       resultTypeDescription: classification.resultTypeDescription,
       conversations,
+      messagingConversations: agg.messagingConversations,
+      leads: agg.leads,
+      costPerMessagingConversation: agg.costPerMessagingConversation,
+      costPerLead: agg.costPerLead,
       resultActionTypes: Array.from(resultActionTypes),
       costPerResult,
       currency,

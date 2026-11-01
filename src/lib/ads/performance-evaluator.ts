@@ -90,6 +90,19 @@ export interface PerformanceEvaluationResult {
   }>;
 }
 
+function formatRupiah(value: number): string {
+  return `Rp ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Math.round(value))}`;
+}
+
+function formatIdPercent(value: number): string {
+  return `${new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`;
+}
+
+function forceIndonesianLocale(_requestedLocale: "id" | "en" | undefined): "id" | "en" {
+  void _requestedLocale;
+  return "id";
+}
+
 /**
  * Calculates deterministic metric comparison between current and previous periods.
  * Strictly prevents Infinity or NaN when previous baseline is 0 or null.
@@ -99,19 +112,17 @@ export function calculateMetricComparison(
   previous: number | null | undefined,
   locale: "id" | "en" = "id"
 ): MetricComparison {
+  void locale;
   const curr = current !== null && current !== undefined && !Number.isNaN(current) ? current : null;
   const prev = previous !== null && previous !== undefined && !Number.isNaN(previous) ? previous : null;
 
   if (curr === null || prev === null || prev === 0) {
-    const isBaselineZero = prev === 0;
     return {
       current: curr,
       previous: prev,
       absoluteDelta: curr !== null && prev !== null ? Number((curr - prev).toFixed(2)) : null,
       percentageDelta: null,
-      displayDelta: isBaselineZero
-        ? locale === "en" ? "Baseline 0" : "Pembanding 0"
-        : "—",
+      displayDelta: "Belum ada data di periode pembanding",
       isDefined: false,
     };
   }
@@ -125,7 +136,7 @@ export function calculateMetricComparison(
     previous: prev,
     absoluteDelta: abs,
     percentageDelta: pct,
-    displayDelta: `${sign}${locale === "id" ? String(pct).replace(".", ",") : pct}%`,
+    displayDelta: `${sign}${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 }).format(pct)}%`,
     isDefined: true,
   };
 }
@@ -151,7 +162,7 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     locale = "id",
   } = input;
 
-  const loc = locale;
+  const loc = forceIndonesianLocale(locale);
   const uncertaintyNotes: string[] = [];
 
   // 1. Validate Numeric Data Validity & Inconsistencies
@@ -189,8 +200,8 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     if (diff > 0.1) {
       isDataCorrupt = true;
       corruptReason = loc === "en"
-        ? `Reported CPR (Rp ${Math.round(reportedCpr).toLocaleString()}) contradicts total spend / results ratio (Rp ${Math.round(actualCpr).toLocaleString()}).`
-        : `CPR yang dilaporkan (Rp ${Math.round(reportedCpr).toLocaleString("id-ID")}) tidak sesuai dengan rasio total belanja terhadap hasil valid (Rp ${Math.round(actualCpr).toLocaleString("id-ID")}).`;
+        ? `Reported CPR (${formatRupiah(reportedCpr)}) contradicts total spend / results ratio (${formatRupiah(actualCpr)}).`
+        : `CPR yang dilaporkan (${formatRupiah(reportedCpr)}) tidak sesuai dengan rasio total belanja terhadap hasil tercatat (${formatRupiah(actualCpr)}).`;
     }
   }
 
@@ -299,7 +310,7 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     } else if (resultsCondition === "limited") {
       mainReason = loc === "en"
         ? `Observation shows ${results} result(s). Continue monitoring to accumulate at least 5 results before optimizing.`
-        : `Tercatat ${results} hasil. Lanjutkan pemantauan hingga terkumpul minimal 5 hasil sebelum optimasi.`;
+        : `Tercatat ${results} hasil Meta. Lanjutkan pemantauan hingga terkumpul minimal 5 hasil sebelum optimasi.`;
     } else if (midPeriodChange) {
       mainReason = loc === "en"
         ? "Configuration change occurred mid-period. Allow 3–5 days of uninterrupted delivery."
@@ -316,7 +327,7 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
         action = "hentikan_sementara";
         mainReason = loc === "en"
           ? `Ad spend reached ${riskToSpendRatio}x target CPR without verified conversions over ${durationDays} days. Pause temporarily to review creative and offer.`
-          : `Belanja telah mencapai ${riskToSpendRatio}x target CPR tanpa konversi terverifikasi selama ${durationDays} hari. Hentikan sementara untuk review penawaran.`;
+          : `Belanja telah mencapai ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(riskToSpendRatio || 0)}x target CPR tanpa hasil Meta tercatat selama ${durationDays} hari. Jeda sementara untuk meninjau penawaran.`;
       } else {
         action = "pantau";
         mainReason = loc === "en"
@@ -327,8 +338,8 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
       if (actualCpr && effectiveTargetCpr && actualCpr > 1.4 * effectiveTargetCpr && durationDays >= 14) {
         action = "kurangi";
         mainReason = loc === "en"
-          ? `CPR (Rp ${Math.round(actualCpr).toLocaleString()}) consistently exceeds target (Rp ${Math.round(effectiveTargetCpr).toLocaleString()}) over ${durationDays} days. Reduce budget or rotate hook.`
-          : `CPR (Rp ${Math.round(actualCpr).toLocaleString("id-ID")}) konsisten melampaui target (Rp ${Math.round(effectiveTargetCpr).toLocaleString("id-ID")}) selama ${durationDays} hari. Kurangi budget atau rotasi hook.`;
+          ? `CPR (${formatRupiah(actualCpr)}) consistently exceeds target (${formatRupiah(effectiveTargetCpr)}) over ${durationDays} days. Reduce budget or rotate hook.`
+          : `CPR (${formatRupiah(actualCpr)}) konsisten melampaui target (${formatRupiah(effectiveTargetCpr)}) selama ${durationDays} hari. Kurangi anggaran atau rotasi materi iklan.`;
       } else {
         action = "optimasi";
         mainReason = loc === "en"
@@ -338,8 +349,10 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     } else if (performanceStatus === "memenuhi_target") {
       action = "pertahankan";
       mainReason = loc === "en"
-        ? `Performance meets target CPR (Rp ${Math.round(actualCpr || 0).toLocaleString()}) with ${results} verified results.`
-        : `Performa memenuhi target CPR (Rp ${Math.round(actualCpr || 0).toLocaleString("id-ID")}) dengan ${results} hasil terverifikasi.`;
+        ? `Performance meets target CPR (${formatRupiah(actualCpr || 0)}) with ${results} recorded results.`
+        : effectiveTargetCpr
+        ? `Biaya per hasil aktual ${formatRupiah(actualCpr || 0)} berhasil mencapai target yang ditetapkan (Target: ${formatRupiah(effectiveTargetCpr)}) dari total ${results} hasil tercatat.`
+        : `Performa stabil dengan rata-rata Biaya per Hasil ${formatRupiah(actualCpr || 0)} dari total ${results} hasil tercatat (Target CPR belum ditetapkan).`;
     } else {
       action = "pantau";
       mainReason = loc === "en"
@@ -364,13 +377,9 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
   }
 
   // 6. Metadata Transparency (Section F & CRM Separation)
-  const learningStatus = loc === "en"
-    ? "Learning status not available in data source"
-    : "Status Learning tidak tersedia";
+  const learningStatus = "Hanya berlaku pada level Ad Set yang sedang aktif tayang";
 
-  const trackingStatusDisplay = trackingStatus === "verified"
-    ? (loc === "en" ? "Meta Standard Tracking Verified" : "Tracking Standar Meta Terverifikasi")
-    : (loc === "en" ? "Not available in data source" : "Tidak tersedia dalam sumber data");
+  const trackingStatusDisplay = "Meta Ads Insights (Snapshot Tersinkron)";
 
   // CRM Lead Quality Separation Disclaimer
   if (input.leadQualityReported) {
@@ -447,12 +456,19 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
       stop_loss: loc === "en" ? "Only re-enable with refreshed creative angle." : "Aktifkan kembali hanya setelah sudut penawaran diperbarui.",
     });
   } else {
+    const hasFrequency = typeof input.frequency === "number" && Number.isFinite(input.frequency) && input.frequency > 0;
+    const linkCtr = impressions > 0 ? (linkClicks / impressions) * 100 : null;
+    const stopLossCpr = actualCpr === null ? null : Math.round((actualCpr * 1.3) / 100) * 100;
     nextActions.push({
       priority: "medium",
       title: loc === "en" ? "Maintain stable budget" : "Pertahankan budget stabil",
-      why: loc === "en" ? "CPR meets target and frequency is in healthy range." : "CPR memenuhi target dan frekuensi berada di batas sehat.",
+      why: hasFrequency
+        ? `${effectiveTargetCpr ? `CPR aktual ${formatRupiah(actualCpr || 0)} terkendali sesuai target` : `Target CPR belum ditetapkan; CPR aktual ${formatRupiah(actualCpr || 0)}`} dengan frekuensi ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(input.frequency!)}x ${input.frequency! < 2.5 ? "masih di bawah" : "telah mencapai atau melewati"} batas 2,5x.`
+        : `${effectiveTargetCpr ? `Biaya per hasil aktual (${formatRupiah(actualCpr || 0)}) terkendali sesuai target` : `Target CPR belum ditetapkan; biaya per hasil aktual ${formatRupiah(actualCpr || 0)}`} dengan rasio klik tautan (CTR) ${linkCtr === null ? "yang belum dapat dihitung" : `sebesar ${formatIdPercent(linkCtr)}`}.`,
       do: loc === "en" ? "Monitor CPR daily to preserve current efficiency." : "Pantau CPR harian untuk menjaga efisiensi saat ini.",
-      stop_loss: loc === "en" ? "Re-evaluate if frequency exceeds 2.5x." : "Evaluasi ulang jika frekuensi melampaui 2,5x.",
+      stop_loss: hasFrequency
+        ? `Evaluasi ulang jika CPR melewati ${formatRupiah(stopLossCpr || 0)} (+30% dari CPR saat ini) atau frekuensi melampaui 2,5x.`
+        : `Evaluasi ulang atau rotasi materi iklan jika Biaya per Hasil (CPR) melonjak melewati ${formatRupiah(stopLossCpr || 0)} (+30% dari CPR saat ini) atau CTR tautan turun di bawah 0,80%.`,
     });
   }
 

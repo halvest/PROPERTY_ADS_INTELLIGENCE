@@ -120,6 +120,25 @@ export interface MetaInsightResponse {
   date_stop: string; // "YYYY-MM-DD"
 }
 
+/** Account-scoped Insights row returned by /act_<id>/insights?level=account. */
+export interface MetaAccountInsightResponse {
+  spend?: string;
+  impressions?: string;
+  reach?: string;
+  frequency?: string;
+  cpm?: string;
+  inline_link_clicks?: string;
+  inline_link_click_ctr?: string;
+  cost_per_inline_link_click?: string;
+  clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  actions?: Array<{ action_type: string; value: string }>;
+  account_currency?: string;
+  date_start?: string;
+  date_stop?: string;
+}
+
 export interface MetaPagingCursors {
   before?: string;
   after?: string;
@@ -184,18 +203,24 @@ export interface NormalizedAdInsight {
   dateStart: string;
   dateStop: string;
   level: "ad" | "campaign";
-  spend: number;
-  impressions: number;
-  clicks: number;
-  reach?: number;
-  linkClicks?: number;
-  conversions?: number;
+  /** Required metrics: null means Meta did not provide a usable value (row is invalid for persistence). */
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
+  /** Optional metrics: null means not available; 0 means Meta explicitly reported zero. */
+  reach: number | null;
+  linkClicks: number | null;
+  conversions: number | null;
+  /** BL-01: result types kept separate. Null = not reported by Meta. */
+  messagingConversations: number | null;
+  leads: number | null;
   adsetId?: string | null;
   adsetName?: string | null;
   attributionSetting?: string | null;
   currency: string | null;
   source: "meta" | "demo";
   actionBreakdown?: Record<string, number>;
+  costPerActionType?: Record<string, number>;
   conversionActionType?: string | null;
   mappingVersion?: string;
 }
@@ -212,8 +237,20 @@ export interface MarketingSyncResult {
   recordsRejected: number;
   syncedAt: string;
   dateRange?: { since: string; until: string };
+  /** Live account-scoped values returned directly by Meta, independent of DB schema. */
+  accountInsights?: MetaAccountInsightResponse[];
   error?: string;
   syncJobId?: string;
+  /** Additive observability (Phase 1 data integrity). Optional for backward compatibility. */
+  syncDetails?: {
+    insightsReceived: number;
+    insightsValid: number;
+    insightsInvalid: number;
+    insightsUnmapped: number;
+    invalidReasons: Record<string, number>;
+    paginationComplete: boolean;
+    pagesProcessed: number;
+  };
 }
 
 export interface MetaInstagramAccount {

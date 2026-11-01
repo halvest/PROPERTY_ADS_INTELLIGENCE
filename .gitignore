@@ -41,9 +41,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# documentation
-/docs/*
-!/docs/AI_USAGE_QUOTA_MIGRATION_DEPLOYMENT.md
+# local documentation, migrations, and tests
+/docs/
+/supabase/migrations/
+/tests/
 
 # Supabase CLI local metadata
 /supabase/.temp/

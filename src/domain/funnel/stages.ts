@@ -42,6 +42,10 @@ const ALLOWED_TRANSITIONS: Record<FunnelStage, FunnelStage[]> = {
   batal: ["prospek"], // Re-activation possible
 };
 
+export function getAllowedFunnelTransitions(currentStage: FunnelStage): FunnelStage[] {
+  return [...ALLOWED_TRANSITIONS[currentStage]];
+}
+
 /**
  * Pure function to transition a lead's funnel stage.
  * Validates transition rules and logs event history.

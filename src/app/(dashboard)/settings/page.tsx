@@ -19,6 +19,7 @@ export default function SettingsPage() {
   const id = locale === "id";
   const [user, setUser] = useState<{ email: string; confirmed: boolean } | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
+  const [quotaEnabled, setQuotaEnabled] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -38,7 +39,10 @@ export default function SettingsPage() {
       setUser({ email: auth.data.user.email || "", confirmed: Boolean(auth.data.user.email_confirmed_at) });
       setEmail(auth.data.user.email || "");
     }
-    if (usage?.success) setQuota(usage.data);
+    if (usage?.success) {
+      setQuotaEnabled(usage.data.enabled !== false);
+      setQuota(usage.data.enabled === false ? null : usage.data);
+    }
     setLoading(false);
   }, []);
 
@@ -96,8 +100,8 @@ export default function SettingsPage() {
       <MetaAssetOnboarding />
     </Card>
 
-    <Card title={id ? "Penggunaan AI" : "AI Usage"} description={id ? "Paket Free mencakup maksimal 3 analisis sukses dalam setiap periode 7 hari." : "The Free plan includes up to 3 successful analyses in each rolling 7-day period."}>
-      {!quota ? <p className="text-sm text-zinc-500">{loading ? (id ? "Memuat penggunaan…" : "Loading usage…") : (id ? "Penggunaan belum dapat dimuat. Coba segarkan halaman." : "Usage could not be loaded. Refresh the page to try again.")}</p> : <div className="space-y-4">
+    <Card title={id ? "Penggunaan AI" : "AI Usage"} description={quotaEnabled === false ? (id ? "Pembatasan analisis sementara dinonaktifkan selama mode testing." : "Analysis limits are temporarily disabled during testing.") : (id ? "Paket Free mencakup maksimal 3 analisis sukses dalam setiap periode 7 hari." : "The Free plan includes up to 3 successful analyses in each rolling 7-day period.")}>
+      {quotaEnabled === false ? <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">{id ? "Kuota per pengguna sedang dinonaktifkan. Analisis AI dapat dijalankan tanpa batas selama pengujian." : "Per-user quota is disabled. AI analysis can run without a limit during testing."}</div> : !quota ? <p className="text-sm text-zinc-500">{loading || quotaEnabled === null ? (id ? "Memuat penggunaan…" : "Loading usage…") : (id ? "Penggunaan belum dapat dimuat. Coba segarkan halaman." : "Usage could not be loaded. Refresh the page to try again.")}</p> : <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">Free</span><p className="mt-3 text-lg font-semibold text-zinc-900 dark:text-zinc-100">{id ? `${quota.used} dari ${quota.limit} analisis digunakan` : `${quota.used} of ${quota.limit} analyses used`}</p><p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{id ? `Sisa ${quota.remaining} analisis${quota.reserved ? ` · ${quota.reserved} sedang diproses` : ""}` : `${quota.remaining} analyses remaining${quota.reserved ? ` · ${quota.reserved} in progress` : ""}`}</p></div><span className={`rounded-full px-3 py-1 text-xs font-semibold ${quota.remaining > 0 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" : "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300"}`}>{quota.remaining > 0 ? (id ? "Kuota tersedia" : "Available") : (id ? "Kuota habis" : "Limit reached")}</span></div>
         <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"><div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${Math.min(100, ((quota.used + quota.reserved) / quota.limit) * 100)}%` }}/></div>
         <p className="text-xs text-zinc-500 dark:text-zinc-400">{id ? "Penggunaan berikutnya tersedia" : "Next analysis available"}: <span className="font-medium text-zinc-700 dark:text-zinc-300">{fmt(quota.resetAt)}</span></p>

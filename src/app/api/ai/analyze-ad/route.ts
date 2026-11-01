@@ -5,6 +5,8 @@ import { isMetaModelApiConfigured, maskApiKey, getMetaConfig } from "@/lib/ai/me
 import { MetaModelApiClient } from "@/lib/ai/meta/client";
 import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
+import { aggregateAdInsights, type AdInsightRowLike, type AdMetricsAggregate } from "@/lib/ads/aggregation";
+import { parseDateRange } from "@/lib/ads/date-utils";
 
 // Request Schema
 const AnalyzeAdRequestSchema = z.object({
@@ -13,10 +15,12 @@ const AnalyzeAdRequestSchema = z.object({
   campaignName: z.string().optional(),
   campaignObjective: z.string().nullable().optional(),
   status: z.string().optional(),
+  /** Dashboard period preset (e.g. "7d", "30d", "all" or "YYYY-MM-DD:YYYY-MM-DD"). */
+  dateRange: z.string().optional(),
   metrics: z.object({
     spend: z.number().default(0),
     impressions: z.number().default(0),
-    reach: z.number().default(0),
+    reach: z.number().nullable().default(null),
     linkClicks: z.number().default(0),
     allClicks: z.number().default(0),
     linkCtr: z.number().nullable().optional(),
@@ -26,12 +30,18 @@ const AnalyzeAdRequestSchema = z.object({
     cpm: z.number().nullable().optional(),
     results: z.number().default(0),
     costPerResult: z.number().nullable().optional(),
+    /** BL-01 separated result types (server-filled; client values are overwritten). */
+    messagingConversations: z.number().nullable().optional(),
+    leads: z.number().nullable().optional(),
+    costPerMessagingConversation: z.number().nullable().optional(),
+    costPerLead: z.number().nullable().optional(),
     resultType: z.string().optional().default("Percakapan WhatsApp / Hasil"),
     resultsTrackingStatus: z
       .enum(["TERVERIFIKASI ADA", "TERVERIFIKASI NOL", "BELUM TERVERIFIKASI", "DATA TIDAK KONSISTEN"])
       .optional(),
     attributedLeads: z.number().default(0),
-    qualifiedLeads: z.number().default(0),
+    /** Legacy field: lead quality is not available from a verified source; server always sets null. */
+    qualifiedLeads: z.number().nullable().default(null),
     costPerQualifiedLead: z.number().nullable().optional(),
     // Backward compatibility aliases
     clicks: z.number().optional(),
@@ -301,7 +311,7 @@ export function buildCoreMetrics(params: {
 export function buildVerifiedMetricsSummary(params: {
   spend: number;
   impressions: number;
-  reach: number;
+  reach: number | null;
   linkClicks: number;
   allClicks: number;
   linkCtr?: number | null;
@@ -360,8 +370,8 @@ export function buildVerifiedMetricsSummary(params: {
     {
       id: "reach",
       label: "Jangkauan (Reach)",
-      rawValue: reach > 0 ? reach : null,
-      formattedValue: reach > 0 ? `${reach.toLocaleString("id-ID")} orang` : "Tidak tersedia",
+      rawValue: reach !== null && reach > 0 ? reach : null,
+      formattedValue: reach !== null && reach > 0 ? `${reach.toLocaleString("id-ID")} orang` : "Tidak tersedia",
       plainExplanation: "Jumlah individu unik yang melihat materi iklan properti ini.",
     },
     {
@@ -734,13 +744,13 @@ function generateDeterministicAdAnalysis(
     ],
     unknowns: [
       "Jumlah prospek yang tidak dicatat atau diunggah ke CRM tidak tersedia untuk analisis.",
-      reach === 0 ? "Jumlah individu unik yang dijangkau." : "",
+      reach === null || reach === 0 ? "Jumlah individu unik yang dijangkau." : "",
       context.crmSurveysCount === 0 ? "Belum ada catatan survei lokasi di data CRM yang tersedia." : "",
     ].filter(Boolean),
     allMetrics: [
       { label: "Total Belanja", value: formatRupiah(spend), explanation: "Biaya resmi dari platform Meta." },
       { label: "Tayangan (Impressions)", value: `${impressions.toLocaleString("id-ID")} kali`, explanation: "Frekuensi materi iklan tampil di layar." },
-      { label: "Jangkauan (Reach)", value: reach > 0 ? `${reach.toLocaleString("id-ID")} orang` : "Tidak tersedia", explanation: "Jumlah orang unik yang melihat iklan." },
+      { label: "Jangkauan (Reach)", value: reach !== null && reach > 0 ? `${reach.toLocaleString("id-ID")} orang` : "Tidak tersedia", explanation: "Jumlah orang unik yang melihat iklan (multi-hari tidak dijumlahkan)." },
       { label: "Klik Tautan", value: `${linkClicks.toLocaleString("id-ID")} klik`, explanation: "Klik tombol/tautan menuju WhatsApp." },
       { label: "Semua Klik", value: `${allClicks.toLocaleString("id-ID")} interaksi`, explanation: "Seluruh interaksi sentuhan pada postingan iklan." },
       { label: "CTR Tautan", value: linkCtr !== null ? `${linkCtr}%` : "Tidak dapat dihitung", explanation: "Persentase klik tautan dari total tayangan." },
@@ -849,6 +859,16 @@ export async function POST(request: NextRequest) {
     }
 
     let data = parseResult.data;
+    // AI-02/AI-03: shared-aggregation result and explicit analysis period,
+    // filled during server ground-truth sourcing below.
+    let analysisAggregate: AdMetricsAggregate | null = null;
+    let analysisPeriod: { since: string | null; until: string | null; days: number; timezone: string; label: string } = {
+      since: null,
+      until: null,
+      days: 0,
+      timezone: "Asia/Jakarta",
+      label: "Semua data tersimpan",
+    };
 
     // Client-supplied metrics are not ground truth. Every analysis requires a
     // server-verified ad ID within the caller's tenant.
@@ -920,37 +940,70 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Fetch authentic persisted insights from database
-      const { data: insights } = await supabase
-        .from("ad_insights")
-        .select("spend, impressions, clicks, reach, link_clicks, conversions, currency, date_start, date_stop")
-        .eq("ad_id", verifiedAd.id)
-        .eq("organization_id", organizationId);
+      // Fetch authentic persisted insights from database, aggregated with the
+      // SAME shared aggregation as the dashboard (AI-02). An explicit period
+      // from the caller is resolved in the ad account's timezone; without a
+      // period, all stored rows are used and labelled as such.
+      const { data: campRow } = await supabase
+        .from("campaigns")
+        .select("ad_account_id")
+        .eq("id", verifiedAd.campaign_id)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      let accountTimezone = "Asia/Jakarta";
+      if (campRow?.ad_account_id) {
+        const { data: accRow } = await supabase
+          .from("ad_accounts")
+          .select("timezone")
+          .eq("id", campRow.ad_account_id)
+          .eq("organization_id", organizationId)
+          .maybeSingle();
+        if (accRow?.timezone) accountTimezone = accRow.timezone;
+      }
+      const range = parseDateRange(data.dateRange, accountTimezone);
+      const buildInsightsQuery = (columns: string) => {
+        let q = supabase
+          .from("ad_insights")
+          .select(columns)
+          .eq("ad_id", verifiedAd.id)
+          .eq("organization_id", organizationId);
+        if (range.since) q = q.gte("date_start", range.since);
+        if (range.until) q = q.lte("date_stop", range.until);
+        return q;
+      };
+      // action_breakdown/conversion_action_type arrive with migration
+      // 20261027000000, which is not applied everywhere yet. If the schema
+      // lacks them, fall back to the core columns instead of failing the
+      // whole analysis (messaging/leads then stay unavailable, not zeroed
+      // from a failed query).
+      let insightsResult = await buildInsightsQuery("spend, impressions, clicks, reach, link_clicks, conversions, action_breakdown, conversion_action_type, currency, date_start, date_stop");
+      if (insightsResult.error) {
+        insightsResult = await buildInsightsQuery("spend, impressions, clicks, reach, link_clicks, conversions, currency, date_start, date_stop");
+      }
+      const insights = (insightsResult.data || []) as unknown as AdInsightRowLike[];
 
-      let serverSpend = 0;
-      let serverImpressions = 0;
-      let serverReach = 0;
-      let serverLinkClicks = 0;
-      let serverAllClicks = 0;
-      let serverConversions = 0;
+      const agg: AdMetricsAggregate = aggregateAdInsights(insights || []);
+      analysisAggregate = agg;
+      analysisPeriod = {
+        since: range.since || null,
+        until: range.until || null,
+        days: agg.days,
+        timezone: accountTimezone,
+        label: range.since && range.until ? `${range.since} s.d. ${range.until}` : "Semua data tersimpan",
+      };
 
-      (insights || []).forEach((ins) => {
-        serverSpend += Number(ins.spend) || 0;
-        serverImpressions += Number(ins.impressions) || 0;
-        serverReach += Number(ins.reach) || 0;
-        serverLinkClicks += Number(ins.link_clicks) || 0;
-        serverAllClicks += Number(ins.clicks) || 0;
-        serverConversions += Number(ins.conversions) || 0;
-      });
-
-      serverSpend = Math.round(serverSpend * 100) / 100;
-
-      const serverLinkCtr = serverImpressions > 0 ? Number(((serverLinkClicks / serverImpressions) * 100).toFixed(2)) : null;
-      const serverLinkCpc = serverLinkClicks > 0 ? Number((serverSpend / serverLinkClicks).toFixed(2)) : null;
-      const serverAllCtr = serverImpressions > 0 ? Number(((serverAllClicks / serverImpressions) * 100).toFixed(2)) : null;
-      const serverAllCpc = serverAllClicks > 0 ? Number((serverSpend / serverAllClicks).toFixed(2)) : null;
-      const serverCpm = serverImpressions > 0 ? Number(((serverSpend / serverImpressions) * 1000).toFixed(2)) : null;
-      const serverCostPerResult = serverConversions > 0 ? Number((serverSpend / serverConversions).toFixed(2)) : null;
+      const serverSpend = agg.spend;
+      const serverImpressions = agg.impressions;
+      const serverReach = agg.reach;
+      const serverLinkClicks = agg.linkClicks ?? 0;
+      const serverAllClicks = agg.allClicks;
+      const serverConversions = agg.results ?? 0;
+      const serverLinkCtr = agg.linkCtr;
+      const serverLinkCpc = agg.linkCpc;
+      const serverAllCtr = agg.allCtr;
+      const serverAllCpc = agg.allCpc;
+      const serverCpm = agg.cpm;
+      const serverCostPerResult = agg.costPerResult;
 
       // Query CRM leads count
       const { count: leadsCount } = await supabase
@@ -992,18 +1045,11 @@ export async function POST(request: NextRequest) {
           crmClosingsCount++;
       });
 
-      // Qualified leads must come from server assessments, not client input.
-      let serverQualifiedLeads = 0;
-      if (adConvIds.length) {
-        const { data: assessments } = await supabase
-          .from("lead_assessments")
-          .select("buyer_score, conversation_id")
-          .eq("organization_id", organizationId)
-          .in("conversation_id", adConvIds);
-        serverQualifiedLeads = (assessments || []).filter(
-          (a) => a.buyer_score !== null && Number(a.buyer_score) >= 70
-        ).length;
-      }
+      // Lead quality is NOT AVAILABLE from a verified source: Buyer Score is
+      // legacy/out-of-scope and quality_label has no agreed qualified
+      // definition. Qualified leads and CPQL are therefore never claimed
+      // here (qualifiedLeads stays null). CRM counts below are raw recorded
+      // prospects/outcomes, not quality judgments.
 
       const campaignData = verifiedAd.campaigns as { id?: string; name?: string; objective?: string } | null;
 
@@ -1026,9 +1072,13 @@ export async function POST(request: NextRequest) {
           cpm: serverCpm,
           results: serverConversions,
           costPerResult: serverCostPerResult,
+          messagingConversations: agg.messagingConversations,
+          leads: agg.leads,
+          costPerMessagingConversation: agg.costPerMessagingConversation,
+          costPerLead: agg.costPerLead,
           resultType: "Hasil Meta",
           attributedLeads: crmLeadsCount || 0,
-          qualifiedLeads: serverQualifiedLeads,
+          qualifiedLeads: null,
         },
       };
     }
@@ -1068,7 +1118,9 @@ export async function POST(request: NextRequest) {
         resetAt: reservation.resetAt,
       }, { status: limitReached ? 429 : 409 });
     }
-    quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    if (reservation.reservationId) {
+      quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    }
     const releaseReservation = async (code: string) => {
       if (!quotaReservation) return;
       await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, code);
@@ -1154,21 +1206,40 @@ HASILKAN OUTPUT JSON MURNI DENGAN STRUKTUR:
   }
 }`;
 
-        const userPrompt = `Analisis performa iklan properti CTWA berikut:
+        const fmtOrNA = (value: number | null | undefined, format: (v: number) => string) =>
+          value !== null && value !== undefined ? format(value) : "Tidak tersedia";
+        const userPrompt = `Analisis performa iklan Meta berikut berdasarkan data aktual yang tersedia:
 Nama Iklan: "${data.adName}"
 Kampanye: "${data.campaignName || "Kampanye Properti"}"
 Objektif Kampanye: "${data.campaignObjective || "Belum ditentukan"}"
 Status: ${data.status || "ACTIVE"}
+Periode Analisis: ${analysisPeriod.label} (${analysisPeriod.days} hari observasi, timezone ${analysisPeriod.timezone})
+Jumlah Baris Data: ${analysisAggregate?.rowCount ?? 0} baris insights harian
 
 Data Metrik Aktual:
 - Belanja Iklan: ${formatRupiah(data.metrics.spend)}
 - Penayangan (Impressions): ${data.metrics.impressions.toLocaleString("id-ID")} kali
+- Jangkauan (Reach): ${fmtOrNA(data.metrics.reach, (v) => `${v.toLocaleString("id-ID")} orang`)} (reach multi-hari tidak dijumlahkan sebagai reach unik)
+- Frekuensi: ${fmtOrNA(analysisAggregate?.frequency, (v) => `${v}x`)}
 - Klik Tautan (Link Clicks): ${data.metrics.linkClicks.toLocaleString("id-ID")} klik tautan
-- CPC Tautan: ${data.metrics.linkCpc !== null && data.metrics.linkCpc !== undefined ? `${formatRupiah(data.metrics.linkCpc)} / klik` : "Tidak dapat dihitung"}
-- Hasil menurut Meta: ${data.metrics.results !== null ? `${data.metrics.results.toLocaleString("id-ID")} hasil` : "Tidak tersedia"}
+- CTR Tautan: ${fmtOrNA(data.metrics.linkCtr, (v) => `${v}%`)}
+- CPC Tautan: ${fmtOrNA(data.metrics.linkCpc, (v) => `${formatRupiah(v)} / klik`)}
+- CPM: ${fmtOrNA(data.metrics.cpm, (v) => formatRupiah(v))}
+- Percakapan Messaging (Meta): ${fmtOrNA(data.metrics.messagingConversations, (v) => `${v.toLocaleString("id-ID")} percakapan`)}
+- Biaya per Percakapan Messaging: ${fmtOrNA(data.metrics.costPerMessagingConversation, (v) => formatRupiah(v))}
+- Leads (Meta): ${fmtOrNA(data.metrics.leads, (v) => `${v.toLocaleString("id-ID")} lead`)}
+- Biaya per Lead: ${fmtOrNA(data.metrics.costPerLead, (v) => formatRupiah(v))}
 - Prospek dari data yang dimasukkan/diunggah klien: ${crmLeadsCount !== null ? `${crmLeadsCount.toLocaleString("id-ID")} prospek` : "Belum tersedia"}
 - Jadwal Survei CRM: ${crmSurveysCount} survei
 - Closing Transaksi: ${crmClosingsCount} transaksi
+- Kualitas Lead / CPQL: Tidak tersedia (tidak ada sumber kualitas lead yang terverifikasi; jangan menyimpulkan kualitas lead)
+
+ATURAN INTERPRETASI WAJIB:
+- Percakapan messaging dan leads adalah jenis hasil berbeda; jangan menyamakannya.
+- Nilai "Tidak tersedia" berarti data tidak ada, bukan nol.
+- Jangan mengarang benchmark industri, target CPR, atau fase Learning.
+- Jangan menyimpulkan kualitas lead, kualitas buyer, atau performa sales.
+- Bila jumlah observasi kecil, nyatakan keterbatasan data dan hindari rekomendasi menghentikan iklan tanpa dasar yang cukup.
 
 Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan menyamakan hasil Meta dengan jumlah prospek CRM.`;
 
@@ -1272,7 +1343,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
         const allMetricsDetailed = [
           { label: "Total Belanja", value: formatRupiah(data.metrics.spend), explanation: "Biaya resmi yang ditagihkan platform Meta." },
           { label: "Tayangan (Impressions)", value: `${data.metrics.impressions.toLocaleString("id-ID")} kali`, explanation: "Frekuensi materi iklan tampil di layar pengguna." },
-          { label: "Jangkauan (Reach)", value: data.metrics.reach > 0 ? `${data.metrics.reach.toLocaleString("id-ID")} orang` : "Tidak tersedia", explanation: "Jumlah pengguna unik yang melihat iklan." },
+          { label: "Jangkauan (Reach)", value: data.metrics.reach !== null && data.metrics.reach > 0 ? `${data.metrics.reach.toLocaleString("id-ID")} orang` : "Tidak tersedia", explanation: "Jumlah pengguna unik yang melihat iklan (hanya valid satu hari; multi-hari tidak dijumlahkan)." },
           { label: "Klik Tautan", value: `${data.metrics.linkClicks.toLocaleString("id-ID")} klik`, explanation: "Klik tombol/tautan spesifik menuju WhatsApp." },
           { label: "Semua Klik", value: `${data.metrics.allClicks.toLocaleString("id-ID")} interaksi`, explanation: "Seluruh sentuhan interaksi pada postingan iklan." },
           { label: "CTR Tautan", value: data.metrics.linkCtr !== null ? `${data.metrics.linkCtr}%` : "Tidak dapat dihitung", explanation: "Persentase penonton yang menekan tautan." },
@@ -1316,7 +1387,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
           },
         };
 
-        if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+        if (reservation.reservationId && !(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
           return NextResponse.json({ success: false, error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.", code: "QUOTA_COMMIT_FAILED" }, { status: 503 });
         }
         quotaReservation = null;

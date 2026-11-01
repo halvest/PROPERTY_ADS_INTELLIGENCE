@@ -168,7 +168,9 @@ export async function POST(request: Request) {
         resetAt: reservation.resetAt,
       }, { status: limitReached ? 429 : 409 });
     }
-    quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    if (reservation.reservationId) {
+      quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    }
 
     const evidence = await extractLeadEvidence(
       {
@@ -237,7 +239,7 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+    if (reservation.reservationId && !(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
       return NextResponse.json({ status: "error", code: "QUOTA_COMMIT_FAILED", message: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi." }, { status: 503 });
     }
     quotaReservation = null;

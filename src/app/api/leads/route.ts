@@ -4,6 +4,7 @@ import type { LeadListItem, QualityLabel } from "@/lib/data/types";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { AttributionStatus } from "@/domain/attribution/types";
 import type { DimensionAssessment } from "@/domain/scoring/types";
+import { parseDateRange } from "@/lib/ads/date-utils";
 import {
   importCrmLeadsToDatabase,
   cleanPhoneNumber,
@@ -11,7 +12,37 @@ import {
   maskPhoneNumber,
   normalizeQualityLabel,
   normalizeFunnelStage,
+  resolveCrmLeadSource,
 } from "@/lib/crm/crm-sheets-service";
+
+function jakartaBoundary(date: string, endOfDay = false) {
+  return new Date(`${date}T${endOfDay ? "23:59:59.999" : "00:00:00"}+07:00`).toISOString();
+}
+
+function getLeadDateBounds(searchParams: URLSearchParams) {
+  const customSince = searchParams.get("customSince");
+  const customUntil = searchParams.get("customUntil");
+  const range = customSince || customUntil
+    ? `${customSince || ""}:${customUntil || ""}`
+    : searchParams.get("dateRange") || "all";
+  if (range.includes(":")) {
+    const [since, until] = range.split(":");
+    const isDate = (value: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const parsed = new Date(`${value}T00:00:00Z`);
+      return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+    };
+    if (!isDate(since) || !isDate(until) || since > until) {
+      return { error: "Rentang tanggal kustom tidak valid." } as const;
+    }
+    return { since: jakartaBoundary(since), until: jakartaBoundary(until, true) } as const;
+  }
+  const parsed = parseDateRange(range, "Asia/Jakarta");
+  return {
+    since: parsed.since ? jakartaBoundary(parsed.since) : undefined,
+    until: parsed.until ? jakartaBoundary(parsed.until, true) : undefined,
+  } as const;
+}
 
 /**
  * GET /api/leads
@@ -27,7 +58,6 @@ export async function GET(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     const { searchParams } = request.nextUrl;
-    const dateRange = searchParams.get("dateRange") || "all";
     const funnelStage = searchParams.get("funnelStage") || "all";
     const attributionStatus = searchParams.get("attributionStatus") || "all";
     const qualityLabel = searchParams.get("qualityLabel") || "all";
@@ -53,19 +83,51 @@ export async function GET(request: NextRequest) {
     }
 
     const organizationId = profile.organization_id;
+    const dateBounds = getLeadDateBounds(searchParams);
+    if ("error" in dateBounds) {
+      return NextResponse.json({ success: false, error: dateBounds.error, code: "INVALID_DATE_RANGE" }, { status: 400 });
+    }
+
+    const phoneMatchContactIds = new Set<string>();
+    const searchDigits = search.replace(/\D/g, "");
+    if (searchDigits.length >= 4) {
+      const normalizedPhone = cleanPhoneNumber(searchDigits);
+      const nationalPhone = normalizedPhone.startsWith("62") ? normalizedPhone.slice(2) : normalizedPhone;
+      const prefix = nationalPhone.slice(0, Math.min(4, nationalPhone.length));
+      const suffix = nationalPhone.slice(-Math.min(3, nationalPhone.length));
+      const contactQuery = supabase
+        .from("contacts")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .or(`phone_masked.ilike.%${prefix}%,phone_masked.ilike.%${suffix}%`);
+      const { data: partialMatches } = await contactQuery;
+      (partialMatches || []).forEach((contact) => phoneMatchContactIds.add(contact.id));
+
+      if (normalizedPhone.length >= 9) {
+        const phoneHash = hashPhoneNumber(normalizedPhone);
+        const { data: exactMatches } = await supabase
+          .from("contacts")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("phone_hash", phoneHash);
+        (exactMatches || []).forEach((contact) => phoneMatchContactIds.add(contact.id));
+      }
+    }
 
     // 2. Live mode: Query authentic database conversations
     let query = supabase
       .from("conversations")
       .select(`
         id,
+        campaign_id,
         attribution_status,
         attribution_evidence,
         quality_label,
+        campaigns (id, name),
         started_at,
         last_message_at,
         contacts (id, name, phone_masked, domisili),
-        ads (id, name, campaigns(id, name)),
+        ads (id, name, campaign_id, campaigns(id, name)),
         lead_assessments (
           buyer_score,
           sales_score,
@@ -80,17 +142,8 @@ export async function GET(request: NextRequest) {
       .eq("organization_id", organizationId)
       .order("last_message_at", { ascending: false });
 
-    // Date range filtering
-    if (dateRange && dateRange !== "all") {
-      const today = new Date();
-      let days = 30;
-      if (dateRange === "7d") days = 7;
-      else if (dateRange === "14d") days = 14;
-      else if (dateRange === "today") days = 1;
-
-      const sinceDate = new Date(today.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
-      query = query.gte("last_message_at", sinceDate);
-    }
+    if (dateBounds.since) query = query.gte("last_message_at", dateBounds.since);
+    if (dateBounds.until) query = query.lte("last_message_at", dateBounds.until);
 
     if (attributionStatus && attributionStatus !== "all") {
       query = query.eq("attribution_status", attributionStatus);
@@ -123,11 +176,19 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    const contactIdByConversation = new Map<string, string>();
+    (rows || []).forEach((row) => {
+      const related = Array.isArray(row.contacts) ? row.contacts[0] : row.contacts;
+      if (related?.id) contactIdByConversation.set(row.id, related.id);
+    });
+
     // 3. Map to LeadListItem format
     const leads: LeadListItem[] = (rows || []).map((r) => {
       const contact = Array.isArray(r.contacts) ? r.contacts[0] : r.contacts;
       const ad = Array.isArray(r.ads) ? r.ads[0] : r.ads;
-      const campaign = ad?.campaigns
+      const campaign = r.campaigns
+        ? (Array.isArray(r.campaigns) ? r.campaigns[0] : r.campaigns)
+        : ad?.campaigns
         ? Array.isArray(ad.campaigns)
           ? ad.campaigns[0]
           : ad.campaigns
@@ -207,6 +268,8 @@ export async function GET(request: NextRequest) {
 
       return {
         id: r.id,
+        adId: ad?.id || null,
+        campaignId: r.campaign_id || ad?.campaign_id || campaign?.id || null,
         name: contact?.name || "Calon Pembeli Properti",
         phoneMasked: contact?.phone_masked || "+62 8**-****-****",
         domisili,
@@ -214,7 +277,7 @@ export async function GET(request: NextRequest) {
         qualityLabel,
         notes,
         attributionStatus: r.attribution_status as AttributionStatus,
-        adName: ad?.name || null,
+        adName: ad?.name || (evidence && typeof evidence.ad_name === "string" ? evidence.ad_name : null),
         campaignName: campaign?.name || null,
         buyerAssessment,
         salesAssessment,
@@ -227,6 +290,22 @@ export async function GET(request: NextRequest) {
             : undefined,
       };
     });
+
+    const total = leads.length;
+    const hotWarm = leads.filter((lead) => lead.qualityLabel === "Hot" || lead.qualityLabel === "Warm").length;
+    const surveyOrClosing = leads.filter((lead) => lead.funnelStage === "survei" || lead.funnelStage === "closing").length;
+    const linkedSources = leads.filter((lead) => Boolean(lead.adId || lead.campaignId)).length;
+    const summary = {
+      total,
+      newLeads: leads.filter((lead) => lead.funnelStage === "baru").length,
+      hotWarm,
+      hotWarmRate: total ? (hotWarm / total) * 100 : 0,
+      surveyOrClosing,
+      leadToSurveyRate: total ? (surveyOrClosing / total) * 100 : 0,
+      linkedSources,
+      unlinkedSources: total - linkedSources,
+      adLinkRate: total ? (linkedSources / total) * 100 : 0,
+    };
 
     // 4. Client-requested post-filters (funnelStage, qualityLabel, search)
     let filteredLeads = leads;
@@ -243,6 +322,7 @@ export async function GET(request: NextRequest) {
         (l) =>
           l.name.toLowerCase().includes(search) ||
           l.phoneMasked.includes(search) ||
+          phoneMatchContactIds.has(contactIdByConversation.get(l.id) || "") ||
           (l.domisili && l.domisili.toLowerCase().includes(search)) ||
           (l.notes && l.notes.toLowerCase().includes(search)) ||
           (l.adName && l.adName.toLowerCase().includes(search)) ||
@@ -253,6 +333,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       data: filteredLeads,
+      summary,
+      total: filteredLeads.length,
     });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : "Kesalahan server internal";
@@ -320,10 +402,22 @@ export async function POST(request: NextRequest) {
     const qualityLabel = normalizeQualityLabel(body.qualityLabel);
     const domisili = typeof body.domisili === "string" ? body.domisili.trim() : undefined;
     const namaIklan = typeof body.namaIklan === "string" ? body.namaIklan.trim() : undefined;
+    const adId = typeof body.adId === "string" && body.adId.trim() ? body.adId.trim() : null;
+    const campaignId = typeof body.campaignId === "string" && body.campaignId.trim() ? body.campaignId.trim() : null;
     const catatan = typeof body.catatan === "string" ? body.catatan.trim() : undefined;
     const tanggalKontak = body.tanggalMasuk
       ? new Date(body.tanggalMasuk).toISOString()
       : new Date().toISOString();
+
+    let resolvedSource;
+    try {
+      resolvedSource = await resolveCrmLeadSource(supabase, organizationId, { adId, campaignId, sourceName: namaIklan });
+    } catch (error) {
+      return NextResponse.json(
+        { success: false, error: error instanceof Error ? error.message : "Sumber iklan tidak valid." },
+        { status: 400 }
+      );
+    }
 
     const singleLead = {
       nama,
@@ -332,11 +426,13 @@ export async function POST(request: NextRequest) {
       phoneMasked: maskPhoneNumber(cleanedDigits),
       domisili,
       tanggalKontak,
-      namaIklan,
+      namaIklan: resolvedSource.sourceName || namaIklan,
+      adId: resolvedSource.adId,
+      campaignId: resolvedSource.campaignId,
       tahapFunnel: stage,
       qualityLabel,
       catatan,
-      statusAtribusi: (namaIklan ? "inferred" : "unknown") as AttributionStatus,
+      statusAtribusi: (resolvedSource.adId || resolvedSource.campaignId || namaIklan ? "inferred" : "unknown") as AttributionStatus,
     };
 
     const importResult = await importCrmLeadsToDatabase({

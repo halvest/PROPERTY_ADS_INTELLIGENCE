@@ -41,12 +41,14 @@ describe("Section 8: Manual AI Analysis, Token Control & Diagnostics Removal", (
     );
     const content = fs.readFileSync(drawerPath, "utf-8");
 
-    // The only effect in AdDetailDrawer with ad.id as dependency must only fetch detail (/api/ads/[id]), not AI
-    const adIdEffectRegex = /useEffect\(\(\)\s*=>\s*{[\s\S]*?fetch\(`\/api\/ads\/\${ad\.id}`\)[\s\S]*?},\s*\[ad\.id\]\)/;
+    // The detail effect (ad.id + the dashboard dateRange) must only fetch
+    // detail (/api/ads/[id]), never AI. dateRange joined the dependency list
+    // when detail was aligned to the dashboard period.
+    const adIdEffectRegex = /useEffect\(\(\)\s*=>\s*{[\s\S]*?fetch\([\s\S]*?`\/api\/ads\/\$\{ad\.id}`[\s\S]*?},\s*\[ad\.id, dateRange\]\)/;
     expect(adIdEffectRegex.test(content)).toBe(true);
 
     // Verify no secondary effect calls /api/ai on [ad.id]
-    const aiEffectRegex = /useEffect\(\(\)\s*=>\s*{[\s\S]*?analyze-ad[\s\S]*?},\s*\[ad\.id\]\)/;
+    const aiEffectRegex = /useEffect\(\(\)\s*=>\s*{[\s\S]*?analyze-ad[\s\S]*?},\s*\[ad\.id(?:, dateRange)?\]\)/;
     expect(aiEffectRegex.test(content)).toBe(false);
   });
 

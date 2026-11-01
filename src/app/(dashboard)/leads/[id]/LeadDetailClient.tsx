@@ -9,6 +9,9 @@ import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import type { AttributionStatus } from "@/domain/attribution/types";
 import type { LeadDetailView } from "@/lib/data/types";
+import type { FunnelStage } from "@/domain/funnel/stages";
+import { getAllowedFunnelTransitions } from "@/domain/funnel/stages";
+import type { QualityLabel } from "@/lib/data/types";
 
 export function LeadDetailClient({ leadId }: { leadId: string }) {
   const { t, formatDateTime, locale } = useI18n();
@@ -24,6 +27,16 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
   const [correctionReason, setCorrectionReason] = useState("");
   const [correctionError, setCorrectionError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingLead, setIsSavingLead] = useState(false);
+  const [editStage, setEditStage] = useState<FunnelStage>("baru");
+  const [editQuality, setEditQuality] = useState<QualityLabel | "">("");
+  const [editDomisili, setEditDomisili] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [editReason, setEditReason] = useState("");
+  const [editSourceMode, setEditSourceMode] = useState<"linked" | "manual" | "organic">("organic");
+  const [editSourceSelection, setEditSourceSelection] = useState("");
+  const [editSourceName, setEditSourceName] = useState("");
+  const [sourceOptions, setSourceOptions] = useState<{ ads: Array<{ adId: string; campaignId: string; adName: string; campaignName: string }>; campaigns: Array<{ id: string; name: string }> }>({ ads: [], campaigns: [] });
 
   useEffect(() => {
     let isCancelled = false;
@@ -34,8 +47,28 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         if (res.ok) {
           const json = await res.json();
           if (!isCancelled && json.success && json.data) {
-            setLead(json.data);
-            setNewStatus(json.data.attributionStatus);
+            const data = json.data as LeadDetailView;
+            setLead(data);
+            setNewStatus(data.attributionStatus);
+            setEditStage(data.funnelStage);
+            setEditQuality(data.qualityLabel || "");
+            setEditDomisili(data.domisili || "");
+            setEditNotes(data.notes || "");
+            setEditReason("");
+            setEditSourceName(data.adName || data.campaignName || "");
+            if (data.adId) {
+              setEditSourceMode("linked");
+              setEditSourceSelection(`ad:${data.adId}`);
+            } else if (data.campaignId) {
+              setEditSourceMode("linked");
+              setEditSourceSelection(`campaign:${data.campaignId}`);
+            } else if (data.adName || data.campaignName) {
+              setEditSourceMode("manual");
+              setEditSourceSelection("manual");
+            } else {
+              setEditSourceMode("organic");
+              setEditSourceSelection("organic");
+            }
           }
         }
       } catch {
@@ -52,6 +85,53 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
       isCancelled = true;
     };
   }, [leadId, refreshKey]);
+
+  useEffect(() => {
+    void fetch("/api/leads/sources").then((response) => response.json()).then((json) => {
+      if (json.success && json.data) setSourceOptions(json.data);
+    }).catch(() => undefined);
+  }, []);
+
+  const handleLeadUpdate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!lead) return;
+    if (editStage !== lead.funnelStage && !editReason.trim()) {
+      addToast("error", locale === "id" ? "Alasan Wajib Diisi" : "Reason Required", locale === "id" ? "Jelaskan alasan perubahan tahap funnel." : "Provide a reason for the funnel change.");
+      return;
+    }
+    if (editSourceMode === "linked" && !editSourceSelection) {
+      addToast("error", locale === "id" ? "Sumber Belum Dipilih" : "Source Required", locale === "id" ? "Pilih iklan atau kampanye, atau pilih sumber manual/organik." : "Choose an ad or campaign, or select manual/organic source.");
+      return;
+    }
+    const selectedAd = editSourceSelection.startsWith("ad:") ? sourceOptions.ads.find((item) => `ad:${item.adId}` === editSourceSelection) : null;
+    const selectedCampaignId = editSourceSelection.startsWith("campaign:") ? editSourceSelection.slice("campaign:".length) : selectedAd?.campaignId || null;
+    setIsSavingLead(true);
+    try {
+      const response = await fetch(`/api/leads/${lead.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "lead_update",
+          newStage: editStage !== lead.funnelStage ? editStage : undefined,
+          reason: editReason.trim(),
+          qualityLabel: editQuality || null,
+          domisili: editDomisili.trim(),
+          notes: editNotes.trim(),
+          adId: editSourceMode === "linked" ? selectedAd?.adId || null : null,
+          campaignId: editSourceMode === "linked" ? selectedCampaignId : null,
+          sourceName: editSourceMode === "manual" ? editSourceName.trim() : editSourceMode === "linked" ? selectedAd?.adName || sourceOptions.campaigns.find((item) => item.id === selectedCampaignId)?.name || "" : "",
+        }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "Gagal menyimpan data prospek.");
+      addToast("success", locale === "id" ? "Prospek Diperbarui" : "Lead Updated", locale === "id" ? "Status dan kualifikasi berhasil disimpan." : "Lead details saved.");
+      setRefreshKey((key) => key + 1);
+    } catch (error) {
+      addToast("error", locale === "id" ? "Gagal Menyimpan" : "Save Failed", error instanceof Error ? error.message : "Network error");
+    } finally {
+      setIsSavingLead(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -249,6 +329,55 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
           )}
         </div>
       </div>
+
+      <form onSubmit={handleLeadUpdate} className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="mb-4">
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{locale === "id" ? "Perbarui Status & Kualifikasi Prospek" : "Update Lead Status & Qualification"}</h2>
+          <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{locale === "id" ? "Pembaruan tersimpan ke CRM. Perubahan tahap harus menyertakan alasan yang nyata." : "Changes are saved to CRM. Funnel stage changes require a reason."}</p>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Tahap Funnel" : "Funnel Stage"}
+            <select value={editStage} onChange={(event) => setEditStage(event.target.value as FunnelStage)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+              <option value={lead.funnelStage}>{lead.funnelStage}</option>{getAllowedFunnelTransitions(lead.funnelStage).map((stage) => <option key={stage} value={stage}>{stage}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Label Kualitas" : "Quality Label"}
+            <select value={editQuality} onChange={(event) => setEditQuality(event.target.value as QualityLabel | "")} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+              <option value="">{locale === "id" ? "Belum Dinilai" : "Not Assessed"}</option><option value="Hot">Hot</option><option value="Warm">Warm</option><option value="Cold">Cold</option>
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Domisili" : "Domicile"}
+            <input value={editDomisili} onChange={(event) => setEditDomisili(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+          </label>
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Jenis Sumber" : "Source Type"}
+            <select value={editSourceMode} onChange={(event) => { const value = event.target.value as "linked" | "manual" | "organic"; setEditSourceMode(value); setEditSourceSelection(value === "organic" ? "organic" : value === "manual" ? "manual" : ""); }} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+              <option value="linked">{locale === "id" ? "Iklan/Kampanye Meta" : "Meta Ad/Campaign"}</option><option value="manual">{locale === "id" ? "Sumber Manual" : "Manual Source"}</option><option value="organic">{locale === "id" ? "Organik/Tidak Diketahui" : "Organic/Unknown"}</option>
+            </select>
+          </label>
+          {editSourceMode === "linked" ? (
+            <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2">{locale === "id" ? "Kampanye / Iklan" : "Campaign / Ad"}
+              <select value={editSourceSelection} onChange={(event) => setEditSourceSelection(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                <option value="">{locale === "id" ? "Pilih kampanye atau iklan" : "Choose a campaign or ad"}</option>
+                {sourceOptions.campaigns.map((campaign) => <option key={`campaign:${campaign.id}`} value={`campaign:${campaign.id}`}>{campaign.name}</option>)}
+                {sourceOptions.ads.map((ad) => <option key={`ad:${ad.adId}`} value={`ad:${ad.adId}`}>{ad.campaignName} / {ad.adName}</option>)}
+              </select>
+            </label>
+          ) : editSourceMode === "manual" ? (
+            <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2">{locale === "id" ? "Nama sumber" : "Source Name"}
+              <input value={editSourceName} onChange={(event) => setEditSourceName(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+            </label>
+          ) : null}
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2 lg:col-span-3">{locale === "id" ? "Catatan Sales" : "Sales Notes"}
+            <textarea rows={3} value={editNotes} onChange={(event) => setEditNotes(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+          </label>
+          {editStage !== lead.funnelStage && <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2 lg:col-span-3">{locale === "id" ? "Alasan / bukti perubahan tahap (wajib)" : "Reason / evidence for stage change (required)"}
+            <input required value={editReason} onChange={(event) => setEditReason(event.target.value)} placeholder={locale === "id" ? "Contoh: Klien meminta jadwal survei Sabtu" : "Example: Client requested a Saturday site visit"} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+          </label>}
+        </div>
+        <div className="mt-4 flex justify-end border-t border-zinc-100 pt-3 dark:border-zinc-800">
+          <button type="submit" disabled={isSavingLead} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">{isSavingLead ? (locale === "id" ? "Menyimpan…" : "Saving…") : (locale === "id" ? "Simpan Perubahan" : "Save Changes")}</button>
+        </div>
+      </form>
 
       {/* Roadmap Notice: Tahap 1 vs Tahap 2 */}
       <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 p-4 text-xs text-sky-900 dark:text-sky-300 flex items-start gap-3">

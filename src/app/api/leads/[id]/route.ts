@@ -4,6 +4,7 @@ import { persistAttributionEvent } from "@/lib/data/attribution-history-service"
 import type { LeadDetailView, QualityLabel } from "@/lib/data/types";
 import type { AttributionStatus } from "@/domain/attribution/types";
 import { transitionFunnelStage, type FunnelStage } from "@/domain/funnel/stages";
+import { resolveCrmLeadSource } from "@/lib/crm/crm-sheets-service";
 
 /**
  * GET /api/leads/[id]
@@ -45,13 +46,15 @@ export async function GET(
       .from("conversations")
       .select(`
         id,
+        campaign_id,
         attribution_status,
         attribution_evidence,
         quality_label,
         started_at,
         last_message_at,
         contacts (id, name, phone_masked, domisili),
-        ads (id, name, campaigns(id, name)),
+        campaigns (id, name),
+        ads (id, name, campaign_id, campaigns(id, name)),
         lead_assessments (
           id,
           buyer_score,
@@ -93,19 +96,20 @@ export async function GET(
 
     const contact = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
     const ad = Array.isArray(conv.ads) ? conv.ads[0] : conv.ads;
-    const campaign = ad?.campaigns
-      ? Array.isArray(ad.campaigns)
-        ? ad.campaigns[0]
-        : ad.campaigns
-      : null;
+    const campaign = conv.campaigns
+      ? (Array.isArray(conv.campaigns) ? conv.campaigns[0] : conv.campaigns)
+      : ad?.campaigns
+        ? (Array.isArray(ad.campaigns) ? ad.campaigns[0] : ad.campaigns)
+        : null;
 
     const assessment = Array.isArray(conv.lead_assessments)
       ? conv.lead_assessments[0]
       : conv.lead_assessments;
 
     const outcomes = Array.isArray(conv.lead_outcomes) ? conv.lead_outcomes : [];
-    let currentStage: FunnelStage = "baru";
-    if (outcomes.length > 0) {
+    const evidence = (conv.attribution_evidence as Record<string, unknown>) || {};
+    let currentStage: FunnelStage = typeof evidence.funnel_stage === "string" ? evidence.funnel_stage as FunnelStage : "baru";
+    if (typeof evidence.funnel_stage !== "string" && outcomes.length > 0) {
       const sortedOutcomes = [...outcomes].sort(
         (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
       );
@@ -121,7 +125,6 @@ export async function GET(
     const confidence = assessment?.confidence ? Number(assessment.confidence) : null;
     const completeness = assessment?.score_completeness ? Number(assessment.score_completeness) : 1.0;
 
-    const evidence = (conv.attribution_evidence as Record<string, unknown>) || {};
     const contactDomisili = contact && typeof contact === "object" && "domisili" in contact ? (contact as { domisili?: string | null }).domisili : null;
     const evidenceDomisili = evidence.domisili as string | null;
     const evidenceQuality = evidence.quality_label as QualityLabel | null;
@@ -135,12 +138,14 @@ export async function GET(
       id: conv.id,
       name: contact?.name || "Calon Pembeli Properti",
       phoneMasked: contact?.phone_masked || "+62 8**-****-****",
+      adId: ad?.id || null,
+      campaignId: conv.campaign_id || ad?.campaign_id || campaign?.id || null,
       domisili,
       funnelStage: currentStage,
       qualityLabel,
       notes,
       attributionStatus: conv.attribution_status as AttributionStatus,
-      adName: ad?.name || null,
+      adName: ad?.name || (typeof evidence.ad_name === "string" ? evidence.ad_name : null),
       campaignName: campaign?.name || null,
       buyerAssessment: {
         dimension: "buyer",
@@ -253,7 +258,8 @@ export async function POST(
     const organizationId = profile.organization_id;
 
     const body = await request.json();
-    const { action, newStatus, reason, newStage, qualityLabel, notes, domisili } = body;
+    const { action, newStatus, reason, qualityLabel, notes, domisili } = body;
+    const newStage = body.newStage || body.funnelStage;
 
     // 1. Attribution Correction Action
     if (action === "attribution_correction") {
@@ -330,10 +336,14 @@ export async function POST(
         );
       }
 
+      if (qualityLabel !== undefined && qualityLabel !== null && qualityLabel !== "" && !["Hot", "Warm", "Cold"].includes(qualityLabel)) {
+        return NextResponse.json({ success: false, error: "Label kualitas tidak valid." }, { status: 400 });
+      }
+
       // Fetch current conversation evidence
       const { data: conv } = await supabase
         .from("conversations")
-        .select("id, contact_id, attribution_evidence, quality_label")
+        .select("id, contact_id, ad_id, campaign_id, attribution_status, attribution_evidence, quality_label")
         .eq("id", id)
         .eq("organization_id", organizationId)
         .maybeSingle();
@@ -343,6 +353,20 @@ export async function POST(
           { success: false, error: "Percakapan prospek tidak ditemukan." },
           { status: 404 }
         );
+      }
+
+      const sourceWasProvided = Object.hasOwn(body, "adId") || Object.hasOwn(body, "campaignId") || Object.hasOwn(body, "sourceName") || Object.hasOwn(body, "namaIklan");
+      let resolvedSource: Awaited<ReturnType<typeof resolveCrmLeadSource>> | null = null;
+      if (sourceWasProvided) {
+        try {
+          resolvedSource = await resolveCrmLeadSource(supabase, organizationId, {
+            adId: typeof body.adId === "string" ? body.adId : null,
+            campaignId: typeof body.campaignId === "string" ? body.campaignId : null,
+            sourceName: typeof body.sourceName === "string" ? body.sourceName : typeof body.namaIklan === "string" ? body.namaIklan : null,
+          });
+        } catch (sourceError) {
+          return NextResponse.json({ success: false, error: sourceError instanceof Error ? sourceError.message : "Sumber kampanye/iklan tidak valid." }, { status: 400 });
+        }
       }
 
       // Stage changes must follow the domain transition rules with an explicit reason.
@@ -406,6 +430,7 @@ export async function POST(
         ...(qualityLabel !== undefined ? { quality_label: qualityLabel } : {}),
         ...(notes !== undefined ? { notes } : {}),
         ...(domisili !== undefined ? { domisili } : {}),
+        ...(resolvedSource ? { ad_name: resolvedSource.sourceName, ad_id: resolvedSource.adId, campaign_id: resolvedSource.campaignId, source: "manual_crm_update" } : {}),
         updated_at: new Date().toISOString(),
       };
 
@@ -414,11 +439,33 @@ export async function POST(
         .from("conversations")
         .update({
           ...(qualityLabel !== undefined ? { quality_label: qualityLabel || null } : {}),
+          ...(resolvedSource ? {
+            ad_id: resolvedSource.adId,
+            campaign_id: resolvedSource.campaignId,
+            attribution_status: resolvedSource.adId || resolvedSource.campaignId || resolvedSource.sourceName ? "inferred" : "unknown",
+          } : {}),
           attribution_evidence: updatedEvidence,
           updated_at: new Date().toISOString(),
         })
         .eq("id", id)
         .eq("organization_id", organizationId);
+
+      if (resolvedSource && (resolvedSource.adId !== conv.ad_id || resolvedSource.campaignId !== conv.campaign_id)) {
+        const nextAttributionStatus: AttributionStatus = resolvedSource.adId || resolvedSource.campaignId || resolvedSource.sourceName ? "inferred" : "unknown";
+        const audit = await persistAttributionEvent({
+          organizationId,
+          conversationId: id,
+          previousStatus: conv.attribution_status as AttributionStatus,
+          newStatus: nextAttributionStatus,
+          previousAdId: conv.ad_id,
+          newAdId: resolvedSource.adId,
+          attributionMethod: "manual_crm_source_update",
+          reason: typeof reason === "string" && reason.trim() ? reason.trim() : "Sumber kampanye/iklan diperbarui dari detail CRM.",
+          actorId: user.id,
+          supabaseClient: supabase,
+        });
+        if (!audit.success) return NextResponse.json({ success: false, error: audit.error || "Gagal mencatat audit perubahan sumber." }, { status: 500 });
+      }
 
       // Update contact domisili if provided
       if (domisili !== undefined && conv.contact_id) {

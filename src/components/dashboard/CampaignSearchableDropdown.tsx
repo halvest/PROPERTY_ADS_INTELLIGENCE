@@ -128,7 +128,7 @@ export function CampaignSearchableDropdown({
   };
 
   return (
-    <div className={`relative inline-block text-left ${className}`} ref={containerRef}>
+    <div className={`relative inline-block w-full min-w-0 text-left ${className}`} ref={containerRef}>
       {/* Trigger Button with Ellipsis Control and Tooltip */}
       <button
         type="button"
@@ -137,7 +137,7 @@ export function CampaignSearchableDropdown({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         title={selectedCampaign ? `Campaign: ${selectedCampaign.name}` : "Filter berdasarkan campaign Meta"}
-        className={`group flex items-center justify-between gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs transition-colors cursor-pointer select-none max-w-[210px] sm:max-w-[260px] ${
+        className={`group flex min-h-9 w-full min-w-0 items-center justify-between gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs transition-colors cursor-pointer select-none ${
           selectedCampaignId !== "all"
             ? "border-indigo-300 bg-indigo-50/70 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200"
             : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
@@ -202,7 +202,7 @@ export function CampaignSearchableDropdown({
         <div
           role="listbox"
           aria-labelledby="campaign-dropdown-trigger"
-          className="absolute left-0 mt-1.5 w-72 sm:w-80 rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900 z-50 overflow-hidden flex flex-col"
+          className="absolute left-0 mt-1.5 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900 z-50 overflow-hidden flex flex-col"
           style={{ maxHeight: "360px" }}
         >
           {/* Internal Search Header */}

@@ -241,6 +241,7 @@ export function PerformanceTrendChart({
     const last = formatDateDayMonth(dailyTrend[dailyTrend.length - 1].date);
     return `${first}–${last}`;
   }, [dailyTrend, locale]);
+  const xAxisLabelStep = Math.max(1, Math.ceil((dailyTrend.length - 1) / 6));
 
   const displayResultName =
     locale === "en"
@@ -434,6 +435,7 @@ export function PerformanceTrendChart({
 
             {/* X-Axis Date Labels */}
             {dailyTrend.map((point, index) => {
+              if (index % xAxisLabelStep !== 0 && index !== dailyTrend.length - 1) return null;
               const posX = x(index);
               return (
                 <text

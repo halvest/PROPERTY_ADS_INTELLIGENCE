@@ -387,10 +387,13 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
       // CPM: (2500000 / 75000) * 1000 = 33333.33
       expect(response.summary?.cpm).toBeCloseTo(33333.33, 1);
 
-      // Leads: 1 conversation, 1 qualified (buyer score 85 >= 70)
+      // Leads: 1 conversation recorded. Lead quality is NOT AVAILABLE:
+      // Buyer Score is legacy/out-of-scope (Phase 2 product decision), so a
+      // stored buyer_score of 85 no longer qualifies the lead and CPQL is
+      // never computed from it.
       expect(response.summary?.totalLeads).toBe(1);
-      expect(response.summary?.qualifiedLeads).toBe(1);
-      expect(response.summary?.cpql).toBe(2500000); // 2500000 / 1
+      expect(response.summary?.qualifiedLeads).toBe(0);
+      expect(response.summary?.cpql).toBeNull();
 
       expect(response.leaderboard.length).toBe(2);
       expect(response.leads.length).toBe(1);

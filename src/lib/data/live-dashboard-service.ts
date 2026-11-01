@@ -341,7 +341,8 @@ export async function getLiveDashboardData(
   let verifiedCount = 0;
   let inferredCount = 0;
   let unknownCount = 0;
-  let qualifiedLeads = 0;
+  // Lead quality is unavailable (see below); qualified count stays 0.
+  const qualifiedLeads = 0;
   const buyerScores: number[] = [];
   const salesScores: number[] = [];
 
@@ -369,11 +370,13 @@ export async function getLiveDashboardData(
     const buyerScore = assessment?.buyer_score ?? null;
     const salesScore = assessment?.sales_score ?? null;
 
+    // Lead quality is NOT AVAILABLE from a verified source. Buyer/Sales
+    // Scores are legacy and out of product scope: they are no longer used
+    // to qualify leads or compute CPQL. qualifiedLeads therefore stays 0
+    // and CPQL is null (unavailable) until a product-approved quality
+    // definition exists.
     if (buyerScore !== null && Number.isFinite(buyerScore)) {
       buyerScores.push(buyerScore);
-      if (buyerScore >= 70) {
-        qualifiedLeads++;
-      }
     }
     if (salesScore !== null && Number.isFinite(salesScore)) {
       salesScores.push(salesScore);
@@ -412,7 +415,6 @@ export async function getLiveDashboardData(
       adStat.attributedLeads++;
       if (attrStatus === "verified") adStat.verifiedLeads++;
       if (attrStatus === "inferred") adStat.inferredLeads++;
-      if (buyerScore !== null && buyerScore >= 70) adStat.qualifiedLeads++;
       if (buyerScore !== null) adStat.buyerScores.push(buyerScore);
     }
 

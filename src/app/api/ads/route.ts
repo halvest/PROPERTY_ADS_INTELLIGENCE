@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     let organizationId: string | null = null;
+    let userRole: string | null = null;
 
     if (user && !authError) {
       const { data: profile } = await supabase
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
 
       if (profile?.organization_id) {
         organizationId = profile.organization_id;
+        userRole = profile.role;
       }
     }
 
@@ -58,7 +60,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      data,
+      data: { ...data, canSync: ["owner", "admin", "supervisor"].includes(userRole || "") },
     });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : "Kesalahan server internal";

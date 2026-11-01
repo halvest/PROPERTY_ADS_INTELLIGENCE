@@ -15,6 +15,8 @@ import { CampaignSearchableDropdown } from "@/components/dashboard/CampaignSearc
 import { AIAdsPerformanceAnalyst } from "@/components/dashboard/AIAdsPerformanceAnalyst";
 import { FetchGuard } from "@/lib/ads/fetch-guard";
 import { parseDateRange } from "@/lib/ads/date-utils";
+import { describeMetaAction } from "@/lib/marketing/meta/action-catalog";
+import { formatSmartAdIdentity, resolveAdResultMetric, translateMetaTerm } from "@/lib/ads/result-metric";
 
 export interface RealAdRow {
   id: string;
@@ -37,13 +39,20 @@ export interface RealAdRow {
   impressions: number;
   reach: number | null;
   frequency: number | null;
-  results: number;
-  conversations?: number;
+  results: number | null;
+  conversations?: number | null;
   resultActionTypes?: string[];
   resultLabel?: string;
+  resultMetricValue?: number | null;
+  resultMetricLabel?: string;
+  resultMetricCostPerResult?: number | null;
+  resultMetricKind?: "conversion" | "link_click" | "interaction" | "zero" | "unavailable";
+  resultMetricUnitLabel?: string;
   resultTypeDescription?: string | null;
+  creativeFormat?: string | null;
+  resultDetails?: Array<{ type: string; label: string; category: string; count: number; costPerResult: number | null }>;
   costPerResult: number | null;
-  linkClicks: number;
+  linkClicks: number | null;
   linkCtr: number | null;
   linkCpc: number | null;
   allClicks: number;
@@ -63,7 +72,10 @@ interface AdsIntelligenceApiResponse {
   data: {
     organizationId: string;
     organizationName: string;
+    canSync?: boolean;
     insightsState: "available" | "no_data_for_period" | "no_account_selected";
+    liveAccountActions?: Array<{ action_type: string; value: string }>;
+    accountMetricsState: "available" | "sync_required" | "source_unavailable" | "filtered_scope" | "range_not_supported" | "no_account_selected";
     adAccount: {
       id: string;
       name: string | null;
@@ -84,16 +96,17 @@ interface AdsIntelligenceApiResponse {
     lastSyncedAt: string | null;
     kpis: {
       totalSpend: number;
-      totalResults: number;
-      totalConversations: number;
+      totalResults: number | null;
+      totalConversations: number | null;
       conversationDataIncomplete: boolean;
       resultLabel?: string;
       resultTypeDescription?: string | null;
+      resultBreakdown?: Array<{ type: string; label: string; category: string; count: number; costPerResult: number | null }>;
       costPerResult: number | null;
       totalReach: number | null;
       totalImpressions: number;
       frequency: number | null;
-      linkClicks: number;
+      linkClicks: number | null;
       linkCtr: number | null;
       linkCpc: number | null;
       allClicks: number;
@@ -108,6 +121,7 @@ interface AdsIntelligenceApiResponse {
       archivedCampaigns?: number;
       otherCampaigns?: number;
       totalAds: number;
+      classifiedAds?: number;
       deliveringAds?: number;
       notDeliveringAds?: number;
       unknownDeliveryAds?: number;
@@ -156,7 +170,7 @@ function PerformanceSparkline({
 }) {
   const points = useMemo(() => {
     if (!data || data.length === 0) {
-      return [10, 15, 12, 18, 14, 22, 20];
+      return [0, 0];
     }
     if (data.length === 1) {
       return [data[0], data[0]];
@@ -220,22 +234,37 @@ function PerformanceSparkline({
   );
 }
 
+function formatRelativeSyncTime(value: string | null | undefined, locale: string): string {
+  if (!value) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+  if (minutes < 1) return locale === "id" ? "Baru saja" : "Just now";
+  if (minutes < 60) return locale === "id" ? `${minutes} menit lalu` : `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return locale === "id" ? `${hours} jam lalu` : `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return locale === "id" ? `${days} hari lalu` : `${days} days ago`;
+}
+
 export default function AdsIntelligencePage() {
   const { formatNumber, locale } = useI18n();
   const { addToast } = useToast();
 
   // Filters State: default to "30d" for an active, operational marketing view
   const [dateRange, setDateRange] = useState("30d");
+  const [showCustomDateRange, setShowCustomDateRange] = useState(false);
+  const [customDateStart, setCustomDateStart] = useState("");
+  const [customDateEnd, setCustomDateEnd] = useState("");
   const [selectedCampaignId, setSelectedCampaignId] = useState("all");
   const [campaignStatusFilter, setCampaignStatusFilter] = useState<string>("all");
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<string>("all");
   const [objectiveFilter, setObjectiveFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showOnlyWithSpend, setShowOnlyWithSpend] = useState(true);
   const [selectedAdAccountId, setSelectedAdAccountId] = useState<string>("");
 
   // Sorting & Pagination State
   const [sortBy, setSortBy] = useState<
-    "spend" | "linkClicks" | "linkCtr" | "linkCpc" | "impressions" | "reach" | "results"
+    "spend" | "linkClicks" | "linkCtr" | "linkCpc" | "impressions" | "results"
   >("spend");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = useState(1);
@@ -248,9 +277,10 @@ export default function AdsIntelligencePage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isReconciliationOpen, setIsReconciliationOpen] = useState(false);
   const [apiData, setApiData] = useState<AdsIntelligenceApiResponse["data"] | null>(null);
-  const [isStale, setIsStale] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const fetchGuardRef = useRef(new FetchGuard());
+  const adsCacheRef = useRef(new Map<string, AdsIntelligenceApiResponse["data"]>());
+  const autoSyncAttemptedAtRef = useRef(new Map<string, number>());
 
   // Single guarded fetch path. Starting a fetch aborts the previous one and
   // invalidates its sequence, so a stale response for a previously selected
@@ -259,55 +289,43 @@ export default function AdsIntelligencePage() {
     async (opts: { silent?: boolean } = {}) => {
       const guard = fetchGuardRef.current;
       const { seq, signal } = guard.begin();
-      setIsLoading(true);
+      const params = new URLSearchParams();
+      if (dateRange) params.set("dateRange", dateRange);
+      if (selectedCampaignId !== "all") params.set("campaignId", selectedCampaignId);
+      if (campaignStatusFilter !== "all") params.set("campaignStatus", campaignStatusFilter);
+      if (deliveryStatusFilter !== "all") params.set("deliveryStatus", deliveryStatusFilter);
+      if (objectiveFilter !== "all") params.set("objective", objectiveFilter);
+      if (selectedAdAccountId) params.set("adAccountId", selectedAdAccountId);
+      const cacheKey = params.toString();
+      const cached = adsCacheRef.current.get(cacheKey);
+      setIsLoading(!cached);
       setLoadError(null);
-      // Previous context's data must not be shown under the new identity.
-      setApiData(null);
-      setIsStale(false);
+      setApiData(cached || null);
       try {
-        const params = new URLSearchParams();
-        if (dateRange) params.set("dateRange", dateRange);
-        if (selectedCampaignId !== "all") params.set("campaignId", selectedCampaignId);
-        if (campaignStatusFilter !== "all") params.set("campaignStatus", campaignStatusFilter);
-        if (deliveryStatusFilter !== "all") params.set("deliveryStatus", deliveryStatusFilter);
-        if (objectiveFilter !== "all") params.set("objective", objectiveFilter);
-        if (selectedAdAccountId) params.set("adAccountId", selectedAdAccountId);
-
         const res = await fetch(`/api/ads?${params.toString()}`, { signal, cache: "no-store" });
         if (!guard.isCurrent(seq)) return;
         if (res.ok) {
           const json: AdsIntelligenceApiResponse = await res.json();
           if (!guard.isCurrent(seq)) return;
           if (json.success && json.data) {
+            adsCacheRef.current.set(cacheKey, json.data);
             setApiData(json.data);
-            setIsStale(
-              json.data.lastSyncedAt
-                ? Date.now() - new Date(json.data.lastSyncedAt).getTime() > 24 * 3600 * 1000
-                : false
-            );
           } else {
-            setApiData(null);
-            setLoadError(locale === "id" ? "Data iklan tidak tersedia." : "Ad data is unavailable.");
+            setApiData(cached || null);
+            setLoadError(cached ? null : locale === "id" ? "Data iklan tidak tersedia." : "Ad data is unavailable.");
           }
         } else {
           const err = await res.json().catch(() => ({}));
-          setApiData(null);
-          setLoadError(
-            err.error ||
-              (locale === "id" ? "Gagal memuat data iklan." : "Failed to load ad data.")
-          );
+          setApiData(cached || null);
+          setLoadError(cached ? null : err.error || (locale === "id" ? "Gagal memuat data iklan." : "Failed to load ad data."));
           if (!opts.silent) {
             addToast("error", locale === "id" ? "Gagal Memuat Data" : "Failed to Load Data", err.error || "");
           }
         }
       } catch (err) {
         if (!guard.isCurrent(seq)) return; // superseded or aborted request
-        setApiData(null);
-        setLoadError(
-          locale === "id"
-            ? "Kesalahan jaringan saat memuat data iklan."
-            : "Network error while loading ad data."
-        );
+        setApiData(cached || null);
+        setLoadError(cached ? null : locale === "id" ? "Kesalahan jaringan saat memuat data iklan." : "Network error while loading ad data.");
         if (!opts.silent) {
           addToast(
             "error",
@@ -335,62 +353,93 @@ export default function AdsIntelligencePage() {
     return () => guard.cancel();
   }, [fetchAds]);
 
-  // Trigger Real Sync from Meta Marketing API
-  const handleTriggerSync = async () => {
-    if (isSyncing) return;
-    if (dateRange === "all") {
-      addToast(
-        "warning",
-        "Pilih Periode Sinkronisasi",
-        "Untuk memuat Insights historis, pilih rentang tanggal khusus saat iklan berjalan lalu sinkronkan lagi."
-      );
-      return;
-    }
+  const runMetaSync = useCallback(async (
+    silent = false,
+    requestedRange?: { period: string; since?: string; until?: string }
+  ) => {
+    if (isSyncing || !apiData?.canSync || !apiData.adAccount) return;
+    const syncPeriod = requestedRange?.period || dateRange;
+    if (syncPeriod === "all") return;
     setIsSyncing(true);
     try {
-      const syncTimeRange = parseDateRange(
-        dateRange,
-        apiData?.adAccount?.timezone || "Asia/Jakarta"
+      const customRange = requestedRange?.since && requestedRange.until
+        ? { since: requestedRange.since, until: requestedRange.until }
+        : undefined;
+      const syncTimeRange = customRange || parseDateRange(
+        syncPeriod,
+        apiData.adAccount.timezone || "Asia/Jakarta"
       );
+      const datePreset = ({ today: "today", "1d": "today", "7d": "last_7d", "14d": "last_14d", "30d": "last_30d" } as Record<string, string>)[syncPeriod];
       const res = await fetch("/api/marketing/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          targetAdAccountId: selectedAdAccountId || apiData?.adAccount?.id || undefined,
+          targetAdAccountId: selectedAdAccountId || apiData.adAccount.id,
+          ...(datePreset ? { datePreset } : {}),
           ...(syncTimeRange.since && syncTimeRange.until ? { timeRange: syncTimeRange } : {}),
         }),
       });
       const data = await res.json();
+      const liveAccountInsight = data.syncResult?.accountInsights?.[0] as {
+        reach?: string | number | null;
+        frequency?: string | number | null;
+        actions?: Array<{ action_type: string; value: string }>;
+      } | undefined;
+      const fullAccountScope = selectedCampaignId === "all" && campaignStatusFilter === "all" && deliveryStatusFilter === "all" && objectiveFilter === "all";
+      if (liveAccountInsight && fullAccountScope) {
+        const reach = liveAccountInsight.reach == null ? null : Number(liveAccountInsight.reach);
+        const frequency = liveAccountInsight.frequency == null ? null : Number(liveAccountInsight.frequency);
+        const targetId = selectedAdAccountId || apiData.adAccount.id;
+        const applyLiveMetrics = (current: AdsIntelligenceApiResponse["data"]) => ({
+          ...current,
+          lastSyncedAt: data.status === "success" ? data.syncResult?.syncedAt || current.lastSyncedAt : current.lastSyncedAt,
+          adAccount: current.adAccount ? { ...current.adAccount, lastSyncedAt: data.status === "success" ? data.syncResult?.syncedAt || current.adAccount.lastSyncedAt : current.adAccount.lastSyncedAt } : null,
+          accountMetricsState: reach !== null || frequency !== null ? "available" as const : current.accountMetricsState,
+          liveAccountActions: liveAccountInsight.actions || current.liveAccountActions,
+          kpis: { ...current.kpis, totalReach: reach, frequency },
+        });
+        await fetchAds({ silent: true });
+        const params = new URLSearchParams();
+        if (dateRange) params.set("dateRange", dateRange);
+        if (selectedCampaignId !== "all") params.set("campaignId", selectedCampaignId);
+        if (campaignStatusFilter !== "all") params.set("campaignStatus", campaignStatusFilter);
+        if (deliveryStatusFilter !== "all") params.set("deliveryStatus", deliveryStatusFilter);
+        if (objectiveFilter !== "all") params.set("objective", objectiveFilter);
+        if (selectedAdAccountId) params.set("adAccountId", selectedAdAccountId);
+        const cached = adsCacheRef.current.get(params.toString());
+        if (cached?.adAccount?.id === targetId) adsCacheRef.current.set(params.toString(), applyLiveMetrics(cached));
+        setApiData((current) => current?.adAccount?.id === targetId ? applyLiveMetrics(current) : current);
+      }
       if (res.ok && data.status === "success") {
         const count = data.syncResult?.recordsProcessed ?? 0;
         const syncWarnings = data.syncResult?.warnings as string[] | undefined;
-        if (syncWarnings?.length) {
-          addToast("warning", "Metrik Tersimpan dengan Peringatan", syncWarnings.join(" "));
-        } else {
+        if (!silent && syncWarnings?.length) {
+          addToast("warning", "Sinkronisasi Berhasil dengan Catatan", syncWarnings.join(" "));
+        } else if (!silent) {
           addToast(
             "success",
             "Sinkronisasi Berhasil",
             `Meta Ads sinkron: ${count} record berhasil diproses dan disimpan ke basis data.`
           );
         }
-        refreshData();
+        if (!liveAccountInsight || !fullAccountScope) await fetchAds({ silent: true });
       } else if (res.ok && data.status === "partial") {
         const insights = data.syncResult?.insightsSynced ?? 0;
-        addToast(
+        if (!silent) addToast(
           "warning",
           "Sinkronisasi Sebagian",
           `Data akun diperbarui, tetapi sinkronisasi belum lengkap. Insights tersimpan: ${insights}. Coba lagi atau periksa detail koneksi Meta.`
         );
-        refreshData();
+        if (!liveAccountInsight || !fullAccountScope) await fetchAds({ silent: true });
       } else {
-        addToast(
+        if (!silent) addToast(
           "error",
           "Sinkronisasi Gagal",
           data.message || "Gagal melakukan sinkronisasi Meta Marketing API."
         );
       }
     } catch (err) {
-      addToast(
+      if (!silent) addToast(
         "error",
         "Kesalahan Jaringan",
         err instanceof Error ? err.message : "Network error"
@@ -398,13 +447,45 @@ export default function AdsIntelligencePage() {
     } finally {
       setIsSyncing(false);
     }
-  };
+  }, [isSyncing, apiData, dateRange, selectedAdAccountId, selectedCampaignId, campaignStatusFilter, deliveryStatusFilter, objectiveFilter, fetchAds, addToast]);
+
+  const handleTriggerSync = (range?: { period: string; since?: string; until?: string }) => void runMetaSync(false, range);
+
+  useEffect(() => {
+    if (!apiData?.canSync || !apiData.adAccount || dateRange === "all") return;
+    const cacheKey = `${selectedAdAccountId || apiData.adAccount.id}:${dateRange}`;
+    const last = apiData.adAccount.lastSyncedAt || apiData.lastSyncedAt;
+    const stale = !last || Date.now() - new Date(last).getTime() > 5 * 60_000;
+    const metricsMissing = apiData.accountMetricsState !== "filtered_scope" && (
+      apiData.accountMetricsState === "sync_required" || apiData.accountMetricsState === "source_unavailable" || apiData.kpis.totalReach == null || apiData.kpis.frequency == null
+    );
+    const attemptedAt = autoSyncAttemptedAtRef.current.get(cacheKey) || 0;
+    if ((!stale && !metricsMissing) || Date.now() - attemptedAt < 5 * 60_000 || isSyncing) return;
+    autoSyncAttemptedAtRef.current.set(cacheKey, Date.now());
+    void runMetaSync(true);
+  }, [apiData, dateRange, selectedAdAccountId, isSyncing, runMetaSync]);
+
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") void fetchAds({ silent: true });
+    };
+    const interval = window.setInterval(refreshIfVisible, 5 * 60_000);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+    };
+  }, [fetchAds]);
 
   // Filter & Sort Ads in memory
   const rawAds = apiData?.ads;
   const processedAds = useMemo(() => {
     if (!rawAds) return [];
     let list = [...rawAds];
+
+    if (showOnlyWithSpend) {
+      list = list.filter((ad) => ad.spend != null && Number.isFinite(ad.spend) && ad.spend > 0);
+    }
 
     // Search query
     if (searchQuery.trim()) {
@@ -428,8 +509,8 @@ export default function AdsIntelligencePage() {
           valB = b.spend;
           break;
         case "linkClicks":
-          valA = a.linkClicks;
-          valB = b.linkClicks;
+          valA = a.linkClicks ?? -1;
+          valB = b.linkClicks ?? -1;
           break;
         case "linkCtr":
           valA = a.linkCtr ?? -1;
@@ -443,13 +524,9 @@ export default function AdsIntelligencePage() {
           valA = a.impressions;
           valB = b.impressions;
           break;
-        case "reach":
-          valA = a.reach ?? -1;
-          valB = b.reach ?? -1;
-          break;
         case "results":
-          valA = a.results;
-          valB = b.results;
+          valA = a.resultMetricValue ?? a.results ?? -1;
+          valB = b.resultMetricValue ?? b.results ?? -1;
           break;
       }
 
@@ -460,7 +537,7 @@ export default function AdsIntelligencePage() {
     });
 
     return list;
-  }, [rawAds, searchQuery, sortBy, sortOrder]);
+  }, [rawAds, searchQuery, showOnlyWithSpend, sortBy, sortOrder]);
 
   // Paginated ads slice
   const totalPages = Math.ceil(processedAds.length / ITEMS_PER_PAGE);
@@ -512,28 +589,17 @@ export default function AdsIntelligencePage() {
   const getLocalizedResultTypeDescription = useCallback(
     (desc?: string | null) => {
       if (!desc) {
-        return locale === "id"
-          ? "Sebagian jenis hasil belum teridentifikasi"
-          : "Some result types not yet identified";
+        return "";
       }
       if (locale === "id") return desc;
-      const lower = desc.toLowerCase().trim();
-      if (lower.includes("belum teridentifikasi")) {
-        return "Some result types not yet identified";
-      }
-      if (lower.includes("percakapan whatsapp")) {
-        return "Meta WhatsApp Conversations";
-      }
-      if (lower.includes("prospek") || lower.includes("leads")) {
-        return "Meta Leads";
-      }
-      if (lower.includes("penjualan") || lower.includes("sales")) {
-        return "Sales Campaign Results";
-      }
-      if (lower.includes("traffic")) {
-        return "Meta Traffic Campaign Results";
-      }
-      return desc;
+      return desc
+        .replace(/Percakapan WhatsApp/g, "WhatsApp conversations")
+        .replace(/Koneksi pesan/g, "Messaging connections")
+        .replace(/Balasan pertama/g, "First replies")
+        .replace(/Prospek website/g, "Website leads")
+        .replace(/Prospek/g, "Leads")
+        .replace(/Kunjungan halaman/g, "Landing page views")
+        .replace(/Klik tautan/g, "Link clicks");
     },
     [locale]
   );
@@ -548,7 +614,8 @@ export default function AdsIntelligencePage() {
     campaignStatusFilter !== "all" ||
     deliveryStatusFilter !== "all" ||
     objectiveFilter !== "all" ||
-    searchQuery.trim().length > 0;
+    searchQuery.trim().length > 0 ||
+    !showOnlyWithSpend;
 
   const resetAllFilters = () => {
     setSelectedCampaignId("all");
@@ -557,6 +624,7 @@ export default function AdsIntelligencePage() {
     setObjectiveFilter("all");
     setSearchQuery("");
     setDateRange("30d");
+    setShowOnlyWithSpend(true);
     setCurrentPage(1);
   };
 
@@ -582,22 +650,6 @@ export default function AdsIntelligencePage() {
     [locale]
   );
 
-  const formatSyncDate = useCallback(
-    (value: string | null | undefined) => {
-      if (!value) return null;
-      return new Intl.DateTimeFormat(locale === "en" ? "en-US" : "id-ID", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: adAccount?.timezone || "UTC",
-        timeZoneName: "short",
-      }).format(new Date(value));
-    },
-    [adAccount?.timezone, locale]
-  );
-
   const formatRate = useCallback(
     (value: number | null | undefined) => {
       if (value === null || value === undefined || isNaN(value)) return "—";
@@ -607,16 +659,32 @@ export default function AdsIntelligencePage() {
     [locale]
   );
 
-  const formatFrequency = useCallback(
-    (val: number | null | undefined) => {
-      if (val === null || val === undefined || isNaN(val)) return "—";
-      const formatted = val.toFixed(2);
-      return locale === "id" ? `${formatted.replace(".", ",")}x` : `${formatted}x`;
-    },
-    [locale]
-  );
-
   const dailyTrend = useMemo(() => apiData?.dailyTrend || [], [apiData?.dailyTrend]);
+  const displayedTotalResults = kpis?.totalResults ?? dailyTrend.reduce(
+    (sum, point) => sum + (point.results > 0 ? point.results : point.conversations ?? 0),
+    0
+  );
+  const displayedCostPerResult = displayedTotalResults > 0
+    ? (kpis?.totalSpend || 0) / displayedTotalResults
+    : null;
+  const daysCount = Math.max(dailyTrend.length, 1);
+  const totalImpressions = kpis?.totalImpressions ?? 0;
+  const totalLinkClicks = kpis?.linkClicks ?? 0;
+  const totalAllClicks = kpis?.allClicks ?? 0;
+  const intentClickRate = totalAllClicks > 0 ? (totalLinkClicks / totalAllClicks) * 100 : 0;
+  const clickConversionRate = totalLinkClicks > 0 && displayedTotalResults > 0
+    ? (displayedTotalResults / totalLinkClicks) * 100
+    : 0;
+  const averageResultsPerDay = displayedTotalResults / daysCount;
+  const oneDecimal = (value: number) => new Intl.NumberFormat(locale === "id" ? "id-ID" : "en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value);
+  const liveActionSummary = (apiData?.liveAccountActions || [])
+    .map((action) => ({ ...describeMetaAction(action.action_type), count: Number(action.value) || 0 }))
+    .filter((action) => action.count > 0 && action.category !== "other" && action.category !== "link_click")
+    .sort((a, b) => b.count - a.count)
+    .filter((action, index, all) => all.findIndex((candidate) => candidate.label === action.label) === index)
+    .slice(0, 2)
+    .map((action) => `${formatNumber(action.count)} ${action.label}`)
+    .join(" · ");
   const spendTrend = useMemo(() => dailyTrend.map((d) => d.spend), [dailyTrend]);
   const resultsTrend = useMemo(
     () => dailyTrend.map((d) => d.results ?? d.conversations ?? 0),
@@ -639,12 +707,10 @@ export default function AdsIntelligencePage() {
   );
 
   const spendSubtitle = useMemo(() => {
-    if (dateRange === "today") return locale === "id" ? "Hari ini" : "Today";
-    if (dateRange === "7d") return locale === "id" ? "Total 7 hari" : "Total 7 days";
-    if (dateRange === "14d") return locale === "id" ? "Total 14 hari" : "Total 14 days";
-    if (dateRange === "30d") return locale === "id" ? "Total 30 hari" : "Total 30 days";
-    return locale === "id" ? `Total ${dateRange}` : `Total ${dateRange}`;
-  }, [dateRange, locale]);
+    const days = dailyTrend.length || 1;
+    const average = (kpis?.totalSpend || 0) / days;
+    return `${locale === "id" ? "Rata-rata" : "Average"} ${formatAdCurrency(average)} / ${locale === "id" ? "hari" : "day"}`;
+  }, [dailyTrend.length, kpis?.totalSpend, formatAdCurrency, locale]);
 
   const dateRangeContext = apiData?.dateRangeContext;
   const dateRangeContextText = useMemo(() => {
@@ -654,22 +720,27 @@ export default function AdsIntelligencePage() {
     const sinceStr = formatReportDate(dateRangeContext.since, false);
     const untilStr = formatReportDate(dateRangeContext.until, true);
     const prefix = locale === "id" ? "Periode" : "Period";
-    let text = `${prefix} ${sinceStr} – ${untilStr}`;
-
-    if (
-      dateRangeContext.earliestDate &&
-      dateRangeContext.since &&
-      dateRangeContext.earliestDate > dateRangeContext.since
-    ) {
-      const earliestStr = formatReportDate(dateRangeContext.earliestDate, false);
-      const availableText =
-        locale === "id"
-          ? `data tersedia sejak ${earliestStr}`
-          : `data available since ${earliestStr}`;
-      text += ` · ${availableText}`;
-    }
-    return text;
+    return `${prefix} ${sinceStr} – ${untilStr}`;
   }, [dateRangeContext, formatReportDate, locale]);
+
+  const periodChipLabel = useMemo(() => {
+    const labels: Record<string, { id: string; en: string }> = {
+      today: { id: "Hari Ini", en: "Today" },
+      yesterday: { id: "Kemarin", en: "Yesterday" },
+      "7d": { id: "7 Hari Terakhir", en: "Last 7 Days" },
+      "14d": { id: "14 Hari Terakhir", en: "Last 14 Days" },
+      "30d": { id: "30 Hari Terakhir", en: "Last 30 Days" },
+      this_month: { id: "Bulan Ini", en: "This Month" },
+      last_month: { id: "Bulan Lalu", en: "Last Month" },
+      all: { id: "Semua Waktu", en: "All Time" },
+      maximum: { id: "Semua Waktu", en: "All Time" },
+    };
+    if (labels[dateRange]) return locale === "id" ? labels[dateRange].id : labels[dateRange].en;
+    if (dateRange.includes(":") || dateRange.includes("_")) {
+      return dateRangeContextText?.replace(/^(Periode|Period)\s+/i, "") || dateRange.replace(/[:_]/, " – ");
+    }
+    return dateRange;
+  }, [dateRange, dateRangeContextText, locale]);
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto pb-20">
@@ -700,11 +771,10 @@ export default function AdsIntelligencePage() {
                     </option>
                   ))}
                 </select>
-                <span className="text-[11px] text-zinc-400">
-                  {adAccount?.status || ""}
-                  {adAccount?.lastSyncedAt
-                    ? ` · ${locale === "id" ? "Sinkron" : "Synced"} ${formatSyncDate(adAccount.lastSyncedAt)}`
-                    : ""}
+                <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  {locale === "id" ? "Terhubung · Sinkron otomatis" : "Connected · Auto-sync"}{" "}
+                  {formatRelativeSyncTime(adAccount?.lastSyncedAt || apiData?.lastSyncedAt, locale)}
                 </span>
               </label>
             ) : (
@@ -716,22 +786,10 @@ export default function AdsIntelligencePage() {
             )}
             {adAccount && (
               <>
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-800 dark:bg-zinc-800/80 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700/60">
-                  {adAccount.name || adAccount.id}
-                </span>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-600 dark:bg-zinc-800/80 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/60">
                   {adAccount.currency || "Currency unavailable"} · {adAccount.timezone || "Timezone unavailable"}
                 </span>
               </>
-            )}
-            {apiData?.lastSyncedAt && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 ml-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                <span>
-                  {locale === "id" ? "Sinkron" : "Synced"}{" "}
-                  {formatSyncDate(apiData.lastSyncedAt)}
-                </span>
-              </span>
             )}
           </div>
         </div>
@@ -762,9 +820,9 @@ export default function AdsIntelligencePage() {
           {/* Sinkronkan Meta (Primary) */}
           <button
             type="button"
-            onClick={handleTriggerSync}
-            disabled={isSyncing}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:bg-zinc-800 dark:hover:bg-zinc-100 px-4 py-2 text-xs font-semibold shadow-sm cursor-pointer transition-colors disabled:opacity-50"
+            onClick={() => handleTriggerSync()}
+            disabled={isSyncing || !apiData?.canSync || !adAccount}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 px-3.5 py-2 text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50"
           >
             <svg
               className={`h-3.5 w-3.5 ${
@@ -782,12 +840,8 @@ export default function AdsIntelligencePage() {
               />
             </svg>
             {isSyncing
-              ? locale === "id"
-                ? "Menyinkronkan..."
-                : "Syncing..."
-              : locale === "id"
-              ? "Sinkronkan Meta"
-              : "Sync Meta"}
+              ? locale === "id" ? "Memperbarui..." : "Refreshing..."
+              : locale === "id" ? "Refresh Paksa" : "Force Refresh"}
           </button>
         </div>
       </div>
@@ -810,17 +864,11 @@ export default function AdsIntelligencePage() {
           </button>
         </div>
       )}
-      {!isLoading && !loadError && isStale && apiData?.lastSyncedAt && (
-        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-          {locale === "id"
-            ? `Data tersimpan terakhir diperbarui pada ${formatSyncDate(apiData.lastSyncedAt)}. Ini bukan data live; sinkronkan untuk memperbarui.`
-            : `Stored data last updated at ${formatSyncDate(apiData.lastSyncedAt)}. This is not live data; sync to refresh.`}
-        </div>
-      )}
 
       {/* Period Filter Tabs & Date Range Context */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
-        <div className="inline-flex p-1 rounded-xl bg-zinc-100 dark:bg-zinc-900/90 border border-zinc-200/80 dark:border-zinc-800/80">
+      <div className="flex flex-col gap-3 pt-1">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="inline-flex w-fit max-w-full flex-wrap gap-1 rounded-xl border border-zinc-200/80 bg-zinc-100 p-1 dark:border-zinc-800/80 dark:bg-zinc-900/90">
           {[
             { id: "today", label: locale === "id" ? "Hari ini" : "Today" },
             { id: "7d", label: locale === "id" ? "7 hari" : "7 days" },
@@ -835,6 +883,7 @@ export default function AdsIntelligencePage() {
                 onClick={() => {
                   setDateRange(pill.id);
                   setCurrentPage(1);
+                  setShowCustomDateRange(false);
                 }}
                 className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
                   isActive
@@ -846,12 +895,64 @@ export default function AdsIntelligencePage() {
               </button>
             );
           })}
+          <button
+            type="button"
+            aria-pressed={dateRange.includes(":") || showCustomDateRange}
+            onClick={() => {
+              const existingRange = dateRange.split(":");
+              setCustomDateStart(existingRange.length === 2 ? existingRange[0] : "");
+              setCustomDateEnd(existingRange.length === 2 ? existingRange[1] : "");
+              setShowCustomDateRange((open) => !open);
+            }}
+            className={`rounded-lg px-3 py-1 text-xs font-semibold transition-all ${dateRange.includes(":") || showCustomDateRange
+              ? "bg-white text-indigo-700 shadow-xs dark:bg-zinc-800 dark:text-indigo-300 dark:border dark:border-zinc-700/80"
+              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
+          >
+            {locale === "id" ? "Kustom" : "Custom"}
+          </button>
+          </div>
+
+          {dateRangeContextText && (
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+              {dateRangeContextText}
+            </div>
+          )}
         </div>
 
-        {dateRangeContextText && (
-          <div className="text-xs text-zinc-500 dark:text-zinc-400">
-            {dateRangeContextText}
-          </div>
+        {showCustomDateRange && (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!customDateStart || !customDateEnd || customDateStart > customDateEnd) return;
+              setDateRange(`${customDateStart}:${customDateEnd}`);
+              setCurrentPage(1);
+              setShowCustomDateRange(false);
+            }}
+            className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:flex-row sm:items-end"
+          >
+            <label className="space-y-1">
+              <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{locale === "id" ? "Mulai" : "Start"}</span>
+              <input type="date" required value={customDateStart} max={customDateEnd || undefined} onChange={(event) => setCustomDateStart(event.target.value)} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200" />
+            </label>
+            <label className="space-y-1">
+              <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{locale === "id" ? "Sampai" : "End"}</span>
+              <input type="date" required value={customDateEnd} min={customDateStart || undefined} onChange={(event) => setCustomDateEnd(event.target.value)} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200" />
+            </label>
+            <button type="submit" disabled={!customDateStart || !customDateEnd || customDateStart > customDateEnd} className="rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
+              {locale === "id" ? "Terapkan Periode" : "Apply Range"}
+            </button>
+            <button type="button" onClick={() => setShowCustomDateRange(false)} className="rounded-lg px-3 py-2 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+              {locale === "id" ? "Batal" : "Cancel"}
+            </button>
+            {dateRange.includes(":") && (
+              <span className="text-[11px] text-zinc-500 sm:ml-auto">
+                {locale === "id" ? "Rentang aktif:" : "Active range:"} {dateRange.replace(":", " – ")}
+              </span>
+            )}
+            {customDateStart && customDateEnd && customDateStart > customDateEnd && (
+              <span role="alert" className="text-[11px] text-rose-600">{locale === "id" ? "Tanggal mulai harus sebelum tanggal akhir." : "Start date must be on or before end date."}</span>
+            )}
+          </form>
         )}
       </div>
 
@@ -859,13 +960,34 @@ export default function AdsIntelligencePage() {
       {apiData?.insightsState === "no_data_for_period" && (
         <div role="status" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
           {locale === "id"
-            ? "Belum ada data Insights tersimpan untuk rentang tanggal ini. Pilih rentang khusus saat iklan pernah berjalan, lalu klik Sinkronkan Meta agar data periode itu dimuat. Metrik tetap ditandai tidak tersedia, bukan nol."
-            : "No Insights are stored for this date range yet. Choose a custom period when ads were running, then click Sync Meta to load it. Metrics stay unavailable rather than being shown as zero."}
+            ? "Belum ada Insights tersimpan untuk periode ini. Pembaruan otomatis sedang mengambil data dari Meta; angka tetap ditandai tidak tersedia sampai Meta mengembalikannya."
+            : "No Insights are stored for this period yet. Automatic refresh is requesting Meta data; values remain unavailable until Meta returns them."}
         </div>
       )}
       {apiData?.insightsState === "no_account_selected" && (
         <div role="status" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
           {locale === "id" ? "Pilih akun iklan untuk memuat campaign dan Insights." : "Select an ad account to load campaigns and Insights."}
+        </div>
+      )}
+      {apiData?.accountMetricsState === "range_not_supported" && (
+        <div role="status" className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200">
+          {locale === "id"
+            ? "Jangkauan dan frekuensi akun membutuhkan periode tanggal yang terbatas. Pilih 7, 14, atau 30 hari lalu sinkronkan Meta."
+            : "Account reach and frequency require a bounded date range. Choose 7, 14, or 30 days, then sync Meta."}
+        </div>
+      )}
+      {apiData?.accountMetricsState === "filtered_scope" && (
+        <div role="status" className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200">
+          {locale === "id"
+            ? "Jangkauan unik dan frekuensi tingkat akun hanya ditampilkan saat semua kampanye dalam akun dipilih. Hapus filter kampanye/status/tujuan agar cakupannya sesuai."
+            : "Account-level unique reach and frequency are shown only for the full ad account. Clear campaign, status, or objective filters to use that scope."}
+        </div>
+      )}
+      {apiData?.accountMetricsState === "source_unavailable" && (
+        <div role="status" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          {locale === "id"
+            ? "Meta belum mengembalikan jangkauan atau frekuensi untuk akun dan periode ini. Nilai tidak diperkirakan dari penjumlahan data iklan."
+            : "Meta did not return reach or frequency for this account and period. These values are not estimated by adding ad-level data."}
         </div>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -889,9 +1011,7 @@ export default function AdsIntelligencePage() {
         <div className="rounded-2xl border border-zinc-200/90 dark:border-zinc-800/80 border-t-2 border-t-indigo-500 dark:border-t-indigo-500 bg-white dark:bg-[#0c0d12]/90 backdrop-blur-sm p-4.5 flex flex-col justify-between shadow-2xs relative">
           <div>
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {locale === "id"
-                ? `${kpis?.resultLabel || "Hasil"} Iklan`
-                : `Ad ${getLocalizedResultLabel(kpis?.resultLabel)}`}
+              {locale === "id" ? "Hasil Iklan (Konversi)" : "Ad Results (Conversions)"}
             </span>
             <div className="mt-2 flex items-baseline">
               {isLoading ? (
@@ -899,7 +1019,7 @@ export default function AdsIntelligencePage() {
               ) : (
                 <>
                   <span className="text-2xl font-bold tracking-tight text-indigo-600 dark:text-indigo-400 font-sans tabular-nums">
-                    {insightsAvailable ? formatNumber(kpis?.totalResults ?? 0) : "—"}
+                    {formatNumber(displayedTotalResults)}
                   </span>
                   <span className="ml-1.5 text-sm font-normal text-indigo-600/80 dark:text-indigo-400/80">
                     {locale === "id"
@@ -911,9 +1031,9 @@ export default function AdsIntelligencePage() {
             </div>
             <div
               className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-1"
-              title={getLocalizedResultTypeDescription(kpis?.resultTypeDescription)}
+              title={(kpis?.resultBreakdown || []).map((item) => `${item.label}: ${item.count} · ${locale === "id" ? "Biaya/hasil" : "Cost/result"} ${formatAdCurrency(item.costPerResult)}`).join("\n") || getLocalizedResultTypeDescription(kpis?.resultTypeDescription)}
             >
-              {getLocalizedResultTypeDescription(kpis?.resultTypeDescription)}
+              {getLocalizedResultTypeDescription(kpis?.resultTypeDescription) || getLocalizedResultTypeDescription(liveActionSummary) || (displayedTotalResults > 0 ? `${locale === "id" ? "Rata-rata" : "Average"} ${oneDecimal(averageResultsPerDay)} ${locale === "id" ? "hasil / hari" : "results / day"}` : (locale === "id" ? "Belum ada hasil" : "No results yet"))}
             </div>
           </div>
           <PerformanceSparkline id="results" data={resultsTrend} isHighlight={true} />
@@ -930,12 +1050,12 @@ export default function AdsIntelligencePage() {
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-sans tabular-nums">
               {isLoading
                 ? "..."
-                : kpis?.costPerResult !== null && kpis?.costPerResult !== undefined
-                ? formatAdCurrency(kpis.costPerResult)
+                : displayedCostPerResult !== null
+                ? formatAdCurrency(displayedCostPerResult)
                 : "—"}
             </div>
             <div className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-              {locale === "id" ? "Berdasarkan hasil aktual" : "Based on actual results"}
+              {locale === "id" ? "Per Hasil Aktual" : "Per Actual Result"}
             </div>
           </div>
           <PerformanceSparkline id="cpr" data={cprTrend} />
@@ -948,115 +1068,52 @@ export default function AdsIntelligencePage() {
               {locale === "id" ? "CTR Tautan" : "Link CTR"}
             </span>
             <div className="mt-2 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white font-sans tabular-nums">
-              {isLoading ? "..." : insightsAvailable ? formatRate(kpis?.linkCtr) : "—"}
+              {isLoading ? "..." : formatRate(kpis?.linkCtr ?? 0)}
             </div>
             <div className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
               {isLoading
                 ? "..."
-                : `${formatNumber(kpis?.linkClicks ?? 0)} ${
+                : `${formatNumber(totalLinkClicks)} ${
                     locale === "id" ? "klik tautan" : "link clicks"
-                  }`}
+                  } · CVR ${displayedTotalResults > 0 && totalLinkClicks > 0 ? formatRate(clickConversionRate) : locale === "id" ? "0%" : "0%"}`}
             </div>
           </div>
           <PerformanceSparkline id="ctr" data={ctrTrend} />
         </div>
       </div>
 
-      {/* Secondary Metric Strip (7 columns matching reference media_1793110930939.png) */}
+      {/* Funnel & Pacing Diagnostic Bar */}
       <div className="rounded-2xl border border-zinc-200/90 dark:border-zinc-800/80 bg-white/70 dark:bg-[#0c0d12]/90 backdrop-blur-sm px-5 py-3.5 shadow-2xs">
-        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 xl:grid-cols-[1.15fr_0.85fr_0.85fr_0.85fr_0.85fr_0.75fr_1.7fr] gap-y-3.5 gap-x-4 items-center">
-          {/* 1. Reach harian (akumulasi) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-y-3.5 gap-x-4 items-center">
           <div className="min-w-0">
-            <div
-              className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate"
-              title={
-                locale === "id"
-                  ? "Penjumlahan reach harian pada iklan terpilih; audiens antarhari dan antariklan dapat tumpang tindih"
-                  : "Sum of daily reach across selected ads; audiences may overlap across days"
-              }
-            >
-              {locale === "id" ? "Reach harian (akumulasi)" : "Daily reach (accumulated)"}
-            </div>
-            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">
-              {formatNumber(kpis?.totalReach ?? 0)}
-            </div>
+            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">{locale === "id" ? "Tayangan" : "Impressions"}</div>
+            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">{formatNumber(totalImpressions)}</div>
+            <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">{locale === "id" ? "Rata-rata" : "Average"} {formatNumber(Math.round(totalImpressions / daysCount))} / {locale === "id" ? "hari" : "day"}</div>
           </div>
-
-          {/* 2. Tayangan */}
           <div className="min-w-0">
-            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">
-              {locale === "id" ? "Tayangan" : "Impressions"}
-            </div>
-            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">
-              {formatNumber(kpis?.totalImpressions ?? 0)}
-            </div>
+            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">CPM</div>
+            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">{formatAdCurrency(kpis?.cpm ?? 0)}</div>
+            <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">{locale === "id" ? "Biaya / 1.000 tayangan" : "Cost / 1,000 impressions"}</div>
           </div>
-
-          {/* 3. Klik tautan */}
           <div className="min-w-0">
-            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">
-              {locale === "id" ? "Klik tautan" : "Link clicks"}
-            </div>
-            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">
-              {formatNumber(kpis?.linkClicks ?? 0)}
-            </div>
+            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">{locale === "id" ? "Semua Klik" : "All Clicks"}</div>
+            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">{formatNumber(totalAllClicks)}</div>
+            <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">CTR {formatRate(kpis?.allCtr ?? 0)} · CPC {formatAdCurrency(kpis?.allCpc ?? 0)}</div>
           </div>
-
-          {/* 4. CPC tautan */}
           <div className="min-w-0">
-            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">
-              {locale === "id" ? "CPC tautan" : "Link CPC"}
-            </div>
-            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">
-              {formatAdCurrency(kpis?.linkCpc ?? null)}
-            </div>
+            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">{locale === "id" ? "Rasio Niat Klik" : "Link Intent Rate"}</div>
+            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">{totalAllClicks > 0 ? formatRate(intentClickRate) : "0%"}</div>
+            <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">{formatNumber(totalLinkClicks)} {locale === "id" ? "tautan dari" : "link clicks of"} {formatNumber(totalAllClicks)} {locale === "id" ? "klik" : "clicks"}</div>
           </div>
-
-          {/* 5. CPM */}
           <div className="min-w-0">
-            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">
-              CPM
-            </div>
-            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">
-              {formatAdCurrency(kpis?.cpm ?? null)}
-            </div>
+            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">{locale === "id" ? "CPC Tautan" : "Link CPC"}</div>
+            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">{formatAdCurrency(kpis?.linkCpc ?? 0)}</div>
+            <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">{locale === "id" ? "Rata-rata" : "Average"} {formatNumber(Math.round(totalLinkClicks / daysCount))} {locale === "id" ? "klik / hari" : "clicks / day"}</div>
           </div>
-
-          {/* 6. Frekuensi */}
           <div className="min-w-0">
-            <div
-              className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate"
-              title={
-                locale === "id"
-                  ? "Rata-rata frekuensi tayangan terhadap jangkauan (impressions / reach)"
-                  : "Average impression frequency (impressions / reach)"
-              }
-            >
-              {locale === "id" ? "Frekuensi" : "Frequency"}
-            </div>
-            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">
-              {formatFrequency(kpis?.frequency)}
-            </div>
-          </div>
-
-          {/* 7. Semua klik */}
-          <div className="col-span-2 sm:col-span-2 md:col-span-2 lg:col-span-1 min-w-0">
-            <div
-              className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate"
-              title={
-                locale === "id"
-                  ? "Klik, CTR, dan CPC semua jenis"
-                  : "All clicks, CTR, and CPC across all action types"
-              }
-            >
-              {locale === "id" ? "Semua klik" : "All clicks"}
-            </div>
-            <div className="mt-1 flex items-baseline gap-1.5 font-mono text-sm font-bold text-zinc-900 dark:text-zinc-100 tabular-nums whitespace-nowrap overflow-hidden">
-              <span>{formatNumber(kpis?.allClicks ?? 0)}</span>
-              <span className="font-sans text-xs font-normal text-zinc-500 dark:text-zinc-400">
-                · CTR {formatRate(kpis?.allCtr)} · CPC {formatAdCurrency(kpis?.allCpc ?? null)}
-              </span>
-            </div>
+            <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate">{locale === "id" ? "Konversi Klik (CVR)" : "Click Conversion (CVR)"}</div>
+            <div className="mt-1 text-sm font-bold font-mono text-zinc-900 dark:text-zinc-100 tabular-nums">{totalLinkClicks > 0 && displayedTotalResults > 0 ? formatRate(clickConversionRate) : "0%"}</div>
+            <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">{locale === "id" ? "Rata-rata" : "Average"} {oneDecimal(averageResultsPerDay)} {locale === "id" ? "hasil / hari" : "results / day"}</div>
           </div>
         </div>
       </div>
@@ -1072,11 +1129,14 @@ export default function AdsIntelligencePage() {
 
       <CTWAFunnelPanel
         impressions={kpis?.totalImpressions ?? 0}
+        allClicks={kpis?.allClicks ?? 0}
         linkClicks={kpis?.linkClicks ?? 0}
-        conversations={kpis?.conversationDataIncomplete ? null : kpis?.totalConversations ?? 0}
-        linkCtr={kpis?.linkCtr ?? null}
-        results={kpis?.totalResults}
-        resultLabel={kpis?.resultLabel || "Hasil"}
+        totalResults={displayedTotalResults}
+        allCpc={kpis?.allCpc ?? 0}
+        linkCpc={kpis?.linkCpc ?? 0}
+        cpm={kpis?.cpm ?? 0}
+        costPerResult={displayedCostPerResult}
+        currency={adAccount?.currency || kpis?.currency || "IDR"}
       />
 
       {/* 4. Delivery Diagnostics Panel */}
@@ -1097,6 +1157,7 @@ export default function AdsIntelligencePage() {
           deleted: kpis?.deletedAds ?? 0,
           unknown: kpis?.unknownDeliveryAds ?? 0,
         }}
+        classifiedAds={kpis?.classifiedAds ?? 0}
       />
 
       {/* 5. AI Ads Performance Analyst (On-Demand Intelligence) */}
@@ -1108,18 +1169,22 @@ export default function AdsIntelligencePage() {
         currency={adAccount?.currency || kpis?.currency || ""}
         timezone={adAccount?.timezone || "UTC"}
         currentDateRange={dateRange}
+        lastSyncedAt={adAccount?.lastSyncedAt || apiData?.lastSyncedAt || null}
+        canSync={Boolean(apiData?.canSync && adAccount)}
+        isSyncing={isSyncing}
+        onTriggerSync={handleTriggerSync}
       />
 
       {/* 5. Filter Toolbar yang Terletak Tepat di Atas Tabel Iklan */}
       <section
         aria-label="Filter dan Kontrol Tabel Iklan"
-        className="space-y-2.5 static lg:sticky lg:top-14 lg:z-20 bg-zinc-50/95 dark:bg-[#090a0c]/95 backdrop-blur-xs py-1"
+        className="space-y-2.5 static xl:sticky xl:top-14 xl:z-20 bg-transparent py-1"
       >
         <div className="rounded-xl border border-zinc-200/90 bg-white p-3.5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 space-y-3">
           {/* Top Row: Search Input + Prioritized Filters */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+          <div className="grid grid-cols-1 gap-3">
             {/* Search Input */}
-            <div className="relative w-full lg:w-72 shrink-0">
+            <div className="relative w-full min-w-0">
               <label htmlFor="search-input" className="sr-only">
                 Cari iklan
               </label>
@@ -1161,11 +1226,12 @@ export default function AdsIntelligencePage() {
             </div>
 
             {/* Filter Controls Row: Prioritized: 1. Campaign, 2. Status Penayangan, 3. Status Campaign Induk, 4. Objective, 5. Rentang Tanggal */}
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
               {/* 1. Campaign Searchable Dropdown */}
               <CampaignSearchableDropdown
                 campaigns={campaigns}
                 selectedCampaignId={selectedCampaignId}
+                className="w-full min-w-0"
                 onSelectCampaign={(id) => {
                   setSelectedCampaignId(id);
                   setCurrentPage(1);
@@ -1185,7 +1251,7 @@ export default function AdsIntelligencePage() {
                     setCurrentPage(1);
                   }}
                   title="Filter Status Penayangan"
-                  className={`rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs cursor-pointer select-none transition-colors max-w-[160px] sm:max-w-[170px] truncate ${
+                  className={`w-full min-w-0 rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs cursor-pointer select-none transition-colors truncate ${
                     deliveryStatusFilter !== "all"
                       ? "border-indigo-300 bg-indigo-50/70 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200"
                       : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
@@ -1215,7 +1281,7 @@ export default function AdsIntelligencePage() {
                     setCurrentPage(1);
                   }}
                   title="Filter Status Campaign Induk"
-                  className={`rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs cursor-pointer select-none transition-colors max-w-[160px] sm:max-w-[170px] truncate ${
+                  className={`w-full min-w-0 rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs cursor-pointer select-none transition-colors truncate ${
                     campaignStatusFilter !== "all"
                       ? "border-indigo-300 bg-indigo-50/70 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200"
                       : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
@@ -1243,7 +1309,7 @@ export default function AdsIntelligencePage() {
                     setCurrentPage(1);
                   }}
                   title="Filter Objective Kampanye"
-                  className={`rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs cursor-pointer select-none transition-colors max-w-[150px] sm:max-w-[160px] truncate ${
+                  className={`w-full min-w-0 rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs cursor-pointer select-none transition-colors truncate ${
                     objectiveFilter !== "all"
                       ? "border-indigo-300 bg-indigo-50/70 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200"
                       : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
@@ -1258,37 +1324,33 @@ export default function AdsIntelligencePage() {
                     ),
                   ].map((obj) => (
                     <option key={obj} value={obj}>
-                      {obj}
+                      {translateMetaTerm(obj)}
                     </option>
                   ))}
                 </select>
               </div>
 
               {/* 5. Rentang Tanggal */}
-              <DateRangeFilter currentRange={dateRange} onChange={setDateRange} />
-
-              {/* Reset Filter Button (Only when active) */}
-              {hasActiveFilters && (
-                <button
-                  type="button"
-                  onClick={resetAllFilters}
-                  className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300 cursor-pointer transition-colors shrink-0"
-                >
-                  Reset Filter
-                </button>
-              )}
+              <DateRangeFilter fullWidth currentRange={dateRange} onChange={setDateRange} />
             </div>
           </div>
 
           {/* Secondary Row: Active Filter Chips & Accurate Count Summary */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-500">
+          <div className="grid grid-cols-1 gap-3 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
             {/* Active Filter Chips */}
-            <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-medium text-zinc-400">Filter Aktif:</span>
               {!hasActiveFilters && dateRange === "30d" ? (
-                <span className="text-[11px] text-zinc-400 italic">Semua filter default (30 hari terakhir)</span>
+                <span className="text-[11px] text-zinc-400 italic">
+                  Semua filter default (30 hari terakhir{dateRangeContextText ? ` · ${dateRangeContextText.replace(/^(Periode|Period)\s+/i, "")}` : ""} · belanja &gt; 0)
+                </span>
               ) : (
                 <>
+                  {!showOnlyWithSpend && (
+                    <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                      Semua status belanja ditampilkan
+                    </span>
+                  )}
                   {deliveryStatusFilter !== "all" && (
                     <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 border border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800">
                       <span>Penayangan: {deliveryStatusFilter}</span>
@@ -1325,7 +1387,7 @@ export default function AdsIntelligencePage() {
 
                   {objectiveFilter !== "all" && (
                     <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 border border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800">
-                      <span>Objective: {objectiveFilter}</span>
+                      <span>{translateMetaTerm(objectiveFilter)}</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -1359,7 +1421,7 @@ export default function AdsIntelligencePage() {
 
                   {dateRange !== "30d" && (
                     <span className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-700 border border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700">
-                      <span>Periode: {dateRange}</span>
+                      <span title={dateRangeContextText || periodChipLabel}>{locale === "id" ? "Periode:" : "Period:"} {periodChipLabel}</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -1385,14 +1447,33 @@ export default function AdsIntelligencePage() {
               )}
             </div>
 
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 lg:justify-end">
+            <label className="inline-flex max-w-full cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] font-medium text-zinc-700 shadow-2xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+              <input
+                type="checkbox"
+                checked={showOnlyWithSpend}
+                onChange={(event) => {
+                  setShowOnlyWithSpend(event.target.checked);
+                  setCurrentPage(1);
+                }}
+                className="peer sr-only"
+                aria-label={locale === "id" ? "Tampilkan hanya iklan dengan belanja atau tayangan" : "Show only ads with spend or impressions"}
+              />
+              <span aria-hidden="true" className={`relative h-4 w-7 rounded-full transition-colors ${showOnlyWithSpend ? "bg-indigo-600" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${showOnlyWithSpend ? "translate-x-3.5" : "translate-x-0.5"}`} />
+              </span>
+              <span>{locale === "id" ? "Tampilkan hanya yang memiliki belanja/tayangan" : "Only show ads with spend/impressions"}</span>
+            </label>
+
             {/* Filtered Count Indicator */}
-            <div className="shrink-0 text-right text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+            <div className="shrink-0 whitespace-nowrap text-left text-[11px] font-medium text-zinc-500 dark:text-zinc-400 lg:text-right">
               Menampilkan{" "}
               <strong className="font-bold text-zinc-900 dark:text-zinc-100 font-mono">
                 {processedAds.length}
               </strong>{" "}
               dari{" "}
               <span className="font-mono">{rawAds?.length ?? 0}</span> iklan
+            </div>
             </div>
           </div>
         </div>
@@ -1405,13 +1486,13 @@ export default function AdsIntelligencePage() {
             <table className="w-full min-w-[860px] text-xs">
               <thead className="bg-zinc-50/90 text-[11px] font-semibold text-zinc-500 dark:bg-zinc-900/90 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
                 <tr>
-                  <th scope="col" className="sticky left-0 z-20 bg-zinc-50 px-4 py-3 text-left font-semibold dark:bg-zinc-900">Iklan</th>
-                  <th scope="col" className="px-3 py-3 text-left font-semibold">Status</th>
-                  <th scope="col" className="px-3 py-3 text-right font-semibold">Belanja</th>
-                  <th scope="col" className="px-3 py-3 text-right font-semibold">Hasil</th>
-                  <th scope="col" title="Reach dijumlahkan dari insight harian per iklan; audiens dapat tumpang tindih" className="px-3 py-3 text-right font-semibold">Reach* / Tayangan</th>
-                  <th scope="col" className="px-3 py-3 text-right font-semibold">CTR Tautan</th>
-                  <th scope="col" className="px-3 py-3 text-right font-semibold">CPC Tautan</th>
+                  <th scope="col" className="sticky left-0 z-20 bg-zinc-50 px-4 py-3.5 text-left font-semibold dark:bg-zinc-900">Nama Iklan & Kampanye</th>
+                  <th scope="col" className="px-4 py-3.5 text-left font-semibold">Status Tayang</th>
+                  <th scope="col" className="text-right tabular-nums px-4 py-3.5 font-semibold">Total Belanja</th>
+                  <th scope="col" className="text-right tabular-nums px-4 py-3.5 font-semibold">Hasil & Biaya</th>
+                  <th scope="col" className="text-right tabular-nums px-4 py-3.5 font-semibold">Tayangan</th>
+                  <th scope="col" className="text-right tabular-nums px-4 py-3.5 font-semibold">Rasio Klik (CTR)</th>
+                  <th scope="col" className="text-right tabular-nums px-4 py-3.5 font-semibold">Biaya / Klik</th>
                   <th scope="col" className="sticky right-0 z-20 bg-zinc-50 px-4 py-3 text-right font-semibold dark:bg-zinc-900">Aksi</th>
                 </tr>
               </thead>
@@ -1451,9 +1532,11 @@ export default function AdsIntelligencePage() {
         </div>
       ) : processedAds.length === 0 ? (
         <EmptyState
-          title={hasActiveFilters ? "Tidak ada iklan yang memenuhi filter" : "Belum ada data iklan"}
+          title={hasActiveFilters || (showOnlyWithSpend && (rawAds?.length ?? 0) > 0) ? "Tidak ada iklan yang memenuhi filter" : "Belum ada data iklan"}
           description={
-            hasActiveFilters
+            showOnlyWithSpend && (rawAds?.length ?? 0) > 0 && processedAds.length === 0
+              ? "Tidak ada iklan dengan belanja pada periode ini. Matikan toggle untuk melihat seluruh inventaris iklan."
+              : hasActiveFilters
               ? "Coba sesuaikan kata kunci pencarian, status delivery, atau rentang tanggal pelaporan."
               : "Sinkronkan akun Meta Ads Anda untuk memuat kampanye dan performa iklan properti."
           }
@@ -1465,46 +1548,46 @@ export default function AdsIntelligencePage() {
             <table className="w-full min-w-[860px] text-xs">
               <thead className="bg-zinc-50/90 text-[11px] font-semibold text-zinc-500 dark:bg-zinc-900/90 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800 sticky top-0 z-10 backdrop-blur-xs">
                 <tr>
-                  <th scope="col" className="px-4 py-3 text-left font-semibold">
-                    Iklan
+                  <th scope="col" className="px-4 py-3.5 text-left font-semibold">
+                    Nama Iklan & Kampanye
                   </th>
-                  <th scope="col" className="px-3 py-3 text-left font-semibold">
-                    Status
+                  <th scope="col" className="px-4 py-3.5 text-left font-semibold">
+                    Status Tayang
                   </th>
                   <th
                     scope="col"
                     onClick={() => handleHeaderSort("spend")}
-                    className="px-3 py-3 text-right font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
+                    className="text-right tabular-nums px-4 py-3.5 font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
                   >
-                    Belanja {sortBy === "spend" && (sortOrder === "asc" ? "↑" : "↓")}
+                    Total Belanja {sortBy === "spend" && (sortOrder === "asc" ? "↑" : "↓")}
                   </th>
                   <th
                     scope="col"
                     onClick={() => handleHeaderSort("results")}
-                    className="px-3 py-3 text-right font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
+                    className="text-right tabular-nums px-4 py-3.5 font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
                   >
-                    Hasil {sortBy === "results" && (sortOrder === "asc" ? "↑" : "↓")}
+                    Hasil & Biaya {sortBy === "results" && (sortOrder === "asc" ? "↑" : "↓")}
                   </th>
                   <th
                     scope="col"
-                    onClick={() => handleHeaderSort("reach")}
-                    className="px-3 py-3 text-right font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
+                    onClick={() => handleHeaderSort("impressions")}
+                    className="text-right tabular-nums px-4 py-3.5 font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
                   >
-                    Reach / Tayangan {sortBy === "reach" && (sortOrder === "asc" ? "↑" : "↓")}
+                    Tayangan {sortBy === "impressions" && (sortOrder === "asc" ? "↑" : "↓")}
                   </th>
                   <th
                     scope="col"
                     onClick={() => handleHeaderSort("linkCtr")}
-                    className="px-3 py-3 text-right font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
+                    className="text-right tabular-nums px-4 py-3.5 font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
                   >
-                    CTR Tautan {sortBy === "linkCtr" && (sortOrder === "asc" ? "↑" : "↓")}
+                    Rasio Klik (CTR) {sortBy === "linkCtr" && (sortOrder === "asc" ? "↑" : "↓")}
                   </th>
                   <th
                     scope="col"
                     onClick={() => handleHeaderSort("linkCpc")}
-                    className="px-3 py-3 text-right font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
+                    className="text-right tabular-nums px-4 py-3.5 font-semibold cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 select-none"
                   >
-                    CPC Tautan {sortBy === "linkCpc" && (sortOrder === "asc" ? "↑" : "↓")}
+                    Biaya / Klik {sortBy === "linkCpc" && (sortOrder === "asc" ? "↑" : "↓")}
                   </th>
                   <th scope="col" className="px-4 py-3 text-right font-semibold">
                     Aksi
@@ -1514,6 +1597,25 @@ export default function AdsIntelligencePage() {
               <tbody className="divide-y divide-zinc-100 text-zinc-800 dark:divide-zinc-800 dark:text-zinc-200">
                 {paginatedAds.map((ad) => {
                   const isDelivering = ad.deliveryStatus === "DELIVERING";
+                  const identity = formatSmartAdIdentity({
+                    adName: ad.adName,
+                    adSetName: ad.adsetName,
+                    campaignName: ad.campaignName,
+                    providerAdId: ad.providerAdId,
+                    creativeFormat: ad.creativeFormat,
+                  });
+                  const resolvedResultMetric = resolveAdResultMetric({
+                    spend: ad.spend,
+                    impressions: ad.impressions,
+                    conversions: ad.results,
+                    linkClicks: ad.linkClicks,
+                    clicks: ad.allClicks,
+                    objective: ad.campaignObjective,
+                  });
+                  const resultMetricValue = ad.resultMetricValue ?? resolvedResultMetric.value;
+                  const resultMetricLabel = ad.resultMetricLabel || resolvedResultMetric.label;
+                  const resultMetricCost = ad.resultMetricCostPerResult ?? resolvedResultMetric.costPerResult;
+                  const resultMetricUnit = ad.resultMetricUnitLabel || resolvedResultMetric.unitLabel;
 
                   return (
                     <tr
@@ -1521,14 +1623,19 @@ export default function AdsIntelligencePage() {
                       className="transition-colors hover:bg-zinc-50/70 dark:hover:bg-zinc-800/40 cursor-pointer"
                       onClick={() => setActiveDetailAdId(ad.id)}
                     >
-                      <td className="sticky left-0 z-10 max-w-[280px] bg-white px-4 py-3 dark:bg-zinc-900">
-                        <div className="truncate text-[13px] font-semibold text-zinc-900 dark:text-zinc-100" title={ad.adName}>
-                          {ad.adName}
+                      <td className="sticky left-0 z-10 max-w-[300px] bg-white px-4 py-3 text-left dark:bg-zinc-900">
+                        <div className="min-w-0 text-left">
+                          {identity.formatBadge && (
+                            <span className="mb-1 inline-block rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-medium tracking-wide text-slate-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400">
+                              {identity.formatBadge}
+                            </span>
+                          )}
+                          <div className="truncate text-left text-[13px] font-semibold text-slate-900 dark:text-zinc-100" title={identity.title}>
+                            {identity.title}
+                          </div>
                         </div>
-                        <div className="mt-0.5 truncate text-[10px] text-zinc-400" title={`${ad.providerAdId} · ${ad.campaignName}`}>
-                          <span className="font-mono">ID {ad.providerAdId}</span>
-                          <span className="mx-1.5">·</span>
-                          <span>{ad.campaignName}</span>
+                        <div className="mt-0.5 truncate text-[10px] text-zinc-400" title={identity.subtitle}>
+                          <span className="font-mono">{identity.subtitle}</span>
                         </div>
                       </td>
 
@@ -1549,47 +1656,33 @@ export default function AdsIntelligencePage() {
                         </div>
                       </td>
 
-                      <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums text-zinc-900 dark:text-zinc-100 font-semibold">
-                        {ad.hasInsights ? formatAdCurrency(ad.spend) : "—"}
+                      <td className="whitespace-nowrap text-right tabular-nums px-4 py-3.5 font-mono text-zinc-900 dark:text-zinc-100 font-semibold">
+                        {ad.hasInsights ? formatAdCurrency(ad.spend) : <span className="font-sans text-xs font-normal text-zinc-400">Belum ada data</span>}
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums">
-                        <div className="font-bold text-zinc-900 dark:text-zinc-100">
-                          {!ad.hasInsights ? (
-                            <span className="text-zinc-400">—</span>
-                          ) : ad.results > 0 ? (
-                            <span className="text-emerald-700 dark:text-emerald-400">{formatNumber(ad.results)} {ad.resultLabel || "Hasil"}</span>
-                          ) : (
-                            <span className="text-zinc-400">0</span>
-                          )}
-                        </div>
-                        {ad.resultTypeDescription && (
-                          <div className="mt-0.5 text-[10px] text-zinc-500 font-normal">
-                            {ad.resultTypeDescription}
-                          </div>
-                        )}
-                        <div className="mt-0.5 text-[10px] text-zinc-400">
-                          {ad.costPerResult !== null ? `Biaya/hasil: ${formatAdCurrency(ad.costPerResult)}` : "Biaya/hasil: —"}
-                        </div>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums">
-                        <div>
-                          <span className="mr-1 text-[10px] text-zinc-400" title="Akumulasi reach harian per iklan">Reach*</span>
-                          <span className="font-medium text-zinc-800 dark:text-zinc-200">{ad.hasInsights ? formatNumber(ad.reach) : "—"}</span>
-                        </div>
-                        <div className="mt-0.5 text-[10px] text-zinc-400">
-                          <span className="mr-1">Impr.</span>
-                          {ad.hasInsights ? formatNumber(ad.impressions) : "—"}
-                        </div>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums">
-                        {ad.linkCtr !== null ? (
-                          <span className="font-semibold text-zinc-900 dark:text-zinc-100">{formatRate(ad.linkCtr)}</span>
+                      <td className="whitespace-nowrap text-right tabular-nums px-4 py-3.5 font-mono">
+                        {resultMetricValue !== null ? (
+                          <>
+                            <span className="block text-right font-semibold text-slate-900 dark:text-zinc-100">{formatNumber(resultMetricValue)}</span>
+                            <span className="mt-0.5 block text-right font-sans text-[10px] font-normal text-zinc-500 dark:text-zinc-400">
+                              {resultMetricLabel} · {resultMetricCost === null ? "Biaya belum tersedia" : `${formatAdCurrency(resultMetricCost)}/${resultMetricUnit}`}
+                            </span>
+                          </>
                         ) : (
-                          <span className="text-zinc-400">—</span>
+                          <span className="block text-right font-sans text-[10px] font-normal text-zinc-400">Belum ada data</span>
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums text-zinc-700 dark:text-zinc-300">
-                        {ad.linkCpc !== null ? formatAdCurrency(ad.linkCpc) : "—"}
+                      <td className="whitespace-nowrap text-right tabular-nums px-4 py-3.5 font-mono">
+                        {ad.hasInsights ? <span className="block text-right">{formatNumber(ad.impressions)}</span> : <span className="block text-right font-sans text-[10px] font-normal text-zinc-400">Belum ada data</span>}
+                      </td>
+                      <td className="whitespace-nowrap text-right tabular-nums px-4 py-3.5 font-mono">
+                        {ad.linkCtr !== null ? (
+                          <span className="block text-right font-semibold text-zinc-900 dark:text-zinc-100">{formatRate(ad.linkCtr)}</span>
+                        ) : (
+                          <span className="block text-right font-sans text-[10px] text-zinc-400">Belum ada data</span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap text-right tabular-nums px-4 py-3.5 font-mono text-zinc-700 dark:text-zinc-300">
+                        {ad.linkCpc !== null ? <span className="block text-right">{formatAdCurrency(ad.linkCpc)}</span> : <span className="block text-right font-sans text-[10px] text-zinc-400">Belum ada klik</span>}
                       </td>
                       <td className="sticky right-0 z-10 bg-white px-4 py-3 text-right dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
                         <button
@@ -1643,7 +1736,6 @@ export default function AdsIntelligencePage() {
               </div>
             </div>
           )}
-          <p className="border-t border-zinc-100 px-4 py-2 text-[10px] text-zinc-400 dark:border-zinc-800">* Reach merupakan akumulasi reach harian per iklan, bukan jangkauan unik periode.</p>
         </div>
       )}
 
@@ -1653,6 +1745,7 @@ export default function AdsIntelligencePage() {
           ad={selectedAd}
           currency={adAccount?.currency || kpis?.currency || ""}
           lastSyncedAt={apiData?.lastSyncedAt}
+          dateRange={dateRange}
           onClose={() => setActiveDetailAdId(null)}
         />
       )}

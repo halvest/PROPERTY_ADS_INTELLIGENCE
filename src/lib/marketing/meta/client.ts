@@ -6,6 +6,7 @@ import {
   type MetaCampaignResponse,
   type MetaAdResponse,
   type MetaInsightResponse,
+  type MetaAccountInsightResponse,
   type MetaPaginatedResponse,
   type MetaApiErrorPayload,
   type MetaFacebookPage,
@@ -45,6 +46,10 @@ export class MetaMarketingApiClient {
   private readonly fetchFn: typeof fetch;
   /** True when the last fetchAllPages call stopped at the page cap with more data available. */
   public lastFetchTruncated = false;
+  /** Pages actually fetched by the last fetchAllPages call. */
+  public lastFetchPages = 0;
+  /** Whether Meta indicated another page existed when traversal stopped. */
+  public lastFetchHasMore = false;
 
   constructor(options: MetaMarketingClientOptions = {}) {
     const config = getMetaMarketingConfig({ requireConfigured: false });
@@ -57,6 +62,19 @@ export class MetaMarketingApiClient {
     this.timeoutMs = options.timeoutMs ?? config.timeoutMs;
     this.maxRetries = options.maxRetries ?? config.maxRetries;
     this.fetchFn = options.fetchFn || fetch;
+  }
+
+  /** Creates an independent pagination-state client for parallel Insights requests. */
+  fork(): MetaMarketingApiClient {
+    return new MetaMarketingApiClient({
+      accessToken: this.accessToken,
+      adAccountId: this.defaultAdAccountId,
+      apiVersion: this.apiVersion,
+      baseUrl: this.baseUrl,
+      timeoutMs: this.timeoutMs,
+      maxRetries: this.maxRetries,
+      fetchFn: this.fetchFn,
+    });
   }
 
   /**
@@ -220,9 +238,39 @@ export class MetaMarketingApiClient {
   }
 
   /**
+   * Fetches account-level Insights for one exact date range. Meta computes
+   * reach and frequency at the account scope, so these values remain valid
+   * across multiple campaigns, ads, and days.
+   */
+  async getAccountInsights(options: {
+    targetAdAccountId?: string;
+    timeRange: { since: string; until: string };
+    datePreset?: string;
+    limit?: number;
+    maxPages?: number;
+  }): Promise<MetaAccountInsightResponse[]> {
+    const accountId = normalizeAdAccountId(options.targetAdAccountId || this.defaultAdAccountId);
+    this.assertAccountId(accountId);
+
+    const params = new URLSearchParams({
+      level: "account",
+      fields: "spend,impressions,reach,frequency,cpm,inline_link_clicks,inline_link_click_ctr,cost_per_inline_link_click,clicks,ctr,cpc,actions,account_currency,date_start,date_stop",
+      time_increment: "all_days",
+      limit: String(options.limit ?? 100),
+    });
+    if (options.datePreset) params.set("date_preset", options.datePreset);
+    else params.set("time_range", JSON.stringify(options.timeRange));
+    const endpoint = `/${accountId}/insights?${params.toString()}`;
+    return this.fetchAllPages<MetaAccountInsightResponse>(endpoint, options.maxPages ?? 20);
+  }
+
+  /**
    * Traverses cursor-based pagination to collect all records up to a safe maximum.
    */
   private async fetchAllPages<T>(initialEndpoint: string, maxPages = 100): Promise<T[]> {
+    this.lastFetchTruncated = false;
+    this.lastFetchPages = 0;
+    this.lastFetchHasMore = false;
     const allRecords: T[] = [];
     let currentEndpoint: string | null = initialEndpoint;
     let pageCount = 0;
@@ -258,6 +306,8 @@ export class MetaMarketingApiClient {
     if (currentEndpoint && pageCount >= maxPages) {
       this.lastFetchTruncated = true;
     }
+    this.lastFetchPages = pageCount;
+    this.lastFetchHasMore = Boolean(currentEndpoint);
 
     return allRecords;
   }

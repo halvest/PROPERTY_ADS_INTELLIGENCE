@@ -59,6 +59,8 @@ export interface CrmLeadTemplateRow {
   domisili?: string;
   tanggalKontak: string;
   namaIklan?: string;
+  adId?: string | null;
+  campaignId?: string | null;
   tahapFunnel: FunnelStage;
   qualityLabel?: QualityLabel | null;
   catatan?: string;
@@ -101,6 +103,115 @@ export interface CrmImportResult {
     notes?: string;
     isNew: boolean;
   }>;
+}
+
+export interface CrmAdSourceOption {
+  adId: string;
+  campaignId: string;
+  adName: string;
+  campaignName: string;
+  adStatus: string;
+  campaignStatus: string;
+}
+
+export interface ResolvedCrmSource {
+  adId: string | null;
+  campaignId: string | null;
+  sourceName: string | null;
+  matched: boolean;
+}
+
+async function getTenantCrmSourceCatalog(supabase: SupabaseClient, organizationId: string) {
+  const [{ data: ads, error: adsError }, { data: campaigns, error: campaignsError }] = await Promise.all([
+    supabase.from("ads").select("id, name, status, campaign_id").eq("organization_id", organizationId).order("name").limit(5000),
+    supabase.from("campaigns").select("id, name, status").eq("organization_id", organizationId).order("name").limit(5000),
+  ]);
+  if (adsError) throw new Error(`Gagal memuat referensi iklan: ${adsError.message}`);
+  if (campaignsError) throw new Error(`Gagal memuat referensi kampanye: ${campaignsError.message}`);
+  const campaignMap = new Map((campaigns || []).map((campaign) => [campaign.id, campaign]));
+  const adOptions: CrmAdSourceOption[] = (ads || []).flatMap((ad) => {
+    const campaign = campaignMap.get(ad.campaign_id);
+    if (!campaign) return [];
+    return [{
+      adId: ad.id,
+      campaignId: ad.campaign_id,
+      adName: ad.name,
+      campaignName: campaign.name,
+      adStatus: String(ad.status || "UNKNOWN").toUpperCase(),
+      campaignStatus: String(campaign.status || "UNKNOWN").toUpperCase(),
+    }];
+  });
+  return { ads: adOptions, campaigns: (campaigns || []).map((c) => ({ id: c.id, name: c.name, status: String(c.status || "UNKNOWN").toUpperCase() })) };
+}
+
+export async function listCrmLeadSources(supabase: SupabaseClient, organizationId: string) {
+  const catalog = await getTenantCrmSourceCatalog(supabase, organizationId);
+  const { data: insightRows } = await supabase
+    .from("ad_insights")
+    .select("ad_id")
+    .eq("organization_id", organizationId)
+    .limit(5000);
+  const adsWithInsights = new Set((insightRows || []).map((row) => row.ad_id));
+  const ads = catalog.ads.filter((ad) =>
+    ["ACTIVE", "PAUSED"].includes(ad.adStatus) || adsWithInsights.has(ad.adId)
+  );
+  const campaignIds = new Set(ads.map((ad) => ad.campaignId));
+  const campaigns = catalog.campaigns.filter((campaign) =>
+    campaign.status === "ACTIVE" || campaignIds.has(campaign.id)
+  );
+  return { ads, campaigns };
+}
+
+export function resolveCrmSourceFromCatalog(
+  catalog: Awaited<ReturnType<typeof getTenantCrmSourceCatalog>>,
+  input: { adId?: string | null; campaignId?: string | null; sourceName?: string | null }
+): ResolvedCrmSource {
+  const sourceName = input.sourceName?.trim() || null;
+  if (input.adId) {
+    const ad = catalog.ads.find((candidate) => candidate.adId === input.adId);
+    if (!ad) throw new Error("Iklan yang dipilih tidak termasuk organisasi ini.");
+    if (input.campaignId && input.campaignId !== ad.campaignId) {
+      throw new Error("Kampanye tidak sesuai dengan iklan yang dipilih.");
+    }
+    return { adId: ad.adId, campaignId: ad.campaignId, sourceName: ad.adName, matched: true };
+  }
+  if (input.campaignId) {
+    const campaign = catalog.campaigns.find((candidate) => candidate.id === input.campaignId);
+    if (!campaign) throw new Error("Kampanye yang dipilih tidak termasuk organisasi ini.");
+    return { adId: null, campaignId: campaign.id, sourceName: sourceName || campaign.name, matched: true };
+  }
+  if (!sourceName) return { adId: null, campaignId: null, sourceName: null, matched: false };
+
+  const normalize = (value: string) => value.trim().toLocaleLowerCase("id-ID");
+  const query = normalize(sourceName);
+  const exactAds = catalog.ads.filter((ad) => normalize(ad.adName) === query);
+  if (exactAds.length === 1) {
+    const ad = exactAds[0];
+    return { adId: ad.adId, campaignId: ad.campaignId, sourceName: ad.adName, matched: true };
+  }
+  const exactCampaigns = catalog.campaigns.filter((campaign) => normalize(campaign.name) === query);
+  if (exactCampaigns.length === 1) {
+    return { adId: null, campaignId: exactCampaigns[0].id, sourceName: exactCampaigns[0].name, matched: true };
+  }
+
+  const partialAds = catalog.ads.filter((ad) => normalize(ad.adName).includes(query) || query.includes(normalize(ad.adName)));
+  const partialCampaigns = catalog.campaigns.filter((campaign) => normalize(campaign.name).includes(query) || query.includes(normalize(campaign.name)));
+  const matches = [
+    ...partialAds.map((ad) => ({ adId: ad.adId, campaignId: ad.campaignId, sourceName: ad.adName })),
+    ...partialCampaigns.map((campaign) => ({ adId: null, campaignId: campaign.id, sourceName: campaign.name })),
+  ];
+  if (matches.length === 1) return { ...matches[0], matched: true };
+  // Ambiguous text is preserved as a manual source, never linked to an arbitrary ad.
+  return { adId: null, campaignId: null, sourceName, matched: false };
+}
+
+export async function resolveCrmLeadSource(
+  supabase: SupabaseClient,
+  organizationId: string,
+  input: { adId?: string | null; campaignId?: string | null; sourceName?: string | null }
+) {
+  const catalog = await getTenantCrmSourceCatalog(supabase, organizationId);
+  return resolveCrmSourceFromCatalog(catalog, input);
 }
 
 const VALID_STAGES: Record<string, FunnelStage> = {
@@ -184,7 +295,7 @@ export function normalizeQualityLabel(raw?: string | null): QualityLabel | null 
  * Generates an Excel (.xlsx) or CSV buffer containing the official HD Creative CRM leads template.
  * Focused on Tahap 1 core columns: Nama & WhatsApp, Domisili, Tanggal Masuk, Kampanye/Iklan, Tahap Funnel, Label Kualitas, Catatan Singkat.
  */
-export function generateCrmLeadsTemplate(format: "xlsx" | "csv" = "xlsx"): Buffer {
+export function generateCrmLeadsTemplate(format: "xlsx" | "csv" = "xlsx", sourceOptions: CrmAdSourceOption[] = []): Buffer {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: Data Prospek CRM (Core Columns Tahap 1)
@@ -326,6 +437,14 @@ export function generateCrmLeadsTemplate(format: "xlsx" | "csv" = "xlsx"): Buffe
     const wsGuide = XLSX.utils.aoa_to_sheet([guideHeaders, ...guideRows]);
     wsGuide["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 38 }, { wch: 65 }];
     XLSX.utils.book_append_sheet(wb, wsGuide, "Panduan & Validasi");
+
+    const sourceRows = sourceOptions.map((source) => [source.campaignName, source.adName, source.adStatus]);
+    const wsSources = XLSX.utils.aoa_to_sheet([
+      ["Nama Kampanye", "Nama Iklan", "Status Iklan"],
+      ...(sourceRows.length ? sourceRows : [["Belum ada kampanye/iklan aktif atau pernah tayang", "", ""]]),
+    ]);
+    wsSources["!cols"] = [{ wch: 42 }, { wch: 52 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, wsSources, "Daftar Iklan Aktif");
   }
 
   if (format === "csv") {
@@ -576,17 +695,9 @@ export async function importCrmLeadsToDatabase(params: {
   const warnings: Array<{ row: number; warning: string }> = [];
   const importedLeads: CrmImportResult["importedLeads"] = [];
 
-  // 1. Fetch available registered ads to map ad_id by name
-  const { data: dbAds } = await supabase
-    .from("ads")
-    .select("id, name, campaigns(id, name)")
-    .limit(200);
-
-  const adMap = new Map<string, { id: string; name: string }>();
-  (dbAds || []).forEach((ad) => {
-    if (ad.id) adMap.set(ad.id.toLowerCase(), { id: ad.id, name: ad.name });
-    if (ad.name) adMap.set(ad.name.toLowerCase().trim(), { id: ad.id, name: ad.name });
-  });
+  // Resolve only against this organization's catalog. Ambiguous text is never
+  // linked to an arbitrary ad or campaign.
+  const sourceCatalog = await getTenantCrmSourceCatalog(supabase, organizationId);
 
   // 2. Fetch existing contacts for this organization to decide insert vs update
   const phoneHashes = leads.map((l) => l.phoneHash);
@@ -607,23 +718,11 @@ export async function importCrmLeadsToDatabase(params: {
     const rowNum = idx + 2;
 
     try {
-      // Find matching ad_id
-      let matchedAdId: string | null = null;
-      if (lead.namaIklan) {
-        const query = lead.namaIklan.toLowerCase().trim();
-        // Exact match
-        if (adMap.has(query)) {
-          matchedAdId = adMap.get(query)!.id;
-        } else {
-          // Partial search
-          for (const [key, value] of adMap.entries()) {
-            if (key.includes(query) || query.includes(key)) {
-              matchedAdId = value.id;
-              break;
-            }
-          }
-        }
-      }
+      const resolvedSource = resolveCrmSourceFromCatalog(sourceCatalog, {
+        adId: lead.adId,
+        campaignId: lead.campaignId,
+        sourceName: lead.namaIklan,
+      });
 
       const existingContact = contactByHash.get(lead.phoneHash);
       let contactId: string;
@@ -676,7 +775,9 @@ export async function importCrmLeadsToDatabase(params: {
       const evidencePayload = {
         source: "crm_sheet_upload",
         funnel_stage: lead.tahapFunnel,
-        ad_name: lead.namaIklan || null,
+        ad_name: resolvedSource.sourceName,
+        ad_id: resolvedSource.adId,
+        campaign_id: resolvedSource.campaignId,
         domisili: lead.domisili || null,
         quality_label: lead.qualityLabel || null,
         notes: lead.catatan || null,
@@ -689,9 +790,10 @@ export async function importCrmLeadsToDatabase(params: {
         await supabase
           .from("conversations")
           .update({
-            ad_id: matchedAdId,
+            ad_id: resolvedSource.adId,
+            campaign_id: resolvedSource.campaignId,
             quality_label: lead.qualityLabel || null,
-            attribution_status: lead.statusAtribusi,
+            attribution_status: resolvedSource.adId || resolvedSource.campaignId ? "inferred" : lead.statusAtribusi,
             attribution_evidence: evidencePayload,
             last_message_at: lead.tanggalKontak,
             updated_at: new Date().toISOString(),
@@ -703,10 +805,11 @@ export async function importCrmLeadsToDatabase(params: {
           .insert({
             organization_id: organizationId,
             contact_id: contactId,
-            ad_id: matchedAdId,
+            ad_id: resolvedSource.adId,
+            campaign_id: resolvedSource.campaignId,
             quality_label: lead.qualityLabel || null,
             channel: "crm_upload",
-            attribution_status: lead.statusAtribusi,
+            attribution_status: resolvedSource.adId || resolvedSource.campaignId ? "inferred" : lead.statusAtribusi,
             attribution_evidence: evidencePayload,
             started_at: lead.tanggalKontak,
             last_message_at: lead.tanggalKontak,

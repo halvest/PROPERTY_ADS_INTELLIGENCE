@@ -50,8 +50,11 @@ export async function GET(
       );
     }
 
-    // 2. Delegate to server service (strict tenant filtering & bypasses unauthenticated client RLS in dev)
-    const result = await getAdDetailById(organizationId, id);
+    // 2. Delegate to server service (strict tenant filtering & bypasses unauthenticated client RLS in dev).
+    // The dashboard period travels with the request so detail metrics cover
+    // the identical scope the user is looking at.
+    const dateRange = request.nextUrl.searchParams.get("dateRange") || undefined;
+    const result = await getAdDetailById(organizationId, id, { dateRange });
 
     if (!result.success) {
       const statusCode = result.code === "FORBIDDEN" ? 403 : result.code === "NOT_FOUND" ? 404 : 500;

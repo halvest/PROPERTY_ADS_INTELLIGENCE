@@ -261,8 +261,8 @@ export default function DashboardPage() {
               </h2>
               <p className="mt-1 text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 max-w-3xl leading-relaxed">
                 {locale === "id"
-                  ? `${summary.qualifiedLeads} dari ${summary.totalLeads} prospek terverifikasi memiliki daya beli cocok (Buyer Score ≥ 70) dengan konfirmasi survei lokasi. Biaya per lead potensial (CPQL) tercatat ${summary.cpql !== null ? formatCurrency(summary.cpql) : "—"}.`
-                  : `${summary.qualifiedLeads} of ${summary.totalLeads} leads are qualified with confirmed purchase intent (Buyer Score ≥ 70) and scheduled surveys. Cost per qualified lead is ${summary.cpql !== null ? formatCurrency(summary.cpql) : "—"}.`}
+                  ? `Kualitas lead tidak tersedia: belum ada definisi kualitas lead yang terverifikasi untuk ${summary.totalLeads} prospek tercatat, sehingga biaya per lead berkualitas (CPQL) tidak dihitung.`
+                  : `Lead quality is not available: no verified lead-quality definition exists for the ${summary.totalLeads} recorded prospects, so cost per qualified lead (CPQL) is not calculated.`}
               </p>
             </div>
 
@@ -279,7 +279,7 @@ export default function DashboardPage() {
 
               <div className="rounded-xl border border-indigo-500/30 bg-indigo-50/40 p-3 px-4 dark:border-indigo-500/20 dark:bg-indigo-950/20">
                 <span className="text-[11px] font-medium text-indigo-700 dark:text-indigo-300 block">
-                  {locale === "id" ? "CPQL Efektif" : "Effective CPQL"}
+                  {locale === "id" ? "CPQL (Tidak Tersedia)" : "CPQL (Not Available)"}
                 </span>
                 <span className="mt-0.5 text-base sm:text-lg font-bold font-mono text-indigo-600 dark:text-indigo-400">
                   {summary.cpql !== null ? formatCurrency(summary.cpql) : "—"}
@@ -306,7 +306,7 @@ export default function DashboardPage() {
             subtitle={
               summary.qualifiedLeads > 0
                 ? `${summary.qualifiedLeads} ${locale === "id" ? "lead lolos kualifikasi beli" : "leads meet qualification criteria"}`
-                : locale === "id" ? "Belum ada lead berkualifikasi pada periode ini" : "No qualified leads in this period"
+                : locale === "id" ? "Kualitas lead tidak tersedia pada periode ini" : "Lead quality is not available in this period"
             }
             formulaLabel="Spend / Qualified"
             highlight

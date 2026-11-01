@@ -3,6 +3,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** Quota stays off for testing until explicitly enabled in production. */
+export function isAiAnalysisQuotaEnabled() {
+  return process.env.AI_ANALYSIS_QUOTA_ENABLED === "true";
+}
+
 /**
  * Validates a client-supplied Idempotency-Key.
  *
@@ -16,6 +21,10 @@ export function validateIdempotencyKey(value: string | null): string | null {
 }
 
 export async function reserveAiAnalysis(userId: string, key: string) {
+  if (!isAiAnalysisQuotaEnabled()) {
+    return { ok: true as const, reservationId: null, bypassed: true as const };
+  }
+
   const admin = createAdminClient();
   const { data, error } = await admin.rpc("reserve_ai_analysis_usage", {
     p_user_id: userId,
@@ -29,7 +38,7 @@ export async function reserveAiAnalysis(userId: string, key: string) {
   if (!result.allowed || !result.reservation_id) {
     return { ok: false as const, unavailable: false as const, status: result.reservation_status, resetAt: result.next_available_at };
   }
-  return { ok: true as const, reservationId: result.reservation_id };
+  return { ok: true as const, reservationId: result.reservation_id, bypassed: false as const };
 }
 
 export async function finishAiAnalysis(userId: string, reservationId: string, succeeded: boolean, failureCode?: string) {

@@ -14,6 +14,66 @@ export type Database = {
   }
   public: {
     Tables: {
+      ad_account_insights: {
+        Row: {
+          id: string
+          organization_id: string
+          ad_account_id: string
+          date_start: string
+          date_stop: string
+          impressions: number | null
+          reach: number | null
+          frequency: number | null
+          currency: string | null
+          source: string
+          fetched_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          ad_account_id: string
+          date_start: string
+          date_stop: string
+          impressions?: number | null
+          reach?: number | null
+          frequency?: number | null
+          currency?: string | null
+          source?: string
+          fetched_at?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          ad_account_id?: string
+          date_start?: string
+          date_stop?: string
+          impressions?: number | null
+          reach?: number | null
+          frequency?: number | null
+          currency?: string | null
+          source?: string
+          fetched_at?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_ad_account_insights_account_org"
+            columns: ["ad_account_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "ad_accounts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "ad_account_insights_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ad_accounts: {
         Row: {
           account_name: string | null
@@ -86,6 +146,7 @@ export type Database = {
           source: string
           spend: number
           action_breakdown: Json
+          cost_per_action_type: Json
           conversion_action_type: string | null
           mapping_version: string
           quality_ranking: string | null
@@ -113,6 +174,7 @@ export type Database = {
           source?: string
           spend?: number
           action_breakdown?: Json
+          cost_per_action_type?: Json
           conversion_action_type?: string | null
           mapping_version?: string
           quality_ranking?: string | null
@@ -140,6 +202,7 @@ export type Database = {
           source?: string
           spend?: number
           action_breakdown?: Json
+          cost_per_action_type?: Json
           conversion_action_type?: string | null
           mapping_version?: string
           quality_ranking?: string | null
@@ -512,6 +575,7 @@ export type Database = {
           ad_id: string | null
           attribution_evidence: Json
           attribution_status: string
+          campaign_id: string | null
           channel: string
           channel_conversation_id: string | null
           contact_id: string
@@ -528,6 +592,7 @@ export type Database = {
           ad_id?: string | null
           attribution_evidence?: Json
           attribution_status?: string
+          campaign_id?: string | null
           channel?: string
           channel_conversation_id?: string | null
           contact_id: string
@@ -544,6 +609,7 @@ export type Database = {
           ad_id?: string | null
           attribution_evidence?: Json
           attribution_status?: string
+          campaign_id?: string | null
           channel?: string
           channel_conversation_id?: string | null
           contact_id?: string
@@ -563,6 +629,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "ads"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_conversations_campaign_org"
+            columns: ["campaign_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id", "organization_id"]
           },
           {
             foreignKeyName: "conversations_contact_id_fkey"

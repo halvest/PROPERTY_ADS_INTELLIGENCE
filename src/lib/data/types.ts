@@ -61,6 +61,8 @@ export interface LeadListItem {
   id: string;
   name: string;
   phoneMasked: string;
+  adId?: string | null;
+  campaignId?: string | null;
   funnelStage: FunnelStage;
   attributionStatus: AttributionStatus;
   adName: string | null;

@@ -8,9 +8,10 @@ export interface DateRangeFilterProps {
   currentRange: string;
   onChange: (range: string) => void;
   className?: string;
+  fullWidth?: boolean;
 }
 
-export function DateRangeFilter({ currentRange, onChange, className = "" }: DateRangeFilterProps) {
+export function DateRangeFilter({ currentRange, onChange, className = "", fullWidth = false }: DateRangeFilterProps) {
   const { locale } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
   const [showCustomModal, setShowCustomModal] = useState(false);
@@ -80,19 +81,20 @@ export function DateRangeFilter({ currentRange, onChange, className = "" }: Date
   };
 
   return (
-    <div className={`relative inline-block text-left ${className}`} ref={dropdownRef}>
+    <div className={`relative ${fullWidth ? "block w-full min-w-0" : "inline-block"} text-left ${className}`} ref={dropdownRef}>
       {/* Trigger Button */}
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+        className={`inline-flex min-h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors ${fullWidth ? "w-full min-w-0 justify-between" : ""}`}
         aria-expanded={isOpen}
+        title={`${activeLabel} · ${activeBoundaries}`}
       >
         <svg className="h-3.5 w-3.5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <span>{activeLabel}</span>
-        <span className="hidden md:inline font-mono text-[10px] text-zinc-400 bg-zinc-100 dark:bg-zinc-900 px-1 py-0.5 rounded">
+        <span className={fullWidth ? "min-w-0 flex-1 truncate text-left" : ""}>{activeLabel}</span>
+        <span className={`font-mono text-[10px] text-zinc-400 bg-zinc-100 dark:bg-zinc-900 px-1 py-0.5 rounded ${fullWidth ? "hidden 2xl:inline max-w-[130px] truncate" : "hidden md:inline"}`}>
           {activeBoundaries}
         </span>
         <svg className="h-3 w-3 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">

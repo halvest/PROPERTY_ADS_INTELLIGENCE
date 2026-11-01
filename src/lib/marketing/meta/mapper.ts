@@ -69,32 +69,42 @@ export function mapMetaAdToInternal(
 }
 
 /**
- * Safely parses monetary spend from Meta string representation.
- * Always returns non-negative floating-point number.
+ * Parses monetary spend from Meta's string representation.
+ *
+ * Null semantics (DI-04): a missing, empty, non-numeric, negative, or
+ * non-finite value is NOT AVAILABLE and returns null. Only an explicitly
+ * provided zero ("0", "0.00", 0) returns 0. Callers must distinguish
+ * "Meta reported no value" from "Meta reported zero".
  */
-export function parseSpend(spendStr?: string | number | null): number {
-  if (spendStr === null || spendStr === undefined) return 0;
+export function parseSpend(spendStr?: string | number | null): number | null {
+  if (spendStr === null || spendStr === undefined) return null;
   if (typeof spendStr === "number") {
-    return Number.isFinite(spendStr) && spendStr > 0 ? Number(spendStr.toFixed(2)) : 0;
+    return Number.isFinite(spendStr) && spendStr >= 0 ? Number(spendStr.toFixed(2)) : null;
   }
-  const parsed = parseFloat(spendStr.replace(/[^0-9.-]+/g, ""));
+  const trimmed = spendStr.trim();
+  if (trimmed === "") return null;
+  const parsed = parseFloat(trimmed.replace(/[^0-9.-]+/g, ""));
   if (Number.isNaN(parsed) || !Number.isFinite(parsed) || parsed < 0) {
-    return 0;
+    return null;
   }
   return Number(parsed.toFixed(2));
 }
 
 /**
- * Safely parses integer metric (impressions, clicks) from Meta string representation.
+ * Parses an integer metric (impressions, clicks, reach, ...) from Meta's
+ * string representation. Same null semantics as parseSpend: missing or
+ * invalid returns null; an explicit zero returns 0.
  */
-export function parseCount(countStr?: string | number | null): number {
-  if (countStr === null || countStr === undefined) return 0;
+export function parseCount(countStr?: string | number | null): number | null {
+  if (countStr === null || countStr === undefined) return null;
   if (typeof countStr === "number") {
-    return Number.isFinite(countStr) && countStr > 0 ? Math.floor(countStr) : 0;
+    return Number.isFinite(countStr) && countStr >= 0 ? Math.floor(countStr) : null;
   }
-  const parsed = parseFloat(countStr.replace(/[^0-9.-]+/g, ""));
+  const trimmed = countStr.trim();
+  if (trimmed === "") return null;
+  const parsed = parseFloat(trimmed.replace(/[^0-9.-]+/g, ""));
   if (Number.isNaN(parsed) || !Number.isFinite(parsed) || parsed < 0) {
-    return 0;
+    return null;
   }
   return Math.floor(parsed);
 }
@@ -126,21 +136,29 @@ export function mapMetaInsightToInternal(
       metaInsight.actions?.find((a) => a.action_type === "link_click")?.value
   );
 
-  // Conversions: Prioritize CTWA messaging conversations started, record action breakdown
+  // Conversions: Prioritize CTWA messaging conversations started, record action breakdown.
+  // Null semantics: when Meta provides no actions array at all, conversions are
+  // NOT AVAILABLE (null) — not zero. When an actions array is present but has no
+  // conversion action, Meta explicitly reported none: conversions are 0.
   const actionBreakdown: Record<string, number> = {};
   (metaInsight.actions || []).forEach((act) => {
     if (act.action_type) {
-      actionBreakdown[act.action_type] = parseCount(act.value);
+      const parsed = parseCount(act.value);
+      if (parsed !== null) actionBreakdown[act.action_type] = parsed;
     }
   });
+  const costPerActionType: Record<string, number> = {};
+  (metaInsight.cost_per_action_type || []).forEach((act) => {
+    const parsed = Number(act.value);
+    if (act.action_type && Number.isFinite(parsed)) costPerActionType[act.action_type] = parsed;
+  });
 
-  const messagingConversations = parseCount(
-    metaInsight.actions?.find(
-      (a) =>
-        a.action_type === "onsite_conversion.messaging_conversation_started_7d" ||
-        a.action_type === "messaging_conversation_started_7d"
-    )?.value
+  const messagingAction = metaInsight.actions?.find(
+    (a) =>
+      a.action_type === "onsite_conversion.messaging_conversation_started_7d" ||
+      a.action_type === "messaging_conversation_started_7d"
   );
+  const messagingConversations = messagingAction ? parseCount(messagingAction.value) : null;
 
   const matchedLeadAction = metaInsight.actions?.find(
     (a) =>
@@ -148,17 +166,22 @@ export function mapMetaInsightToInternal(
       a.action_type === "onsite_conversion.lead_grouped" ||
       a.action_type === "offsite_conversion.fb_pixel_lead"
   );
-  const leads = parseCount(matchedLeadAction?.value);
+  const leads = matchedLeadAction ? parseCount(matchedLeadAction.value) : null;
 
-  let conversions = 0;
+  let conversions: number | null = null;
   let conversionActionType: string | null = null;
 
-  if (messagingConversations > 0) {
+  if (messagingConversations !== null && messagingConversations > 0) {
     conversions = messagingConversations;
     conversionActionType = "onsite_conversion.messaging_conversation_started_7d";
-  } else if (leads > 0 && matchedLeadAction) {
+  } else if (leads !== null && leads > 0 && matchedLeadAction) {
     conversions = leads;
     conversionActionType = matchedLeadAction.action_type;
+  } else if (messagingAction || matchedLeadAction) {
+    // A conversion action was reported with a zero/unusable value.
+    conversions = messagingConversations ?? leads;
+  } else if (metaInsight.actions) {
+    conversions = 0;
   }
 
   return {
@@ -173,12 +196,18 @@ export function mapMetaInsightToInternal(
     reach,
     linkClicks,
     conversions,
+    // BL-01: independent result types (never merged into each other).
+    // When Meta sent an actions array without this result type, the type was
+    // explicitly reported as none (0); with no actions array it is unavailable.
+    messagingConversations: messagingAction ? messagingConversations : metaInsight.actions ? 0 : null,
+    leads: matchedLeadAction ? leads : metaInsight.actions ? 0 : null,
     adsetId: metaInsight.adset_id || null,
     adsetName: metaInsight.adset_name || null,
     attributionSetting: metaInsight.attribution_setting || null,
     currency,
     source,
     actionBreakdown,
+    costPerActionType,
     conversionActionType,
     mappingVersion: "v1.1",
   };

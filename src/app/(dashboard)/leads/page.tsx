@@ -1,17 +1,45 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { FunnelBadge } from "@/components/ui/Badge";
 import { DateRangeFilter } from "@/components/dashboard/DateRangeFilter";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { CRMLeadsUploadModal } from "@/components/crm/CRMLeadsUploadModal";
 import { CRMManualLeadModal } from "@/components/crm/CRMManualLeadModal";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import type { LeadListItem } from "@/lib/data/types";
+import type { FunnelStage } from "@/domain/funnel/stages";
+import { getAllowedFunnelTransitions } from "@/domain/funnel/stages";
+import { useToast } from "@/components/ui/Toast";
+
+interface LeadsSummary {
+  total: number;
+  newLeads: number;
+  hotWarm: number;
+  hotWarmRate: number;
+  surveyOrClosing: number;
+  leadToSurveyRate: number;
+  linkedSources: number;
+  unlinkedSources: number;
+  adLinkRate: number;
+}
+
+type LeadSortKey = "lastMessageAt" | "name" | "funnelStage" | "qualityLabel";
+const LEADS_PAGE_SIZE = 20;
+
+function SummaryCard({ title, value, detail, warning = false }: { title: string; value: string | number; detail: string; warning?: boolean }) {
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{title}</div>
+      <div className="mt-1.5 text-2xl font-bold tracking-tight tabular-nums text-zinc-900 dark:text-zinc-50">{value}</div>
+      <div className={`mt-1 text-[11px] ${warning ? "font-semibold text-amber-700 dark:text-amber-400" : "text-zinc-500 dark:text-zinc-400"}`}>{detail}</div>
+    </div>
+  );
+}
 
 export default function LeadsDirectoryPage() {
   const { t, locale } = useI18n();
+  const { addToast } = useToast();
   const [dateRange, setDateRange] = useState("all");
   const [funnelStage, setFunnelStage] = useState<string>("all");
   const [qualityFilter, setQualityFilter] = useState<string>("all");
@@ -22,9 +50,16 @@ export default function LeadsDirectoryPage() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<LeadsSummary | null>(null);
+  const [sortKey, setSortKey] = useState<LeadSortKey>("lastMessageAt");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
 
   const loadLeads = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const params = new URLSearchParams();
       if (dateRange && dateRange !== "all") params.set("dateRange", dateRange);
@@ -34,23 +69,80 @@ export default function LeadsDirectoryPage() {
       if (search) params.set("search", search);
 
       const res = await fetch(`/api/leads?${params.toString()}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          setLeads(json.data);
-        }
+      const json = await res.json();
+      if (!res.ok || !json.success || !Array.isArray(json.data)) {
+        throw new Error(json.error || (locale === "id" ? "Gagal memuat daftar prospek." : "Failed to load leads."));
       }
-    } catch {
-      // Non-blocking fetch error
+      setLeads(json.data);
+      setSummary(json.summary || null);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : (locale === "id" ? "Terjadi kesalahan jaringan." : "A network error occurred."));
     } finally {
       setIsLoading(false);
     }
-  }, [dateRange, funnelStage, qualityFilter, attributionStatus, search]);
+  }, [dateRange, funnelStage, qualityFilter, attributionStatus, search, locale]);
 
   useEffect(() => {
     const timer = setTimeout(loadLeads, 150);
     return () => clearTimeout(timer);
   }, [loadLeads, refreshKey]);
+
+  const updateLead = useCallback(async (
+    leadId: string,
+    payload: { newStage?: FunnelStage; funnelStage?: FunnelStage; reason?: string; qualityLabel?: string | null }
+  ) => {
+    const original = leads.find((lead) => lead.id === leadId);
+    setSavingLeadIds((ids) => new Set(ids).add(leadId));
+    setLeads((items) => items.map((lead) => lead.id !== leadId ? lead : {
+      ...lead,
+      ...(payload.newStage || payload.funnelStage ? { funnelStage: (payload.newStage || payload.funnelStage)! } : {}),
+      ...(payload.qualityLabel !== undefined ? { qualityLabel: payload.qualityLabel as LeadListItem["qualityLabel"] } : {}),
+    }));
+    try {
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "lead_update", ...payload }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Gagal memperbarui prospek.");
+      addToast("success", locale === "id" ? "Prospek Diperbarui" : "Lead Updated", locale === "id" ? "Perubahan berhasil disimpan." : "Changes saved.");
+      setRefreshKey((key) => key + 1);
+    } catch (error) {
+      if (original) setLeads((items) => items.map((lead) => lead.id === leadId ? original : lead));
+      addToast("error", locale === "id" ? "Gagal Memperbarui" : "Update Failed", error instanceof Error ? error.message : "Network error");
+    } finally {
+      setSavingLeadIds((ids) => {
+        const next = new Set(ids);
+        next.delete(leadId);
+        return next;
+      });
+    }
+  }, [leads, addToast, locale]);
+
+  const sortedLeads = useMemo(() => {
+    const stageOrder: FunnelStage[] = ["baru", "dihubungi", "prospek", "survei", "closing", "batal"];
+    const qualityOrder: Record<string, number> = { Hot: 0, Warm: 1, Cold: 2, "": 3 };
+    return [...leads].sort((a, b) => {
+      let comparison = 0;
+      if (sortKey === "name") comparison = a.name.localeCompare(b.name, locale);
+      else if (sortKey === "funnelStage") comparison = stageOrder.indexOf(a.funnelStage) - stageOrder.indexOf(b.funnelStage);
+      else if (sortKey === "qualityLabel") comparison = (qualityOrder[a.qualityLabel || ""] ?? 3) - (qualityOrder[b.qualityLabel || ""] ?? 3);
+      else comparison = new Date(a.lastMessageAt).getTime() - new Date(b.lastMessageAt).getTime();
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [leads, sortKey, sortDirection, locale]);
+  const totalPages = Math.max(1, Math.ceil(sortedLeads.length / LEADS_PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedLeads = sortedLeads.slice((safeCurrentPage - 1) * LEADS_PAGE_SIZE, safeCurrentPage * LEADS_PAGE_SIZE);
+
+  const handleSort = (key: LeadSortKey) => {
+    if (sortKey === key) setSortDirection((direction) => direction === "asc" ? "desc" : "asc");
+    else {
+      setSortKey(key);
+      setSortDirection(key === "name" ? "asc" : "desc");
+    }
+  };
 
   const funnelTabs: Array<{ id: string; label: string }> = [
     { id: "all", label: t.common.all },
@@ -127,7 +219,7 @@ export default function LeadsDirectoryPage() {
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 hidden sm:inline">
               {t.common.period}:
             </span>
-            <DateRangeFilter currentRange={dateRange} onChange={setDateRange} />
+            <DateRangeFilter currentRange={dateRange} onChange={(value) => { setCurrentPage(1); setDateRange(value); }} />
           </div>
         </div>
       </div>
@@ -166,6 +258,23 @@ export default function LeadsDirectoryPage() {
         </div>
       </div>
 
+      {loadError && (
+        <div role="alert" className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300 sm:flex-row sm:items-center sm:justify-between">
+          <span>{loadError}</span>
+          <button type="button" onClick={() => setRefreshKey((key) => key + 1)} className="shrink-0 rounded-lg border border-rose-300 px-3 py-1.5 font-semibold hover:bg-rose-100 dark:border-rose-800 dark:hover:bg-rose-900/40">
+            {locale === "id" ? "Coba Lagi" : "Retry"}
+          </button>
+        </div>
+      )}
+
+      {/* CRM x Ads summary for the selected date range */}
+      <section aria-label={locale === "id" ? "Ringkasan CRM" : "CRM Summary"} className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard title={locale === "id" ? "Total Prospek Masuk" : "Total Leads"} value={summary?.total ?? 0} detail={`${summary?.newLeads ?? 0} ${locale === "id" ? "baru · belum disentuh" : "new · untouched"}`} />
+        <SummaryCard title={locale === "id" ? "Prospek Berkualitas" : "Qualified Leads"} value={summary?.hotWarm ?? 0} detail={`${(summary?.hotWarmRate ?? 0).toFixed(1)}% ${locale === "id" ? "Hot + Warm" : "Hot + Warm"}`} />
+        <SummaryCard title={locale === "id" ? "Progres Survei & Closing" : "Survey & Closing"} value={summary?.surveyOrClosing ?? 0} detail={`${(summary?.leadToSurveyRate ?? 0).toFixed(1)}% ${locale === "id" ? "lead-to-survey rate" : "lead-to-survey rate"}`} />
+        <SummaryCard title={locale === "id" ? "Keterhubungan Data Iklan" : "Ad Data Linkage"} value={`${(summary?.adLinkRate ?? 0).toFixed(1)}%`} detail={summary?.unlinkedSources ? `${summary.unlinkedSources} ${locale === "id" ? "prospek tanpa sumber iklan" : "leads without an ad source"}` : (locale === "id" ? "Semua prospek memiliki sumber" : "All leads have a source")} warning={Boolean(summary?.unlinkedSources)} />
+      </section>
+
       {/* Funnel Stage Tabs */}
       <div className="border-b border-zinc-200 dark:border-zinc-800">
         <nav className="flex space-x-1.5 overflow-x-auto pb-2 scrollbar-none" aria-label="Funnel Tabs">
@@ -175,7 +284,7 @@ export default function LeadsDirectoryPage() {
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setFunnelStage(tab.id)}
+                onClick={() => { setCurrentPage(1); setFunnelStage(tab.id); }}
                 className={`whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
                   isActive
                     ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 font-semibold shadow-xs"
@@ -206,13 +315,13 @@ export default function LeadsDirectoryPage() {
               type="text"
               placeholder={locale === "id" ? "Cari nama, WA, domisili, catatan, atau iklan..." : "Search name, phone, city, notes, or ad..."}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setCurrentPage(1); setSearch(e.target.value); }}
               className="w-full rounded-lg border border-zinc-200 bg-zinc-50/50 py-1.5 pl-8 pr-8 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-100"
             />
             {search && (
               <button
                 type="button"
-                onClick={() => setSearch("")}
+                onClick={() => { setCurrentPage(1); setSearch(""); }}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 text-xs cursor-pointer"
               >
                 &times;
@@ -230,7 +339,7 @@ export default function LeadsDirectoryPage() {
             <select
               id="filter-quality"
               value={qualityFilter}
-              onChange={(e) => setQualityFilter(e.target.value)}
+              onChange={(e) => { setCurrentPage(1); setQualityFilter(e.target.value); }}
               className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-800 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 cursor-pointer"
             >
               <option value="all">{locale === "id" ? "Semua Kualitas" : "All Qualities"}</option>
@@ -248,7 +357,7 @@ export default function LeadsDirectoryPage() {
             <select
               id="filter-attribution"
               value={attributionStatus}
-              onChange={(e) => setAttributionStatus(e.target.value)}
+              onChange={(e) => { setCurrentPage(1); setAttributionStatus(e.target.value); }}
               className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-800 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 cursor-pointer"
             >
               <option value="all">{t.leads.allAttribution}</option>
@@ -276,6 +385,7 @@ export default function LeadsDirectoryPage() {
           title={t.leads.emptyTitle}
           description={t.leads.emptyDesc}
           onReset={() => {
+            setCurrentPage(1);
             setFunnelStage("all");
             setQualityFilter("all");
             setAttributionStatus("all");
@@ -289,18 +399,18 @@ export default function LeadsDirectoryPage() {
             <table className="w-full text-left text-xs">
               <thead className="bg-zinc-50/80 border-b border-zinc-200 text-zinc-500 dark:bg-zinc-900/60 dark:border-zinc-800 dark:text-zinc-400">
                 <tr>
-                  <th className="py-3 px-4 font-semibold">{t.leads.table.prospect}</th>
+                  <th className="py-3 px-4 font-semibold"><button type="button" onClick={() => handleSort("name")} className="text-left hover:text-zinc-900 dark:hover:text-white">{t.leads.table.prospect} {sortKey === "name" ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}</button></th>
                   <th className="py-3 px-3 font-semibold">{t.leads.table.domisili}</th>
-                  <th className="py-3 px-3 font-semibold">{t.leads.table.entryDate}</th>
+                  <th className="py-3 px-3 font-semibold"><button type="button" onClick={() => handleSort("lastMessageAt")} className="text-left hover:text-zinc-900 dark:hover:text-white">{t.leads.table.entryDate} {sortKey === "lastMessageAt" ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}</button></th>
                   <th className="py-3 px-3 font-semibold">{t.leads.table.linkedAd}</th>
-                  <th className="py-3 px-3 font-semibold">{t.leads.table.funnelStage}</th>
-                  <th className="py-3 px-3 font-semibold">{t.leads.table.qualityLabel}</th>
+                  <th className="py-3 px-3 font-semibold"><button type="button" onClick={() => handleSort("funnelStage")} className="text-left hover:text-zinc-900 dark:hover:text-white">{t.leads.table.funnelStage} {sortKey === "funnelStage" ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}</button></th>
+                  <th className="py-3 px-3 font-semibold"><button type="button" onClick={() => handleSort("qualityLabel")} className="text-left hover:text-zinc-900 dark:hover:text-white">{t.leads.table.qualityLabel} {sortKey === "qualityLabel" ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}</button></th>
                   <th className="py-3 px-3 font-semibold">{t.leads.table.notes}</th>
                   <th className="py-3 px-4 font-semibold text-right">{t.leads.table.action}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800 text-zinc-800 dark:text-zinc-200">
-                {leads.map((lead) => {
+                {paginatedLeads.map((lead) => {
                   const entryDateFormatted = lead.lastMessageAt
                     ? new Date(lead.lastMessageAt).toLocaleDateString(locale === "id" ? "id-ID" : "en-US", {
                         day: "numeric",
@@ -354,28 +464,26 @@ export default function LeadsDirectoryPage() {
 
                       {/* 5. Tahap Funnel */}
                       <td className="py-3 px-3">
-                        <FunnelBadge stage={lead.funnelStage} />
+                        <select value={lead.funnelStage} disabled={savingLeadIds.has(lead.id)} aria-label={`${locale === "id" ? "Ubah tahap funnel" : "Update funnel stage"}: ${lead.name}`} onChange={(event) => {
+                          const nextStage = event.target.value as FunnelStage;
+                          if (!getAllowedFunnelTransitions(lead.funnelStage).includes(nextStage)) return;
+                          const defaultReason = "Pembaruan cepat dari tabel CRM";
+                          const reason = ["survei", "closing", "batal"].includes(nextStage)
+                            ? window.prompt(locale === "id" ? "Alasan/bukti perubahan tahap:" : "Reason/evidence for stage change:", defaultReason)
+                            : defaultReason;
+                          if (reason === null) return;
+                          void updateLead(lead.id, { newStage: nextStage, funnelStage: nextStage, reason });
+                        }} className="max-w-[145px] rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 disabled:opacity-50">
+                          <option value={lead.funnelStage}>{lead.funnelStage}</option>
+                          {getAllowedFunnelTransitions(lead.funnelStage).map((stage) => <option key={stage} value={stage}>{stage}</option>)}
+                        </select>
                       </td>
 
                       {/* 6. Label Kualitas (Hot / Warm / Cold) */}
                       <td className="py-3 px-3">
-                        {lead.qualityLabel === "Hot" ? (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/10 px-2 py-0.5 text-[11px] font-bold text-rose-600 dark:text-rose-400 border border-rose-500/20">
-                            🔥 Hot
-                          </span>
-                        ) : lead.qualityLabel === "Warm" ? (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-0.5 text-[11px] font-bold text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                            ☀️ Warm
-                          </span>
-                        ) : lead.qualityLabel === "Cold" ? (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/10 px-2 py-0.5 text-[11px] font-bold text-sky-600 dark:text-sky-400 border border-sky-500/20">
-                            ❄️ Cold
-                          </span>
-                        ) : (
-                          <span className="text-zinc-400 text-[11px] italic">
-                            {locale === "id" ? "Belum Dinilai" : "Not Assessed"}
-                          </span>
-                        )}
+                        <select value={lead.qualityLabel || ""} disabled={savingLeadIds.has(lead.id)} aria-label={`${locale === "id" ? "Ubah kualitas" : "Update quality"}: ${lead.name}`} onChange={(event) => void updateLead(lead.id, { qualityLabel: event.target.value || null })} className={`max-w-[115px] rounded-md border px-2 py-1 text-[11px] font-bold disabled:opacity-50 ${lead.qualityLabel === "Hot" ? "border-rose-500/20 bg-rose-500/10 text-rose-600 dark:text-rose-400" : lead.qualityLabel === "Warm" ? "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400" : lead.qualityLabel === "Cold" ? "border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400" : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800"}`}>
+                          <option value="">{locale === "id" ? "Belum Dinilai" : "Not Assessed"}</option><option value="Hot">🔥 Hot</option><option value="Warm">☀️ Warm</option><option value="Cold">❄️ Cold</option>
+                        </select>
                       </td>
 
                       {/* 7. Catatan Singkat */}
@@ -407,6 +515,16 @@ export default function LeadsDirectoryPage() {
               </tbody>
             </table>
           </div>
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-zinc-100 px-4 py-3 text-xs dark:border-zinc-800">
+              <span className="text-zinc-500">{(safeCurrentPage - 1) * LEADS_PAGE_SIZE + 1}–{Math.min(safeCurrentPage * LEADS_PAGE_SIZE, sortedLeads.length)} / {sortedLeads.length}</span>
+              <div className="flex items-center gap-2">
+                <button type="button" disabled={safeCurrentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} className="rounded-md border border-zinc-200 px-2.5 py-1 text-zinc-600 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300">{locale === "id" ? "Sebelumnya" : "Previous"}</button>
+                <span className="tabular-nums text-zinc-500">{safeCurrentPage} / {totalPages}</span>
+                <button type="button" disabled={safeCurrentPage === totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} className="rounded-md border border-zinc-200 px-2.5 py-1 text-zinc-600 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300">{locale === "id" ? "Berikutnya" : "Next"}</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

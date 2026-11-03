@@ -23,19 +23,19 @@ const geistMono = Geist_Mono({
 export const instant = false;
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://hdcreative.cloud"),
   applicationName: "HD Creative",
   title: {
     default: "HD Creative — Property Ads Intelligence",
     template: "%s | HD Creative",
   },
   description:
-    "Property marketing intelligence from Haspro Digital Creative. Connect Meta Ads performance with WhatsApp conversations and lead quality.",
+    "Property marketing intelligence from Haspro Digital Creative. Review Meta Ads performance alongside client-provided CRM data.",
   keywords: [
     "HD Creative",
     "Haspro Digital Creative",
     "Meta Ads property analytics",
-    "WhatsApp lead attribution",
+    "property CRM data analysis",
     "property marketing intelligence",
   ],
   creator: "Haspro Digital Creative",
@@ -53,7 +53,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "HD Creative — Property Ads Intelligence",
     description:
-      "Property marketing intelligence from Haspro Digital Creative. Connect Meta Ads performance with WhatsApp conversations and lead quality.",
+      "Property marketing intelligence from Haspro Digital Creative. Review Meta Ads performance alongside client-provided CRM data.",
     siteName: "HD Creative",
     images: [{ url: "/logo.png", width: 1254, height: 1254, alt: "HD Creative brand mark" }],
   },
@@ -61,7 +61,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "HD Creative — Property Ads Intelligence",
     description:
-      "Connect Meta Ads performance with WhatsApp conversations and lead quality.",
+      "Review Meta Ads performance alongside client-provided CRM data and prospect progress.",
   },
 };
 
@@ -83,7 +83,7 @@ export default async function RootLayout({
       <head>
         <ThemeScript />
       </head>
-      <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-[#090a0c] dark:text-zinc-100 transition-colors duration-150">
+      <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 transition-colors duration-150">
         <ThemeProvider>
           <I18nProvider initialLocale={initialLocale}>
             <ToastProvider>{children}</ToastProvider>

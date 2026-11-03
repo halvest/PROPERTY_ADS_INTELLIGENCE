@@ -6,7 +6,7 @@ import { getLiveDashboardData } from "@/lib/data/live-dashboard-service";
 /**
  * GET /api/dashboard/summary
  * Retrieves authentic, real-time persisted property advertising intelligence metrics.
- * Supports explicit demo query (?demo=true) for evaluated demonstration contexts.
+ * Requires a tenant session and never falls back to fixture/demo data.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -17,12 +17,7 @@ export async function GET(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     const { searchParams } = request.nextUrl;
-    // Demo mode is server-configured only (DATA_MODE=demo); client
-    // query params and cookies must never switch a production tenant to demo data.
-    const forceDemo = process.env.DATA_MODE === "demo";
-    const isProduction = process.env.NODE_ENV === "production";
-
-    if ((authError || !user) && !forceDemo && isProduction) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -37,8 +32,11 @@ export async function GET(request: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     const dateRange = searchParams.get("dateRange") || "all";
 
@@ -46,7 +44,6 @@ export async function GET(request: NextRequest) {
       organizationId,
       supabaseClient: supabase,
       dateRange,
-      forceDemoMode: forceDemo,
     });
 
     return NextResponse.json({

@@ -5,7 +5,6 @@ import {
   maskToken,
   maskAdAccountId,
   sanitizeMarketingLog,
-  isMetaMarketingConfigured,
   getMetaMarketingConfig,
   validateMetaMarketingConfig,
 } from "@/lib/marketing/meta/config";
@@ -93,23 +92,22 @@ describe("Meta Marketing API - Config & Utilities", () => {
   });
 
   describe("getMetaMarketingConfig & validateMetaMarketingConfig", () => {
-    it("defaults to official Graph API v21.0 and base URL", () => {
+    it("defaults to official Graph API v26.0 and base URL", () => {
       const config = getMetaMarketingConfig();
       expect(config.baseUrl).toBe("https://graph.facebook.com");
-      expect(config.apiVersion).toBe("v21.0");
+      expect(config.apiVersion).toBe("v26.0");
       expect(config.isConfigured).toBe(false);
       expect(config.accessToken).toBe("");
     });
 
-    it("recognizes configured credentials in environment", () => {
+    it("ignores global credentials so tenant credentials cannot be shadowed", () => {
       process.env.META_ACCESS_TOKEN = "EAABmocktoken123456";
       process.env.META_AD_ACCOUNT_ID = "987654321";
 
-      expect(isMetaMarketingConfigured()).toBe(true);
       const config = getMetaMarketingConfig();
-      expect(config.isConfigured).toBe(true);
-      expect(config.accessToken).toBe("EAABmocktoken123456");
-      expect(config.adAccountId).toBe("act_987654321");
+      expect(config.isConfigured).toBe(false);
+      expect(config.accessToken).toBe("");
+      expect(config.adAccountId).toBe("");
     });
 
     it("throws MarketingApiError when requireConfigured is true and token is missing", () => {
@@ -121,7 +119,7 @@ describe("Meta Marketing API - Config & Utilities", () => {
       } catch (err) {
         const error = err as MarketingApiError;
         expect(error.code).toBe("MISSING_CONFIGURATION");
-        expect(error.message).toContain("META_ACCESS_TOKEN");
+        expect(error.message).toContain("tenant Meta access token");
       }
     });
 

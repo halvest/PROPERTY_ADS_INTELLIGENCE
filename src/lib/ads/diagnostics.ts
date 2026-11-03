@@ -5,14 +5,14 @@ import { getAdsIntelligenceData } from "./service";
 import { parseDateRange, formatDateInTimezone } from "./date-utils";
 import { MetaMarketingApiClient } from "@/lib/marketing/meta/client";
 import { maskAdAccountId } from "@/lib/marketing/meta/config";
-import { decryptAccessToken } from "@/lib/whatsapp/crypto";
+import { decryptAccessToken } from "@/lib/security/credential-crypto";
 
 export interface MetricComparisonItem {
   metricName: string;
-  metaSourceValue: number;
-  persistedDbValue: number;
-  difference: number;
-  variancePercent: number;
+  metaSourceValue: number | null;
+  persistedDbValue: number | null;
+  difference: number | null;
+  variancePercent: number | null;
   status: "EXACT_MATCH" | "REALTIME_ACCUMULATION" | "VARIANCE_DETECTED" | "UNAVAILABLE";
   explanation: string;
 }
@@ -158,10 +158,22 @@ export async function runAdsDataReconciliation(options: {
   // 5. Build Reconciled Metrics Comparison Table
   function compareMetric(
     name: string,
-    metaVal: number,
-    dbVal: number,
+    metaVal: number | null,
+    dbVal: number | null,
     isCurrency = false
   ): MetricComparisonItem {
+    if (metaVal === null || dbVal === null) {
+      return {
+        metricName: name,
+        metaSourceValue: metaVal,
+        persistedDbValue: dbVal,
+        difference: null,
+        variancePercent: null,
+        status: "UNAVAILABLE",
+        explanation: "Metrik tidak tersedia dari Meta atau belum tersimpan untuk rentang ini; nilai tidak dianggap nol.",
+      };
+    }
+
     const diff = Math.round((dbVal - metaVal) * 100) / 100;
     const base = metaVal !== 0 ? metaVal : 1;
     const variancePercent = Math.round((Math.abs(diff) / base) * 10000) / 100;
@@ -204,6 +216,7 @@ export async function runAdsDataReconciliation(options: {
 
   const hasVariance = metrics.some((m) => m.status === "VARIANCE_DETECTED");
   const isAccumulating = metrics.some((m) => m.status === "REALTIME_ACCUMULATION");
+  const hasUnavailable = metrics.some((m) => m.status === "UNAVAILABLE");
 
   let reconciliationStatus: DiagnosticsReport["reconciliationStatus"] = "VERIFIED_ACCURATE";
   let summary = "Semua metrik dasbor terverifikasi 100% akurat dan identik dengan Meta Ads Manager.";
@@ -211,6 +224,9 @@ export async function runAdsDataReconciliation(options: {
   if (hasVariance) {
     reconciliationStatus = "ATTENTION_REQUIRED";
     summary = "Terdeteksi selisih antara data database dengan API Meta terkini. Disarankan menjalankan tombol 'Sinkronisasi'.";
+  } else if (hasUnavailable) {
+    reconciliationStatus = "NEEDS_SYNC";
+    summary = "Sebagian metrik belum tersedia untuk diverifikasi. Sinkronkan ulang rentang tanggal ini; nilai kosong tidak diperlakukan sebagai nol.";
   } else if (isAccumulating) {
     reconciliationStatus = "VERIFIED_ACCURATE";
     summary = "Data dasbor valid dan sesuai. Sedikit perbedaan pada hari berjalan disebabkan oleh iklan aktif yang terus mengakumulasi klik dan belanja real-time.";
@@ -221,7 +237,7 @@ export async function runAdsDataReconciliation(options: {
     accountName,
     timezone,
     currency,
-    apiVersion: "v21.0",
+    apiVersion: "v26.0",
     reportingPeriod: {
       preset: dateRange,
       since: since || "Lifetime (2023-12-06)",

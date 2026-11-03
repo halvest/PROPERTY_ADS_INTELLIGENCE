@@ -95,13 +95,13 @@ describe("Evidence-Based Attribution & Ranking Exclusion Rules", () => {
         previousAdId: "ad_old",
         newAdId: "ad_new",
         attributionMethod: "manual_correction",
-        reason: "Bukti referral WhatsApp Webhook dikonfirmasi supervisor",
+        reason: "Bukti sumber iklan dikonfirmasi supervisor",
         actorId: "supervisor_01",
       });
 
       expect(event.previousStatus).toBe("inferred");
       expect(event.newStatus).toBe("verified");
-      expect(event.reason).toBe("Bukti referral WhatsApp Webhook dikonfirmasi supervisor");
+      expect(event.reason).toBe("Bukti sumber iklan dikonfirmasi supervisor");
       expect(event.actorId).toBe("supervisor_01");
       expect(event.createdAt).toBeDefined();
     });

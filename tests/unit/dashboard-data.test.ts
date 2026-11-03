@@ -220,15 +220,13 @@ describe("Phase 4: Dashboard Data Layer & Contract Verification", () => {
     it("returns masked credentials and active demo status for all required providers", () => {
       const integrations = getIntegrationStatus();
 
-      expect(integrations).toHaveLength(4);
+      expect(integrations).toHaveLength(3);
 
       const metaMarketing = integrations.find((i) => i.provider === "meta_marketing");
-      const whatsapp = integrations.find((i) => i.provider === "whatsapp_cloud");
       const metaModel = integrations.find((i) => i.provider === "meta_model_api");
       const supabase = integrations.find((i) => i.provider === "supabase");
 
       expect(metaMarketing?.status).toBe("demo_active");
-      expect(whatsapp?.status).toBe("demo_active");
       expect(metaModel?.status).toBe("demo_active");
       expect(supabase?.status).toBe("connected");
 

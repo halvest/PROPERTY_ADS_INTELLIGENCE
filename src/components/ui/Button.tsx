@@ -24,7 +24,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ref
   ) => {
     const baseStyles =
-      "inline-flex items-center justify-center font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-zinc-900 dark:focus-visible:ring-zinc-100 disabled:opacity-50 disabled:pointer-events-none select-none rounded-lg cursor-pointer";
+      "inline-flex items-center justify-center font-medium transition-[background-color,color,border-color,box-shadow,filter] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500/60 focus-visible:ring-offset-white dark:focus-visible:ring-indigo-400/60 dark:focus-visible:ring-offset-zinc-950 disabled:opacity-50 disabled:pointer-events-none select-none rounded-lg cursor-pointer";
 
     const sizeStyles = {
       sm: "h-8 px-2.5 text-xs gap-1.5",
@@ -34,15 +34,15 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 
     const variantStyles = {
       primary:
-        "bg-zinc-900 text-white hover:bg-zinc-800 shadow-xs dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200",
+        "btn-solar font-semibold",
       secondary:
-        "bg-zinc-100 text-zinc-900 hover:bg-zinc-200 shadow-2xs dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700",
+        "bg-zinc-100 text-zinc-900 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700",
       outline:
-        "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
+        "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900 hover:border-zinc-300 shadow-2xs dark:border-zinc-700/80 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
       ghost:
-        "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
+        "text-zinc-600 hover:bg-zinc-900/[0.05] hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-100",
       danger:
-        "bg-rose-600 text-white hover:bg-rose-500 shadow-xs dark:bg-rose-600 dark:hover:bg-rose-500",
+        "bg-rose-600 text-white hover:bg-rose-700 shadow-xs dark:bg-rose-600 dark:hover:bg-rose-500",
     };
 
     return (

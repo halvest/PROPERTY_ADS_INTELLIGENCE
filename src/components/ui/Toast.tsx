@@ -114,7 +114,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             role={t.type === "error" ? "alert" : "status"}
-            className={`pointer-events-auto flex items-start gap-3 rounded-lg border p-3.5 shadow-lg backdrop-blur-md transition-all animate-in fade-in slide-in-from-bottom-2 duration-200 ${
+            className={`pointer-events-auto flex items-start gap-3 rounded-xl border p-3.5 shadow-[var(--shadow-pop)] backdrop-blur-md transition-all animate-in fade-in slide-in-from-bottom-2 duration-200 ${
               t.type === "success"
                 ? "border-emerald-500/20 bg-white/95 text-zinc-900 dark:border-emerald-500/30 dark:bg-zinc-900/95 dark:text-zinc-100"
                 : t.type === "error"

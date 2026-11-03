@@ -5,7 +5,6 @@ import { POST as logoutPost } from "@/app/api/auth/logout/route";
 import * as serverSupabase from "@/lib/supabase/server";
 import * as onboardingService from "@/lib/marketing/meta/asset-onboarding-service";
 import * as provisioningService from "@/lib/auth/provisioning";
-import { verifyOAuthCsrfState } from "@/lib/whatsapp/crypto";
 
 describe("Phase 14 — Authentication & Meta Asset Onboarding", () => {
   const originalEnv = process.env;
@@ -154,6 +153,8 @@ describe("Phase 14 — Authentication & Meta Asset Onboarding", () => {
           },
         ],
         selected: null,
+        tokenStatus: "valid",
+        connectedAccounts: [],
       });
 
       const response = await assetsGet();
@@ -163,14 +164,7 @@ describe("Phase 14 — Authentication & Meta Asset Onboarding", () => {
       expect(json.success).toBe(true);
       expect(json.pages).toHaveLength(1);
       expect(json.adAccounts).toHaveLength(1);
-      expect(json.csrfState).toBeDefined();
-
-      // Verify CSRF state validity
-      const csrfCheck = verifyOAuthCsrfState(json.csrfState, {
-        organizationId: orgId,
-        userId,
-      });
-      expect(csrfCheck.valid).toBe(true);
+      expect(json.csrfState).toBeUndefined();
     });
 
     it("handles accounts without Facebook Pages or Instagram accounts gracefully", async () => {
@@ -209,6 +203,8 @@ describe("Phase 14 — Authentication & Meta Asset Onboarding", () => {
           },
         ],
         selected: null,
+        tokenStatus: "valid",
+        connectedAccounts: [],
       });
 
       const response = await assetsGet();
@@ -380,7 +376,7 @@ describe("Phase 14 — Authentication & Meta Asset Onboarding", () => {
         }),
       } as unknown as Awaited<ReturnType<typeof serverSupabase.createClient>>);
 
-      const response = await assetsDelete();
+      const response = await assetsDelete(new Request("http://localhost:3000/api/meta/assets", { method: "DELETE" }));
       const json = await response.json();
 
       expect(response.status).toBe(200);

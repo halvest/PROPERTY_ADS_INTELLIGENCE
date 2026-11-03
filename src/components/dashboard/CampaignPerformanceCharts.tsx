@@ -69,7 +69,7 @@ export function CampaignPerformanceCharts({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
       {/* 1. Campaign Comparison (Spend & Link Clicks) */}
-      <div className="lg:col-span-2 rounded-xl border border-zinc-200 bg-white p-4.5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 flex flex-col justify-between">
+      <div className="surface-card lg:col-span-2 rounded-2xl border border-zinc-200/90 bg-white p-4.5 dark:border-zinc-800 dark:bg-zinc-900 flex flex-col justify-between">
         <div>
           <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <div>
@@ -154,7 +154,7 @@ export function CampaignPerformanceCharts({
                       {/* Progress bar */}
                       <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800 flex">
                         <div
-                          className="h-full rounded-full bg-indigo-600 dark:bg-indigo-500 transition-all duration-500"
+                          className="h-full rounded-full bg-[var(--chart-1)] transition-all duration-500"
                           style={{ width: `${Math.max(spendPercent, 2)}%` }}
                         />
                       </div>
@@ -195,7 +195,7 @@ export function CampaignPerformanceCharts({
                     <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800 flex">
                       <div
                         className={`h-full rounded-full transition-all duration-500 ${
-                          cmp.status === "ACTIVE" ? "bg-indigo-600 dark:bg-indigo-500" : "bg-zinc-400 dark:bg-zinc-600"
+                          cmp.status === "ACTIVE" ? "bg-[var(--chart-1)]" : "bg-zinc-400 dark:bg-zinc-600"
                         }`}
                         style={{ width: `${Math.max(spendPercent, 2)}%` }}
                       />
@@ -229,7 +229,7 @@ export function CampaignPerformanceCharts({
       </div>
 
       {/* 2. Delivery & Entity Distribution Breakdown */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-4.5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 flex flex-col justify-between">
+      <div className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-4.5 dark:border-zinc-800 dark:bg-zinc-900 flex flex-col justify-between">
         <div>
           <div className="pb-3 border-b border-zinc-100 dark:border-zinc-800">
             <h3 className="text-xs sm:text-sm font-bold text-zinc-900 dark:text-zinc-50">

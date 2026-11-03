@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { generateOAuthCsrfState } from "@/lib/whatsapp/crypto";
+import { generateOAuthCsrfState } from "@/lib/security/credential-crypto";
 
 
 /**
@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(settingsUrl);
     }
 
-    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v21.0";
+    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v26.0";
 
     // Determine authoritative redirect URI
     let redirectUri = process.env.META_OAUTH_REDIRECT_URI?.trim();
@@ -73,13 +73,9 @@ export async function GET(request: NextRequest) {
       userId: user.id,
     });
 
-    // Required read-only marketing and asset inspection permissions
-    const requiredScopes = [
-      "ads_read",
-      "pages_read_engagement",
-      "pages_show_list",
-      "business_management",
-    ].join(",");
+    // This integration reads ad accounts, campaigns, ads and Insights only.
+    // Page and Instagram assets are separate integrations and are not required.
+    const requiredScopes = "ads_read";
 
     const metaDialogUrl = new URL(`https://www.facebook.com/${apiVersion}/dialog/oauth`);
     metaDialogUrl.searchParams.set("client_id", appId);
@@ -88,7 +84,18 @@ export async function GET(request: NextRequest) {
     metaDialogUrl.searchParams.set("scope", requiredScopes);
     metaDialogUrl.searchParams.set("response_type", "code");
 
-    return NextResponse.redirect(metaDialogUrl.toString());
+    const response = NextResponse.redirect(metaDialogUrl.toString());
+    // Single-use binding: the callback must present the same state from an
+    // HttpOnly cookie set here, so a state token alone cannot be replayed
+    // from a different browser/session.
+    response.cookies.set("meta_oauth_state", stateToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/api/auth/meta",
+      maxAge: 15 * 60,
+    });
+    return response;
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : "Unknown error";
     const settingsUrl = new URL("/settings", request.url);

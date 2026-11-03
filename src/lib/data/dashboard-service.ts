@@ -602,15 +602,6 @@ export function getIntegrationStatus(): IntegrationStatusItem[] {
       maskedCredential: "EAAX...••••••••••••",
     },
     {
-      provider: "whatsapp_cloud",
-      name: "WhatsApp Business Cloud API",
-      status: "demo_active",
-      mode: "demo",
-      lastSyncedAt: "2026-10-26T15:15:00Z",
-      details: "Adapter Demo aktif: 16 simulasi percakapan customer WhatsApp.",
-      maskedCredential: "wamid.••••••••••••",
-    },
-    {
       provider: "meta_model_api",
       name: "Meta Model API (Inference)",
       status: "demo_active",

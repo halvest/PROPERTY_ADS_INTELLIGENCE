@@ -6,9 +6,6 @@
  * 2. Token invalid / expired handling (Meta Code 190).
  * 3. Rate limit handling and bounded backoff (Meta Code 17, 613).
  * 4. Pagination traversal and safe empty-data handling.
- * 5. Webhook signature validation and missing app secret rejection.
- * 6. Webhook deduplication and concurrent event safety.
- * 7. Unregistered referral isolation (fallback to unknown).
  * 8. Zero campaign mutation and zero outbound WhatsApp messages.
  * 9. PII masking and secret redaction in logs/errors.
  * 10. Data provenance validation before ad optimization recommendation.
@@ -22,15 +19,9 @@ import {
   maskToken,
   maskAdAccountId,
 } from "@/lib/marketing/meta/config";
-import {
-  maskPhoneNumber,
-  sanitizeWhatsAppLog,
-} from "@/lib/whatsapp/config";
-import { processWhatsAppWebhookPayload } from "@/lib/whatsapp/inbound-service";
-import { POST as whatsappWebhookPost } from "@/app/api/webhook/whatsapp/route";
+import { maskPhoneNumber } from "@/lib/crm/crm-sheets-service";
 import { evaluateAdOptimization } from "@/domain/recommendations/engine";
 import type { AdEvaluationInput } from "@/domain/recommendations/types";
-import type { WhatsAppWebhookPayload } from "@/lib/whatsapp/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 describe("Phase 11 — Meta Marketing API Live Readiness", () => {
@@ -141,7 +132,7 @@ describe("Phase 11 — Meta Marketing API Live Readiness", () => {
           ],
           paging: {
             cursors: { after: "cursor_page_2" },
-            next: "https://graph.facebook.com/v21.0/act_123456789/campaigns?after=cursor_page_2",
+            next: "https://graph.facebook.com/v26.0/act_123456789/campaigns?after=cursor_page_2",
           },
         }),
       };
@@ -160,170 +151,9 @@ describe("Phase 11 — Meta Marketing API Live Readiness", () => {
   });
 });
 
-describe("Phase 11 — WhatsApp Cloud API Webhook Security & Inbound Processing", () => {
-  const originalEnv = process.env;
-
-  beforeEach(() => {
-    process.env = {
-      ...originalEnv,
-      WHATSAPP_APP_SECRET: "test_live_app_secret_9988",
-      WHATSAPP_VERIFY_TOKEN: "test_verify_token_123",
-    };
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
-  });
-
-  // Test 4: Webhook Rejection on Missing App Secret or Invalid Signature
-  it("Test 4: strictly rejects webhook request with HTTP 401 when signature is invalid", async () => {
-    const rawPayload = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
-
-    // Request with missing or wrong signature
-    const request = new Request("http://localhost:3000/api/webhook/whatsapp", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": "sha256=invalid_hex_hash_0000000000000000000000000000000000000000000000000000000000000000",
-      },
-      body: rawPayload,
-    });
-
-    const response = await whatsappWebhookPost(request);
-    expect(response.status).toBe(401);
-    const text = await response.text();
-    expect(text).toContain("Unauthorized");
-  });
-
-  // Test 5: Webhook Rejection when App Secret is empty
-  it("Test 5: strictly rejects webhook request when WHATSAPP_APP_SECRET is empty", async () => {
-    process.env.WHATSAPP_APP_SECRET = "";
-
-    const rawPayload = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
-    const request = new Request("http://localhost:3000/api/webhook/whatsapp", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: rawPayload,
-    });
-
-    const response = await whatsappWebhookPost(request);
-    expect(response.status).toBe(401);
-    const text = await response.text();
-    expect(text).toContain("tidak dikonfigurasi");
-  });
-
-  // Test 6: Inbound Webhook Deduplication Safety
-  it("Test 6: safely skips re-processing duplicate incoming message events (wamid idempotency)", async () => {
-    const duplicatePayload: WhatsAppWebhookPayload = {
-      object: "whatsapp_business_account",
-      entry: [
-        {
-          id: "waba_id_1",
-          changes: [
-            {
-              value: {
-                messaging_product: "whatsapp",
-                metadata: { display_phone_number: "62811", phone_number_id: "phone_1" },
-                contacts: [{ profile: { name: "Budi Santoso" }, wa_id: "628123456789" }],
-                messages: [
-                  {
-                    from: "628123456789",
-                    id: "wamid.DUPLICATE_TEST_ID_01",
-                    timestamp: "1729944000",
-                    type: "text",
-                    text: { body: "Halo, saya tertarik dengan Cluster Sapphire BSD" },
-                  },
-                ],
-              },
-              field: "messages",
-            },
-          ],
-        },
-      ],
-    };
-
-    // Mock DB that reports the wamid already exists
-    const mockSupabase = {
-      from: vi.fn().mockImplementation((table: string) => {
-        if (table === "messages") {
-          return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                eq: vi.fn().mockReturnValue({
-                  maybeSingle: vi.fn().mockResolvedValue({
-                    data: { id: "msg_existing_uuid", conversation_id: "conv_existing_uuid" },
-                  }),
-                }),
-              }),
-            }),
-          };
-        }
-        return { select: vi.fn() };
-      }),
-    } as unknown as SupabaseClient;
-
-    const result = await processWhatsAppWebhookPayload(duplicatePayload, {
-      organizationId: "00000000-0000-0000-0000-000000000001",
-      supabaseClient: mockSupabase,
-    });
-
-    expect(result.status).toBe("duplicate");
-    expect(result.duplicateMessagesCount).toBe(1);
-    expect(result.processedMessagesCount).toBe(0);
-  });
-
-  // Test 7: Unregistered Referral Isolation (Fallback to Unknown)
-  it("Test 7: demotes referral with unregistered ad ID to 'unknown' attribution status", async () => {
-    const unregisteredReferralPayload: WhatsAppWebhookPayload = {
-      object: "whatsapp_business_account",
-      entry: [
-        {
-          id: "waba_id_1",
-          changes: [
-            {
-              value: {
-                messaging_product: "whatsapp",
-                metadata: { display_phone_number: "62811", phone_number_id: "phone_1" },
-                contacts: [{ profile: { name: "Calon Pembeli" }, wa_id: "628199999999" }],
-                messages: [
-                  {
-                    from: "628199999999",
-                    id: "wamid.UNREGISTERED_AD_01",
-                    timestamp: "1729944000",
-                    type: "text",
-                    text: { body: "Halo dari iklan" },
-                    referral: {
-                      source_type: "ad",
-                      source_id: "ad_unregistered_nonexistent_id",
-                      headline: "Promo Iklan Liar",
-                      body: "Diskon 50%",
-                    },
-                  },
-                ],
-              },
-              field: "messages",
-            },
-          ],
-        },
-      ],
-    };
-
-    const result = await processWhatsAppWebhookPayload(unregisteredReferralPayload, {
-      organizationId: "00000000-0000-0000-0000-000000000001",
-      allowDemoFallback: true,
-    });
-
-    // CRITICAL: Unregistered ad ID must NEVER be marked verified
-    expect(result.attributionStatus).toBe("unknown");
-    expect(result.adId).toBeNull();
-  });
-});
-
 describe("Phase 11 — Privacy, PII Protection, & Read-Only Safety", () => {
   // Test 8: Read-Only Safety Guarantees (No Meta Ads or WhatsApp mutation)
-  it("Test 8: confirms client makes strictly GET requests and zero WhatsApp outbound messages", async () => {
+  it("Test 8: confirms client makes strictly GET requests and zero external message sends", async () => {
     const fetchCalls: { url: string; method?: string }[] = [];
     const mockFetch = vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
       fetchCalls.push({ url: String(url), method: init?.method || "GET" });
@@ -360,25 +190,13 @@ describe("Phase 11 — Privacy, PII Protection, & Read-Only Safety", () => {
     const rawPhone = "6281298765432";
 
     // Marketing log sanitization
-    const dirtyMarketingLog = `Fetching https://graph.facebook.com/v21.0/act_123/insights?access_token=${rawToken} with Bearer ${rawToken}`;
+    const dirtyMarketingLog = `Fetching https://graph.facebook.com/v26.0/act_123/insights?access_token=${rawToken} with Bearer ${rawToken}`;
     const cleanMarketingLog = sanitizeMarketingLog(dirtyMarketingLog, rawToken);
     expect(cleanMarketingLog).not.toContain(rawToken);
     expect(cleanMarketingLog).toContain("[REDACTED_ACCESS_TOKEN]");
 
     const genericBearerLog = sanitizeMarketingLog("Authorization: Bearer secret_session_token_123");
     expect(genericBearerLog).toContain("Bearer [REDACTED_TOKEN]");
-
-    // WhatsApp log sanitization
-    const dirtyWhatsAppLog = `Received webhook with secret=${rawSecret} and sha256=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef`;
-    const cleanWhatsAppLog = sanitizeWhatsAppLog(dirtyWhatsAppLog, rawSecret);
-    expect(cleanWhatsAppLog).not.toContain(rawSecret);
-    expect(cleanWhatsAppLog).toContain("[REDACTED_SECRET]");
-    expect(cleanWhatsAppLog).toContain("[REDACTED_SIGNATURE]");
-
-    // Phone number PII masking
-    const maskedPhone = maskPhoneNumber(rawPhone);
-    expect(maskedPhone).toBe("+62 812-****-432");
-    expect(maskedPhone).not.toContain("98765");
 
     // Token masking
     const maskedTok = maskToken(rawToken);

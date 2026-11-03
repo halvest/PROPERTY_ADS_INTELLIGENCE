@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { runAdsDataReconciliation } from "@/lib/ads/diagnostics";
-import { DEV_ORGANIZATION_ID, isProduction } from "@/lib/auth/tenant";
 
 export async function GET(request: Request) {
   try {
@@ -17,7 +16,7 @@ export async function GET(request: Request) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    if (isProduction() && (authError || !user)) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -37,14 +36,10 @@ export async function GET(request: Request) {
     }
 
     if (!organizationId) {
-      if (isProduction()) {
-        return NextResponse.json(
-          { success: false, error: "Organisasi tidak ditemukan", code: "FORBIDDEN" },
-          { status: 403 }
-        );
-      }
-      // Development-only fallback; never reachable in production.
-      organizationId = DEV_ORGANIZATION_ID;
+      return NextResponse.json(
+        { success: false, error: "Organisasi tidak ditemukan", code: "FORBIDDEN" },
+        { status: 403 }
+      );
     }
 
     const report = await runAdsDataReconciliation({

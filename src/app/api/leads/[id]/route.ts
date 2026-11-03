@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getLeadDetail as getDemoLeadDetail } from "@/lib/data/dashboard-service";
 import { persistAttributionEvent } from "@/lib/data/attribution-history-service";
 import type { LeadDetailView, QualityLabel } from "@/lib/data/types";
 import type { AttributionStatus } from "@/domain/attribution/types";
 import { transitionFunnelStage, type FunnelStage } from "@/domain/funnel/stages";
+import { resolveCrmLeadSource } from "@/lib/crm/crm-sheets-service";
 
 /**
  * GET /api/leads/[id]
@@ -16,25 +16,17 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
-    const isDemoId = id.startsWith("lead_syn_") || id.startsWith("demo_");
-
     const supabase = await createClient();
     const {
       data: { user },
+      error: authError,
     } = await supabase.auth.getUser();
 
-    // 1. Return demo detail if requested or synthetic ID
-    if (isDemoId || !user) {
-      const demoLead = getDemoLeadDetail(id);
-      if (demoLead) {
-        return NextResponse.json({ success: true, isDemo: true, data: demoLead });
-      }
-      if (!user) {
-        return NextResponse.json(
-          { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
-          { status: 401 }
-        );
-      }
+    if (authError || !user) {
+      return NextResponse.json(
+        { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
+        { status: 401 }
+      );
     }
 
     const { data: profile } = await supabase
@@ -43,21 +35,26 @@ export async function GET(
       .eq("id", user!.id)
       .maybeSingle();
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     // 2. Query authentic conversation
     const { data: conv, error: convErr } = await supabase
       .from("conversations")
       .select(`
         id,
+        campaign_id,
         attribution_status,
         attribution_evidence,
         quality_label,
         started_at,
         last_message_at,
         contacts (id, name, phone_masked, domisili),
-        ads (id, name, campaigns(id, name)),
+        campaigns (id, name),
+        ads (id, name, campaign_id, campaigns(id, name)),
         lead_assessments (
           id,
           buyer_score,
@@ -99,19 +96,20 @@ export async function GET(
 
     const contact = Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts;
     const ad = Array.isArray(conv.ads) ? conv.ads[0] : conv.ads;
-    const campaign = ad?.campaigns
-      ? Array.isArray(ad.campaigns)
-        ? ad.campaigns[0]
-        : ad.campaigns
-      : null;
+    const campaign = conv.campaigns
+      ? (Array.isArray(conv.campaigns) ? conv.campaigns[0] : conv.campaigns)
+      : ad?.campaigns
+        ? (Array.isArray(ad.campaigns) ? ad.campaigns[0] : ad.campaigns)
+        : null;
 
     const assessment = Array.isArray(conv.lead_assessments)
       ? conv.lead_assessments[0]
       : conv.lead_assessments;
 
     const outcomes = Array.isArray(conv.lead_outcomes) ? conv.lead_outcomes : [];
-    let currentStage: FunnelStage = "baru";
-    if (outcomes.length > 0) {
+    const evidence = (conv.attribution_evidence as Record<string, unknown>) || {};
+    let currentStage: FunnelStage = typeof evidence.funnel_stage === "string" ? evidence.funnel_stage as FunnelStage : "baru";
+    if (typeof evidence.funnel_stage !== "string" && outcomes.length > 0) {
       const sortedOutcomes = [...outcomes].sort(
         (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
       );
@@ -127,7 +125,6 @@ export async function GET(
     const confidence = assessment?.confidence ? Number(assessment.confidence) : null;
     const completeness = assessment?.score_completeness ? Number(assessment.score_completeness) : 1.0;
 
-    const evidence = (conv.attribution_evidence as Record<string, unknown>) || {};
     const contactDomisili = contact && typeof contact === "object" && "domisili" in contact ? (contact as { domisili?: string | null }).domisili : null;
     const evidenceDomisili = evidence.domisili as string | null;
     const evidenceQuality = evidence.quality_label as QualityLabel | null;
@@ -141,12 +138,14 @@ export async function GET(
       id: conv.id,
       name: contact?.name || "Calon Pembeli Properti",
       phoneMasked: contact?.phone_masked || "+62 8**-****-****",
+      adId: ad?.id || null,
+      campaignId: conv.campaign_id || ad?.campaign_id || campaign?.id || null,
       domisili,
       funnelStage: currentStage,
       qualityLabel,
       notes,
       attributionStatus: conv.attribution_status as AttributionStatus,
-      adName: ad?.name || null,
+      adName: ad?.name || (typeof evidence.ad_name === "string" ? evidence.ad_name : null),
       campaignName: campaign?.name || null,
       buyerAssessment: {
         dimension: "buyer",
@@ -181,7 +180,7 @@ export async function GET(
       lastMessageAt: conv.last_message_at,
       messageCount: messages?.length || 1,
       needsReview: conv.attribution_status === "inferred",
-      description: assessment?.summary || "Percakapan prospek properti melalui WhatsApp.",
+      description: assessment?.summary || "Catatan prospek properti dari CRM.",
       messages: (messages || []).map((m) => ({
         id: m.id,
         direction: m.sender_type === "buyer" ? ("inbound" as const) : ("outbound" as const),
@@ -237,8 +236,7 @@ export async function POST(
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
-    if ((authError || !user) && isProduction) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -253,11 +251,15 @@ export async function POST(
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     const body = await request.json();
-    const { action, newStatus, reason, newStage, qualityLabel, notes, domisili } = body;
+    const { action, newStatus, reason, qualityLabel, notes, domisili } = body;
+    const newStage = body.newStage || body.funnelStage;
 
     // 1. Attribution Correction Action
     if (action === "attribution_correction") {
@@ -279,7 +281,7 @@ export async function POST(
       // Fetch current status
       const { data: conv } = await supabase
         .from("conversations")
-        .select("id, attribution_status, ad_id")
+        .select("id, attribution_status, ad_id, campaign_id")
         .eq("id", id)
         .eq("organization_id", organizationId)
         .maybeSingle();
@@ -292,12 +294,40 @@ export async function POST(
       }
 
       const prevStatus = conv.attribution_status as AttributionStatus;
+      const requestedAdId = typeof body.adId === "string" ? body.adId.trim() : "";
+      let nextAdId = conv.ad_id;
+      let nextStatus = newStatus as AttributionStatus;
+      if (requestedAdId) {
+        try {
+          const resolved = await resolveCrmLeadSource(supabase, organizationId, { adId: requestedAdId, campaignId: conv.campaign_id });
+          if (resolved.matchMethod !== "internal_ad_id" && resolved.matchMethod !== "meta_ad_id") {
+            return NextResponse.json(
+              { success: false, error: "ID iklan tidak terpetakan ke iklan di workspace ini." },
+              { status: 400 }
+            );
+          }
+          nextAdId = resolved.adId;
+          nextStatus = "verified";
+        } catch (error) {
+          return NextResponse.json(
+            { success: false, error: error instanceof Error ? error.message : "ID iklan tidak valid untuk workspace ini." },
+            { status: 400 }
+          );
+        }
+      }
 
-      // Update conversation status
+      if (nextStatus === "verified" && !nextAdId) {
+        return NextResponse.json(
+          { success: false, error: "Atribusi terverifikasi membutuhkan ID iklan yang ada di workspace ini." },
+          { status: 400 }
+        );
+      }
+
       await supabase
         .from("conversations")
         .update({
-          attribution_status: newStatus,
+          attribution_status: nextStatus,
+          ad_id: nextAdId,
           updated_at: new Date().toISOString(),
         })
         .eq("id", conv.id)
@@ -308,9 +338,9 @@ export async function POST(
         organizationId,
         conversationId: conv.id,
         previousStatus: prevStatus,
-        newStatus,
+        newStatus: nextStatus,
         previousAdId: conv.ad_id,
-        newAdId: conv.ad_id,
+        newAdId: nextAdId,
         attributionMethod: "manual_supervisor_correction",
         reason: reason.trim(),
         actorId: user?.id || "manual-sales-user",
@@ -334,10 +364,14 @@ export async function POST(
         );
       }
 
+      if (qualityLabel !== undefined && qualityLabel !== null && qualityLabel !== "" && !["Hot", "Warm", "Cold"].includes(qualityLabel)) {
+        return NextResponse.json({ success: false, error: "Label kualitas tidak valid." }, { status: 400 });
+      }
+
       // Fetch current conversation evidence
       const { data: conv } = await supabase
         .from("conversations")
-        .select("id, contact_id, attribution_evidence, quality_label")
+        .select("id, contact_id, ad_id, campaign_id, attribution_status, attribution_evidence, quality_label")
         .eq("id", id)
         .eq("organization_id", organizationId)
         .maybeSingle();
@@ -347,6 +381,20 @@ export async function POST(
           { success: false, error: "Percakapan prospek tidak ditemukan." },
           { status: 404 }
         );
+      }
+
+      const sourceWasProvided = Object.hasOwn(body, "adId") || Object.hasOwn(body, "campaignId") || Object.hasOwn(body, "sourceName") || Object.hasOwn(body, "namaIklan");
+      let resolvedSource: Awaited<ReturnType<typeof resolveCrmLeadSource>> | null = null;
+      if (sourceWasProvided) {
+        try {
+          resolvedSource = await resolveCrmLeadSource(supabase, organizationId, {
+            adId: typeof body.adId === "string" ? body.adId : null,
+            campaignId: typeof body.campaignId === "string" ? body.campaignId : null,
+            sourceName: typeof body.sourceName === "string" ? body.sourceName : typeof body.namaIklan === "string" ? body.namaIklan : null,
+          });
+        } catch (sourceError) {
+          return NextResponse.json({ success: false, error: sourceError instanceof Error ? sourceError.message : "Sumber kampanye/iklan tidak valid." }, { status: 400 });
+        }
       }
 
       // Stage changes must follow the domain transition rules with an explicit reason.
@@ -410,6 +458,7 @@ export async function POST(
         ...(qualityLabel !== undefined ? { quality_label: qualityLabel } : {}),
         ...(notes !== undefined ? { notes } : {}),
         ...(domisili !== undefined ? { domisili } : {}),
+        ...(resolvedSource ? { ad_name: resolvedSource.sourceName, ad_id: resolvedSource.adId, campaign_id: resolvedSource.campaignId, source: "manual_crm_update" } : {}),
         updated_at: new Date().toISOString(),
       };
 
@@ -418,11 +467,33 @@ export async function POST(
         .from("conversations")
         .update({
           ...(qualityLabel !== undefined ? { quality_label: qualityLabel || null } : {}),
+          ...(resolvedSource ? {
+            ad_id: resolvedSource.adId,
+            campaign_id: resolvedSource.campaignId,
+            attribution_status: resolvedSource.adId || resolvedSource.campaignId || resolvedSource.sourceName ? "inferred" : "unknown",
+          } : {}),
           attribution_evidence: updatedEvidence,
           updated_at: new Date().toISOString(),
         })
         .eq("id", id)
         .eq("organization_id", organizationId);
+
+      if (resolvedSource && (resolvedSource.adId !== conv.ad_id || resolvedSource.campaignId !== conv.campaign_id)) {
+        const nextAttributionStatus: AttributionStatus = resolvedSource.adId || resolvedSource.campaignId || resolvedSource.sourceName ? "inferred" : "unknown";
+        const audit = await persistAttributionEvent({
+          organizationId,
+          conversationId: id,
+          previousStatus: conv.attribution_status as AttributionStatus,
+          newStatus: nextAttributionStatus,
+          previousAdId: conv.ad_id,
+          newAdId: resolvedSource.adId,
+          attributionMethod: "manual_crm_source_update",
+          reason: typeof reason === "string" && reason.trim() ? reason.trim() : "Sumber kampanye/iklan diperbarui dari detail CRM.",
+          actorId: user.id,
+          supabaseClient: supabase,
+        });
+        if (!audit.success) return NextResponse.json({ success: false, error: audit.error || "Gagal mencatat audit perubahan sumber." }, { status: 500 });
+      }
 
       // Update contact domisili if provided
       if (domisili !== undefined && conv.contact_id) {

@@ -4,17 +4,19 @@ import { createClient } from "@/lib/supabase/server";
 import {
   getAvailableAndSelectedMetaAssets,
   saveSelectedMetaAssets,
+  saveSelectedMetaAccounts,
+  removeSelectedMetaAccount,
   disconnectMetaAssets,
 } from "@/lib/marketing/meta/asset-onboarding-service";
-import { generateOAuthCsrfState } from "@/lib/whatsapp/crypto";
 
 const SaveSelectionSchema = z.object({
   pageId: z.string().trim().nullable().optional(),
   pageName: z.string().trim().nullable().optional(),
   instagramAccountId: z.string().trim().nullable().optional(),
   instagramUsername: z.string().trim().nullable().optional(),
-  adAccountId: z.string().trim().min(1, "Ad Account ID wajib dipilih."),
+  adAccountId: z.string().trim().optional(),
   adAccountName: z.string().trim().nullable().optional(),
+  accounts: z.array(z.string().trim().min(1)).max(50).optional(),
 });
 
 /**
@@ -51,18 +53,14 @@ export async function GET() {
 
     const assets = await getAvailableAndSelectedMetaAssets(profile.organization_id);
 
-    // Issue anti-CSRF state token for Meta OAuth dialog
-    const csrfState = generateOAuthCsrfState({
-      organizationId: profile.organization_id,
-      userId: user.id,
-    });
-
     return NextResponse.json({
       success: true,
       pages: assets.pages,
       adAccounts: assets.adAccounts,
       selected: assets.selected,
-      csrfState,
+      connectedAccounts: assets.connectedAccounts,
+      tokenStatus: assets.tokenStatus,
+      accountError: assets.accountError || null,
     });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : "Kesalahan server internal";
@@ -141,12 +139,41 @@ export async function POST(request: Request) {
       );
     }
 
-    const saved = await saveSelectedMetaAssets(profile.organization_id, user.id, parseResult.data);
+    const accountIds =
+      parseResult.data.accounts && parseResult.data.accounts.length > 0
+        ? parseResult.data.accounts
+        : parseResult.data.adAccountId
+          ? [parseResult.data.adAccountId]
+          : [];
+    if (accountIds.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "Pilih minimal satu akun iklan.", code: "VALIDATION_ERROR" },
+        { status: 400 }
+      );
+    }
+
+    if (accountIds.length === 1 && !parseResult.data.accounts) {
+      const saved = await saveSelectedMetaAssets(profile.organization_id, user.id, {
+        ...parseResult.data,
+        adAccountId: accountIds[0],
+      });
+      return NextResponse.json({
+        success: true,
+        message: "Aset Meta berhasil disimpan dan dihubungkan ke dashboard.",
+        selected: saved,
+      });
+    }
+
+    const result = await saveSelectedMetaAccounts(profile.organization_id, user.id, {
+      adAccountIds: accountIds,
+      pageId: parseResult.data.pageId,
+    });
 
     return NextResponse.json({
       success: true,
-      message: "Aset Meta berhasil disimpan dan dihubungkan ke dashboard.",
-      selected: saved,
+      message: `${result.saved.length} akun iklan berhasil disimpan.`,
+      selected: result.active,
+      savedAccounts: result.saved,
     });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : "Kesalahan server internal";
@@ -161,7 +188,7 @@ export async function POST(request: Request) {
  * DELETE /api/meta/assets
  * Disconnects the selected Meta assets for the organization.
  */
-export async function DELETE() {
+export async function DELETE(request: Request) {
   try {
     const supabase = await createClient();
     const {
@@ -199,6 +226,26 @@ export async function DELETE() {
         },
         { status: 403 }
       );
+    }
+
+    // Optional body { adAccountId } removes a single account; no body
+    // disconnects the organization's whole Meta connection.
+    let removeAccountId: string | null = null;
+    try {
+      const body = (await request.json()) as { adAccountId?: string };
+      if (body?.adAccountId) removeAccountId = body.adAccountId;
+    } catch {
+      // Empty body = full disconnect
+    }
+
+    if (removeAccountId) {
+      const result = await removeSelectedMetaAccount(profile.organization_id, removeAccountId);
+      return NextResponse.json({
+        success: true,
+        message: "Akun iklan berhasil dihapus dari integrasi organisasi ini.",
+        removed: result.removed,
+        activeAdAccountId: result.activeAdAccountId,
+      });
     }
 
     await disconnectMetaAssets(profile.organization_id);

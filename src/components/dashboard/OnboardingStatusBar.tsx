@@ -7,8 +7,7 @@ import { useToast } from "@/components/ui/Toast";
 
 interface SyncStatusData {
   configured: boolean;
-  mode: "live" | "demo";
-  targetAdAccountId?: string;
+  mode: "live" | "not_connected";
   apiVersion?: string;
 }
 
@@ -16,6 +15,7 @@ interface AssetData {
   adAccountName?: string;
   adAccountId?: string;
   currency?: string;
+  timezone?: string;
   connectionStatus?: string;
   lastSyncAt?: string;
 }
@@ -47,8 +47,7 @@ export function OnboardingStatusBar() {
           const syncJson = await syncRes.json();
           setSyncMeta({
             configured: Boolean(syncJson.configured),
-            mode: syncJson.mode === "live" ? "live" : "demo",
-            targetAdAccountId: syncJson.targetAdAccountId,
+            mode: syncJson.mode === "live" ? "live" : "not_connected",
             apiVersion: syncJson.apiVersion,
           });
         }
@@ -56,12 +55,16 @@ export function OnboardingStatusBar() {
         if (assetRes.ok) {
           const assetJson = await assetRes.json();
           if (assetJson.success && assetJson.selected) {
+            const savedAccount = (assetJson.connectedAccounts || []).find(
+              (account: { adAccountId: string }) => account.adAccountId === assetJson.selected.adAccountId
+            );
             setAssetData({
-              adAccountName: assetJson.selected.adAccountName,
+              adAccountName: savedAccount?.adAccountName || assetJson.selected.adAccountName,
               adAccountId: assetJson.selected.adAccountId,
-              currency: assetJson.selected.currency || "IDR",
+              currency: savedAccount?.currency || undefined,
+              timezone: savedAccount?.timezone || undefined,
               connectionStatus: assetJson.selected.connectionStatus,
-              lastSyncAt: assetJson.selected.lastSyncAt,
+              lastSyncAt: savedAccount?.lastSyncedAt || undefined,
             });
             if (assetJson.selected.lastSyncAt) {
               setLastSyncTime(new Date(assetJson.selected.lastSyncAt).toLocaleTimeString());
@@ -121,11 +124,8 @@ export function OnboardingStatusBar() {
   }
 
   const isLive = syncMeta?.mode === "live" && syncMeta?.configured;
-  const adAccountDisplay =
-    assetData?.adAccountName ||
-    syncMeta?.targetAdAccountId ||
-    (isLive ? "Meta Ads Production" : "Demo Property Sandbox");
-  const currency = assetData?.currency || "IDR";
+  const adAccountDisplay = assetData?.adAccountName || assetData?.adAccountId || (locale === "id" ? "Belum dipilih" : "No account selected");
+  const currency = assetData?.currency || "—";
 
   return (
     <div className="rounded-lg border border-zinc-200/80 bg-white px-3 py-2 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900/90 text-xs">
@@ -142,7 +142,7 @@ export function OnboardingStatusBar() {
             ) : (
               <span className="inline-flex items-center gap-1.5 rounded bg-amber-50 px-2 py-0.5 font-bold text-amber-700 dark:bg-amber-950/50 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60 font-mono tracking-wider">
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                DEMO / SANDBOX
+                {locale === "id" ? "BELUM TERHUBUNG" : "NOT CONNECTED"}
               </span>
             )}
           </div>
@@ -167,7 +167,7 @@ export function OnboardingStatusBar() {
           {/* Reporting Timezone */}
           <div className="flex items-center gap-1 text-zinc-500 dark:text-zinc-400">
             <span>{locale === "id" ? "Zona:" : "TZ:"}</span>
-            <span className="font-mono text-zinc-700 dark:text-zinc-300">Asia/Jakarta (WIB)</span>
+              <span className="font-mono text-zinc-700 dark:text-zinc-300">{assetData?.timezone || "—"}</span>
           </div>
 
           <span className="text-zinc-300 dark:text-zinc-700 hidden md:inline">|</span>
@@ -186,7 +186,7 @@ export function OnboardingStatusBar() {
           <button
             type="button"
             onClick={handleSyncNow}
-            disabled={isSyncing}
+            disabled={isSyncing || !isLive}
             className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 cursor-pointer transition-colors"
             title={locale === "id" ? "Sinkronisasikan metrik Meta Ads sekarang" : "Sync Meta Ads metrics now"}
           >

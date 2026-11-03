@@ -61,6 +61,8 @@ export interface LeadListItem {
   id: string;
   name: string;
   phoneMasked: string;
+  adId?: string | null;
+  campaignId?: string | null;
   funnelStage: FunnelStage;
   attributionStatus: AttributionStatus;
   adName: string | null;
@@ -103,7 +105,7 @@ export interface ReviewQueueItem {
 }
 
 export interface IntegrationStatusItem {
-  provider: "meta_marketing" | "whatsapp_cloud" | "meta_model_api" | "supabase";
+  provider: "meta_marketing" | "meta_model_api" | "supabase";
   name: string;
   status: "connected" | "demo_active" | "disconnected" | "error";
   mode: "demo" | "live";

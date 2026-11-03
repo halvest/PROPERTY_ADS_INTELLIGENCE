@@ -4,16 +4,25 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { maskAdAccountId } from "@/lib/marketing/meta/config";
 
+export type MetaHealth =
+  | "not_connected"
+  | "connected"
+  | "permission_insufficient"
+  | "token_expired"
+  | "sync_failed"
+  | "needs_reauth";
+
 export interface IntegrationStatusItem {
-  provider: "meta_marketing" | "whatsapp_cloud" | "meta_model_api" | "supabase" | "crm_sheets";
+  provider: "meta_marketing" | "meta_model_api" | "supabase" | "crm_sheets";
   name: string;
-  status: "connected" | "demo_active" | "disconnected" | "error";
-  mode: "demo" | "live";
+  status: "connected" | "disconnected" | "error" | "configured";
+  mode: "live";
   lastSyncedAt: string | null;
   details: string;
   maskedCredential?: string;
   accountIdentifier?: string | null;
   error?: string | null;
+  health?: MetaHealth;
 }
 
 export interface GetTenantIntegrationsOptions {
@@ -23,7 +32,7 @@ export interface GetTenantIntegrationsOptions {
 
 /**
  * Service to retrieve honest, multi-tenant integration statuses.
- * Reads canonical integration_connections and ad_accounts safely using service-role or client.
+ * Reads canonical Meta integration_connections and ad_accounts safely using service-role or client.
  */
 export async function getTenantIntegrationStatuses(
   options: GetTenantIntegrationsOptions = {}
@@ -32,28 +41,14 @@ export async function getTenantIntegrationStatuses(
   try {
     db = createAdminClient();
   } catch {
-    db = options.client as SupabaseClient;
+    if (!options.client) throw new Error("Database integration status is unavailable.");
+    db = options.client;
   }
 
-  let orgId = options.organizationId;
-
-  if (!orgId && db && process.env.NODE_ENV !== "production") {
-    // Dev only: resolve the tenant organization that owns the active Meta connection
-    const { data: activeMeta } = await db
-      .from("integration_connections")
-      .select("organization_id")
-      .eq("provider", "meta")
-      .limit(1)
-      .maybeSingle();
-
-    orgId = activeMeta?.organization_id || "00000000-0000-0000-0000-000000000001";
-  }
+  const orgId = options.organizationId;
 
   if (!orgId) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("organizationId wajib ditentukan dari sesi tenant terautentikasi.");
-    }
-    orgId = "00000000-0000-0000-0000-000000000001";
+    throw new Error("organizationId wajib ditentukan dari sesi tenant terautentikasi.");
   }
 
   // Fetch canonical integration_connections for this tenant
@@ -63,95 +58,127 @@ export async function getTenantIntegrationStatuses(
     .eq("organization_id", orgId);
 
   const metaConn = connections?.find((c) => c.provider === "meta");
-  const waConn = connections?.find((c) => c.provider === "whatsapp");
 
-  // Fetch active ad account
-  const { data: adAcc } = await db
+  // Meta health requires BOTH a connected selection and a stored tenant token.
+  // An integration_connections row or an env var alone never means "connected".
+  const { data: tokenRow } = await db
+    .from("meta_user_tokens")
+    .select("expires_at, granted_scopes")
+    .eq("organization_id", orgId)
+    .maybeSingle();
+  const { data: selection } = await db
+    .from("meta_asset_selections")
+    .select("ad_account_id, ad_account_name, connection_status")
+    .eq("organization_id", orgId)
+    .maybeSingle();
+  const { data: selectedAdAccount } = selection?.ad_account_id
+    ? await db
+        .from("ad_accounts")
+        .select("id, last_synced_at")
+        .eq("organization_id", orgId)
+        .eq("provider", "meta")
+        .eq("provider_account_id", selection.ad_account_id)
+        .eq("connection_status", "connected")
+        .maybeSingle()
+    : { data: null };
+  const { count: connectedAccountCount } = await db
     .from("ad_accounts")
-    .select("*")
+    .select("id", { count: "exact", head: true })
     .eq("organization_id", orgId)
-    .eq("connection_status", "connected")
-    .maybeSingle();
+    .eq("provider", "meta")
+    .eq("connection_status", "connected");
 
-  // Fetch active whatsapp connection
-  const { data: waDetails } = await db
-    .from("whatsapp_connections")
-    .select("*")
-    .eq("organization_id", orgId)
-    .maybeSingle();
+  let health: MetaHealth = "not_connected";
+  if (metaConn?.status === "error") health = "sync_failed";
+  else if (tokenRow && selection?.connection_status === "connected" && selectedAdAccount) {
+    if (tokenRow.expires_at && new Date(tokenRow.expires_at).getTime() <= Date.now()) {
+      health = "token_expired";
+    } else if (
+      Array.isArray(tokenRow.granted_scopes) &&
+      tokenRow.granted_scopes.length > 0 &&
+      !tokenRow.granted_scopes.includes("ads_read")
+    ) {
+      health = "permission_insufficient";
+    } else {
+      health = "connected";
+    }
+  } else if (tokenRow || selection?.connection_status === "connected") {
+    health = "needs_reauth";
+  }
 
-  // 1. Meta Marketing API Status
-  const isMetaConnected = metaConn?.status === "connected";
+  const isMetaConnected = health === "connected";
   const metaItem: IntegrationStatusItem = {
     provider: "meta_marketing",
     name: "Meta Marketing API (Ads & Insights)",
-    status: isMetaConnected ? "connected" : metaConn?.status === "error" ? "error" : "disconnected",
+    status: isMetaConnected
+      ? "connected"
+      : health === "not_connected"
+        ? "disconnected"
+        : "error",
+    health,
     mode: "live",
-    lastSyncedAt: metaConn?.last_synced_at || null,
+    lastSyncedAt: selectedAdAccount?.last_synced_at || null,
     details: isMetaConnected
-      ? `Terhubung ke Akun Iklan: ${adAcc?.account_name || metaConn?.external_account_name || adAcc?.provider_account_id || "Meta Ad Account"}`
-      : "Belum terhubung. Klik 'Otorisasi Akun Meta' untuk menghubungkan kampanye iklan.",
-    maskedCredential: adAcc
-      ? maskAdAccountId(adAcc.provider_account_id)
-      : metaConn?.external_account_id
-      ? maskAdAccountId(metaConn.external_account_id)
+      ? `Terhubung. ${connectedAccountCount ?? 0} akun iklan tersimpan. Akun aktif: ${selection?.ad_account_name || selection?.ad_account_id}`
+      : health === "token_expired"
+        ? "Token Meta telah kedaluwarsa. Hubungkan ulang akun Meta."
+        : health === "permission_insufficient"
+          ? "Izin ads_read tidak tersedia. Hubungkan ulang dan setujui izin bacaan iklan."
+          : health === "needs_reauth"
+            ? "Koneksi Meta belum lengkap. Hubungkan ulang akun Meta dan pilih akun iklan."
+            : health === "sync_failed"
+              ? "Sinkronisasi terakhir gagal. Periksa koneksi lalu sinkronkan ulang."
+              : "Belum terhubung. Gunakan tombol Hubungkan Meta untuk menghubungkan akun iklan organisasi ini.",
+    maskedCredential: isMetaConnected
+      ? maskAdAccountId(selection?.ad_account_id)
       : undefined,
-    accountIdentifier: adAcc?.provider_account_id || metaConn?.external_account_id,
-    error: metaConn?.error_message,
+    accountIdentifier: isMetaConnected
+      ? selection?.ad_account_id || null
+      : null,
+    error: metaConn?.error_message ? "Sinkronisasi Meta terakhir gagal. Coba sambungkan ulang atau sinkronkan lagi." : null,
   };
 
-  // 2. WhatsApp Business Cloud API Status
-  const isWaConnected = waConn?.status === "connected" || waDetails?.connection_status === "connected";
-  const waItem: IntegrationStatusItem = {
-    provider: "whatsapp_cloud",
-    name: "WhatsApp Business Platform (Coexistence)",
-    status: isWaConnected ? "connected" : "disconnected",
-    mode: "live",
-    lastSyncedAt: waConn?.last_synced_at || waDetails?.last_webhook_received_at || null,
-    details: isWaConnected
-      ? `Nomor Bisnis: ${waDetails?.display_phone_number || waConn?.external_account_name || "WhatsApp Business"} (${waDetails?.verified_name || "Terverifikasi"})`
-      : "Belum terhubung. Klik 'Hubungkan WhatsApp' via Meta Embedded Signup.",
-    maskedCredential: waDetails?.phone_number_id ? `ID: ••••••••${waDetails.phone_number_id.slice(-4)}` : undefined,
-    accountIdentifier: waDetails?.phone_number_id,
-  };
-
-  // 3. AI Intelligence Model Status
-  const aiConfigured = Boolean(process.env.OPENAI_API_KEY || process.env.AI_STUDIO_API_KEY || process.env.META_MODEL_API_KEY || process.env.MODEL_API_KEY);
+  // 2. AI model: configuration presence only — not a tested live connection.
+  const aiConfigured = Boolean(process.env.META_MODEL_API_KEY || process.env.MODEL_API_KEY);
   const aiItem: IntegrationStatusItem = {
     provider: "meta_model_api",
-    name: "HD Creative LLM Assessment Engine",
-    status: aiConfigured ? "connected" : "disconnected",
+    name: "Meta Model API (AI Assessment)",
+    status: aiConfigured ? "configured" : "disconnected",
     mode: "live",
-    lastSyncedAt: new Date().toISOString(),
+    lastSyncedAt: null,
     details: aiConfigured
-      ? "Model analisis percakapan & scoring otomatis (Buyer & Sales Readiness) siap beroperasi."
+      ? "Konfigurasi tersedia di server. Status ini tidak menyatakan koneksi telah diuji."
       : "Kunci API model AI belum dikonfigurasi pada server.",
   };
 
-  // 4. Supabase Database Status
+  // 3. Supabase: configuration presence only.
+  const supabaseConfigured = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
   const supabaseItem: IntegrationStatusItem = {
     provider: "supabase",
     name: "Supabase Multi-Tenant PostgreSQL",
-    status: "connected",
+    status: supabaseConfigured ? "configured" : "disconnected",
     mode: "live",
-    lastSyncedAt: new Date().toISOString(),
-    details: `Isolasi tenant aktif: Organization ID ${orgId}`,
-    maskedCredential: process.env.NEXT_PUBLIC_SUPABASE_URL ? `${process.env.NEXT_PUBLIC_SUPABASE_URL.slice(0, 18)}••••.supabase.co` : undefined,
+    lastSyncedAt: null,
+    details: supabaseConfigured
+      ? "Konfigurasi tersedia. Data tenant dibatasi Row-Level Security berdasarkan organisasi pengguna."
+      : "Konfigurasi Supabase belum tersedia di server.",
   };
 
-  // 5. CRM Sheets / XLSX Manual Import (Alternative to WhatsApp)
+  // 4. CRM import is a local feature; no external connection exists to test.
   const crmSheetsItem: IntegrationStatusItem = {
     provider: "crm_sheets",
     name: "CRM Leads Spreadsheet Import (Excel / Google Sheets)",
-    status: "connected",
+    status: "configured",
     mode: "live",
-    lastSyncedAt: new Date().toISOString(),
-    details: "Aktif sebagai alternatif resmi saat WhatsApp otomatis belum terhubung. Template .xlsx dan .csv siap diunduh & diunggah.",
-    accountIdentifier: "Template HD Creative v1.0",
+    lastSyncedAt: null,
+    details: "Fitur impor lokal melalui input manual dan unggahan file .xlsx atau .csv.",
+    accountIdentifier: null,
   };
 
   return {
-    integrations: [metaItem, waItem, crmSheetsItem, aiItem, supabaseItem],
+    integrations: [metaItem, crmSheetsItem, aiItem, supabaseItem],
     organizationId: orgId,
   };
 }

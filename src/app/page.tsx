@@ -30,7 +30,7 @@ function getDict(locale: Locale) {
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getLocale();
   const { landing } = getDict(locale);
-  const base = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const base = process.env.NEXT_PUBLIC_APP_URL || "https://hdcreative.cloud";
 
   return {
     metadataBase: new URL(base),
@@ -66,7 +66,7 @@ export default async function HomePage() {
   const locale = await getLocale();
   const dict = getDict(locale);
   const landing = dict.landing;
-  const base = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const base = process.env.NEXT_PUBLIC_APP_URL || "https://hdcreative.cloud";
 
   // JSON-LD contains only verifiable facts: no offers (no public pricing),
   // no sameAs (no public profiles), FAQ identical to the visible FAQ.
@@ -116,7 +116,7 @@ export default async function HomePage() {
         <FaqAccordion landing={landing} />
         <ClosingCta landing={landing} />
       </main>
-      <LandingFooter landing={landing} />
+      <LandingFooter landing={landing} locale={locale} />
     </div>
   );
 }

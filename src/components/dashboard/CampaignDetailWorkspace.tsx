@@ -13,17 +13,18 @@ export interface CampaignDetailData {
   activeAdsCount: number;
   spend: number;
   impressions: number;
-  reach: number;
+  reach: number | null;
   frequency: number | null;
-  results: number;
+  results: number | null;
   costPerResult: number | null;
-  linkClicks: number;
+  linkClicks: number | null;
   linkCtr: number | null;
   linkCpc: number | null;
   allClicks: number;
   allCtr: number | null;
   allCpc: number | null;
   cpm: number | null;
+  hasInsights?: boolean;
 }
 
 export interface AdInCampaignItem {
@@ -35,12 +36,13 @@ export interface AdInCampaignItem {
   adsetName: string;
   spend: number;
   impressions: number;
-  reach: number;
-  linkClicks: number;
+  reach: number | null;
+  linkClicks: number | null;
   linkCtr: number | null;
   linkCpc: number | null;
-  results: number;
+  results: number | null;
   costPerResult: number | null;
+  hasInsights?: boolean;
 }
 
 interface CampaignDetailWorkspaceProps {
@@ -164,7 +166,7 @@ export function CampaignDetailWorkspace({
                 {locale === "en" ? "Results / Conversions" : "Hasil Pesan / Conversions"}
               </span>
               <p className="text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-50 font-mono mt-0.5">
-                {campaign.results} {locale === "en" ? "conversations" : "percakapan"}
+                {campaign.results === null ? "—" : campaign.results} {locale === "en" ? "conversations" : "percakapan"}
               </p>
               <span className="text-[10px] text-zinc-400 font-mono">
                 Cost/Result: {campaign.costPerResult !== null ? formatCurrency(campaign.costPerResult) : "—"}
@@ -176,7 +178,7 @@ export function CampaignDetailWorkspace({
                 {locale === "en" ? "Link Clicks & CTR" : "Klik Tautan & Link CTR"}
               </span>
               <p className="text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-50 font-mono mt-0.5">
-                {formatNumber(campaign.linkClicks)} ({campaign.linkCtr !== null ? `${campaign.linkCtr}%` : "—"})
+                {campaign.linkClicks === null ? "—" : formatNumber(campaign.linkClicks)} ({campaign.linkCtr !== null ? `${campaign.linkCtr}%` : "—"})
               </p>
               <span className="text-[10px] text-zinc-400 font-mono">
                 Link CPC: {campaign.linkCpc !== null ? formatCurrency(campaign.linkCpc) : "—"}
@@ -258,10 +260,10 @@ export function CampaignDetailWorkspace({
                     {formatCurrency(ad.spend)}
                   </td>
                   <td className="py-3 px-3 font-mono text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
-                    {ad.results} {locale === "en" ? "messages" : "pesan"}
+                    {ad.results === null ? "—" : ad.results} {locale === "en" ? "messages" : "pesan"}
                   </td>
                   <td className="py-3 px-3 font-mono text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
-                    {formatNumber(ad.linkClicks)} ({ad.linkCtr !== null ? `${ad.linkCtr}%` : "—"})
+                    {ad.linkClicks === null ? "—" : formatNumber(ad.linkClicks)} ({ad.linkCtr !== null ? `${ad.linkCtr}%` : "—"})
                   </td>
                   <td className="py-3 px-3 font-mono text-zinc-600 dark:text-zinc-400 whitespace-nowrap">
                     {ad.linkCpc !== null ? formatCurrency(ad.linkCpc) : "—"}
@@ -305,7 +307,7 @@ export function CampaignDetailWorkspace({
                 Executive Summary
               </span>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Sintesis performa keseluruhan kampanye, evaluasi efisiensi biaya terhadap target volume prospek WhatsApp, serta status delivery saat ini ({campaign.status}).
+                Sintesis performa kampanye, evaluasi biaya terhadap data prospek yang dicatat, serta status delivery saat ini ({campaign.status}).
               </p>
             </div>
 
@@ -338,7 +340,7 @@ export function CampaignDetailWorkspace({
                 Faktor yang Belum Pasti
               </span>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Data mutu percakapan WhatsApp dan Buyer Score masih menunggu integrasi webhook WhatsApp Cloud API yang akan datang.
+                Data prospek, kualitas, dan tindak lanjut hanya tersedia jika dicatat atau diunggah ke CRM.
               </p>
             </div>
 
@@ -360,7 +362,7 @@ export function CampaignDetailWorkspace({
                 Rekomendasi Tindakan
               </span>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Saran taktis: Evaluasi penawaran pembuka WhatsApp (pre-filled message) dan penyesuaian anggaran bertahap (bukan jaminan keuntungan pasti).
+                Saran taktis: Evaluasi penawaran iklan dan tindak lanjut prospek berdasarkan data yang tersedia.
               </p>
             </div>
 

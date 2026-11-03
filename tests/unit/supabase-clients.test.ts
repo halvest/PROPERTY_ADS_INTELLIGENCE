@@ -13,14 +13,11 @@ describe("Supabase Client Architecture & Security Guardrails", () => {
     process.env = originalEnv;
   });
 
-  it("createBrowserClient initializes without crashing in demo/fallback mode", () => {
+  it("createBrowserClient fails closed when Supabase configuration is missing", () => {
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    const client = createBrowserClient();
-    expect(client).toBeDefined();
-    expect(typeof client.from).toBe("function");
-    expect(typeof client.auth.getSession).toBe("function");
+    expect(() => createBrowserClient()).toThrowError(/Supabase is not configured/);
   });
 
   it("createAdminClient throws security violation if called in browser window context", () => {

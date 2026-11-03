@@ -1,12 +1,5 @@
 import React, { Suspense } from "react";
-import { SYNTHETIC_LEAD_SCENARIOS } from "@/fixtures/synthetic-leads";
 import { LeadDetailClient } from "./LeadDetailClient";
-
-export function generateStaticParams() {
-  return Object.values(SYNTHETIC_LEAD_SCENARIOS).map((sc) => ({
-    id: sc.id,
-  }));
-}
 
 export default async function LeadDetailPage({
   params,

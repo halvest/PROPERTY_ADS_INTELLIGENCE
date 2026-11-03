@@ -130,7 +130,7 @@ export function CpqlCalculator({
             </div>
           </div>
 
-          <div className="flex min-w-0 flex-col bg-[#171a2b] p-5 text-white sm:p-7 lg:p-8" aria-live="polite">
+          <div className="flex min-w-0 flex-col bg-zinc-900 border border-zinc-800 p-5 text-white sm:p-7 lg:p-8" aria-live="polite">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-medium text-slate-300">{c.outputLabel}</p>
               <svg className="h-5 w-5 text-indigo-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">

@@ -6,6 +6,7 @@ import {
   type MetaCampaignResponse,
   type MetaAdResponse,
   type MetaInsightResponse,
+  type MetaAccountInsightResponse,
   type MetaPaginatedResponse,
   type MetaApiErrorPayload,
   type MetaFacebookPage,
@@ -29,7 +30,7 @@ export interface MetaMarketingClientOptions {
 
 /**
  * Meta Marketing API Server Client (Read-Only)
- * Connects directly to Meta Graph API (default v21.0) with cursor pagination,
+ * Connects directly to Meta Graph API (default v26.0) with cursor pagination,
  * rate limit detection, bounded retries, and sanitized error reporting.
  *
  * CRITICAL RULE: This client NEVER modifies campaigns, ads, bids, or budgets.
@@ -45,11 +46,17 @@ export class MetaMarketingApiClient {
   private readonly fetchFn: typeof fetch;
   /** True when the last fetchAllPages call stopped at the page cap with more data available. */
   public lastFetchTruncated = false;
+  /** Pages actually fetched by the last fetchAllPages call. */
+  public lastFetchPages = 0;
+  /** Whether Meta indicated another page existed when traversal stopped. */
+  public lastFetchHasMore = false;
 
   constructor(options: MetaMarketingClientOptions = {}) {
     const config = getMetaMarketingConfig({ requireConfigured: false });
-    this.accessToken = options.accessToken !== undefined ? options.accessToken : config.accessToken;
-    this.defaultAdAccountId = normalizeAdAccountId(options.adAccountId || config.adAccountId);
+    // Tenant credentials and account context must always be explicit. Global
+    // environment credentials are never a fallback for a client organization.
+    this.accessToken = options.accessToken || "";
+    this.defaultAdAccountId = normalizeAdAccountId(options.adAccountId);
     this.apiVersion = options.apiVersion || config.apiVersion;
     this.baseUrl = (options.baseUrl || config.baseUrl).replace(/\/+$/, "");
     this.timeoutMs = options.timeoutMs ?? config.timeoutMs;
@@ -57,19 +64,35 @@ export class MetaMarketingApiClient {
     this.fetchFn = options.fetchFn || fetch;
   }
 
+  /** Creates an independent pagination-state client for parallel Insights requests. */
+  fork(): MetaMarketingApiClient {
+    return new MetaMarketingApiClient({
+      accessToken: this.accessToken,
+      adAccountId: this.defaultAdAccountId,
+      apiVersion: this.apiVersion,
+      baseUrl: this.baseUrl,
+      timeoutMs: this.timeoutMs,
+      maxRetries: this.maxRetries,
+      fetchFn: this.fetchFn,
+    });
+  }
+
   /**
    * Fetches Facebook Pages managed by the authenticated user along with connected Instagram business accounts.
-   * Endpoint: GET /v21.0/me/accounts
+   * Endpoint: GET /v26.0/me/accounts
    */
   async getFacebookPages(): Promise<MetaFacebookPage[]> {
-    const fields = "id,name,category,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url}";
+    // Page access tokens are never requested: they are credentials and must
+    // not flow toward any caller that serializes pages to a browser.
+    const fields = "id,name,category,tasks,instagram_business_account{id,username,name,profile_picture_url}";
     const endpoint = `/me/accounts?fields=${fields}&limit=50`;
-    return this.fetchAllPages<MetaFacebookPage>(endpoint);
+    const pages = await this.fetchAllPages<MetaFacebookPage>(endpoint);
+    return pages.map((p) => ({ ...p, access_token: undefined }));
   }
 
   /**
    * Fetches the connected Instagram Professional Account for a given Page ID.
-   * Endpoint: GET /v21.0/{pageId}?fields=instagram_business_account{...}
+   * Endpoint: GET /v26.0/{pageId}?fields=instagram_business_account{...}
    */
   async getInstagramAccount(pageId: string): Promise<MetaInstagramAccount | null> {
     const fields = "instagram_business_account{id,username,name,profile_picture_url}";
@@ -84,17 +107,26 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches list of authorized Ad Accounts for the authenticated access token.
-   * Endpoint: GET /v21.0/me/adaccounts
+   * Endpoint: GET /v26.0/me/adaccounts
    */
   async getAdAccounts(): Promise<MetaAdAccountResponse[]> {
+    this.lastFetchTruncated = false;
     const fields = "id,account_id,name,currency,timezone_name,account_status,business_name";
     const endpoint = `/me/adaccounts?fields=${fields}&limit=50`;
-    return this.fetchAllPages<MetaAdAccountResponse>(endpoint);
+    const accounts = await this.fetchAllPages<MetaAdAccountResponse>(endpoint, 100);
+    if (this.lastFetchTruncated) {
+      throw new MarketingApiError({
+        code: "PAGINATION_ERROR",
+        message: "Meta account discovery exceeded its safe pagination limit; refresh later or contact support.",
+        isRecoverable: true,
+      });
+    }
+    return accounts;
   }
 
   /**
    * Fetches metadata for a single Ad Account.
-   * Endpoint: GET /v21.0/act_<ID>
+   * Endpoint: GET /v26.0/act_<ID>
    */
   async getAdAccount(targetAdAccountId?: string): Promise<MetaAdAccountResponse> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
@@ -107,7 +139,7 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches all active & paused campaigns for an Ad Account.
-   * Endpoint: GET /v21.0/act_<ID>/campaigns
+   * Endpoint: GET /v26.0/act_<ID>/campaigns
    */
   async getCampaigns(targetAdAccountId?: string): Promise<MetaCampaignResponse[]> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
@@ -120,7 +152,7 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches all active & paused ads for an Ad Account.
-   * Endpoint: GET /v21.0/act_<ID>/ads
+   * Endpoint: GET /v26.0/act_<ID>/ads
    */
   async getAds(targetAdAccountId?: string): Promise<MetaAdResponse[]> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
@@ -133,7 +165,7 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches ad-level performance insights for a date range or preset.
-   * Endpoint: GET /v21.0/act_<ID>/insights?level=ad
+   * Endpoint: GET /v26.0/act_<ID>/insights?level=ad
    */
   async getAdInsights(options: {
     targetAdAccountId?: string;
@@ -141,6 +173,7 @@ export class MetaMarketingApiClient {
     datePreset?: string;
     timeIncrement?: number | "all_days";
     limit?: number;
+    maxPages?: number;
   } = {}): Promise<MetaInsightResponse[]> {
     const accountId = normalizeAdAccountId(options.targetAdAccountId || this.defaultAdAccountId);
     this.assertAccountId(accountId);
@@ -154,6 +187,7 @@ export class MetaMarketingApiClient {
       "adset_id",
       "adset_name",
       "spend",
+      "account_currency",
       "impressions",
       "clicks",
       "reach",
@@ -200,14 +234,43 @@ export class MetaMarketingApiClient {
     }
 
     const endpoint = `/${accountId}/insights?${params.toString()}`;
-    return this.fetchAllPages<MetaInsightResponse>(endpoint);
+    return this.fetchAllPages<MetaInsightResponse>(endpoint, options.maxPages ?? 20);
+  }
+
+  /**
+   * Fetches account-level Insights for one exact date range. Meta computes
+   * reach and frequency at the account scope, so these values remain valid
+   * across multiple campaigns, ads, and days.
+   */
+  async getAccountInsights(options: {
+    targetAdAccountId?: string;
+    timeRange: { since: string; until: string };
+    datePreset?: string;
+    limit?: number;
+    maxPages?: number;
+  }): Promise<MetaAccountInsightResponse[]> {
+    const accountId = normalizeAdAccountId(options.targetAdAccountId || this.defaultAdAccountId);
+    this.assertAccountId(accountId);
+
+    const params = new URLSearchParams({
+      level: "account",
+      fields: "spend,impressions,reach,frequency,cpm,inline_link_clicks,inline_link_click_ctr,cost_per_inline_link_click,clicks,ctr,cpc,actions,account_currency,date_start,date_stop",
+      time_increment: "all_days",
+      limit: String(options.limit ?? 100),
+    });
+    if (options.datePreset) params.set("date_preset", options.datePreset);
+    else params.set("time_range", JSON.stringify(options.timeRange));
+    const endpoint = `/${accountId}/insights?${params.toString()}`;
+    return this.fetchAllPages<MetaAccountInsightResponse>(endpoint, options.maxPages ?? 20);
   }
 
   /**
    * Traverses cursor-based pagination to collect all records up to a safe maximum.
    */
-  private async fetchAllPages<T>(initialEndpoint: string, maxPages = 20): Promise<T[]> {
+  private async fetchAllPages<T>(initialEndpoint: string, maxPages = 100): Promise<T[]> {
     this.lastFetchTruncated = false;
+    this.lastFetchPages = 0;
+    this.lastFetchHasMore = false;
     const allRecords: T[] = [];
     let currentEndpoint: string | null = initialEndpoint;
     let pageCount = 0;
@@ -243,6 +306,8 @@ export class MetaMarketingApiClient {
     if (currentEndpoint && pageCount >= maxPages) {
       this.lastFetchTruncated = true;
     }
+    this.lastFetchPages = pageCount;
+    this.lastFetchHasMore = Boolean(currentEndpoint);
 
     return allRecords;
   }
@@ -254,13 +319,23 @@ export class MetaMarketingApiClient {
     if (!this.accessToken || this.accessToken.trim() === "") {
       throw new MarketingApiError({
         code: "MISSING_CONFIGURATION",
-        message: "Meta Marketing API access token is not configured. Set META_ACCESS_TOKEN in server environment.",
+        message: "Tenant Meta access token is unavailable. Reconnect the organization's Meta account.",
         isRecoverable: false,
       });
     }
 
     // Prepare full URL (handles both relative endpoints and absolute pagination URLs)
     const isFullUrl = path.startsWith("http://") || path.startsWith("https://");
+    if (isFullUrl) {
+      const pageUrl = new URL(path);
+      if (pageUrl.protocol !== "https:" || pageUrl.hostname !== "graph.facebook.com") {
+        throw new MarketingApiError({
+          code: "UPSTREAM_ERROR",
+          message: "Meta returned an invalid pagination URL; the request was stopped for credential safety.",
+          isRecoverable: false,
+        });
+      }
+    }
     const url = isFullUrl
       ? path
       : `${this.baseUrl}/${this.apiVersion}${path.startsWith("/") ? path : `/${path}`}`;
@@ -329,7 +404,7 @@ export class MetaMarketingApiClient {
         if (metaCode === 200 || metaCode === 294 || statusCode === 403) {
           throw new MarketingApiError({
             code: "PERMISSION_ERROR",
-            message: `Izin akses Meta Marketing API tidak mencukupi. Pastikan token memiliki izin 'ads_read' dan 'read_insights': ${sanitizedMsg}`,
+            message: `Izin akses Meta Marketing API tidak mencukupi. Pastikan token memiliki izin 'ads_read': ${sanitizedMsg}`,
             metaErrorCode: metaCode,
             metaErrorSubcode: metaSubcode,
             statusCode,
@@ -465,7 +540,7 @@ export class MetaMarketingApiClient {
     if (!accountId || accountId.trim() === "") {
       throw new MarketingApiError({
         code: "MISSING_CONFIGURATION",
-        message: "Target Ad Account ID tidak ditentukan. Tentukan META_AD_ACCOUNT_ID di server environment atau berikan parameter targetAdAccountId.",
+        message: "Target Ad Account ID tidak ditentukan. Pilih akun iklan yang tersimpan pada organisasi ini.",
         isRecoverable: false,
       });
     }

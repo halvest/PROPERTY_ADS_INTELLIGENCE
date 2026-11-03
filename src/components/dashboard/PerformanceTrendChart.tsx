@@ -1,13 +1,15 @@
 "use client";
 
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useCallback } from "react";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { formatDisplayCurrency } from "@/lib/format/display-currency";
+import { localizeResultLabel } from "@/lib/ads/result-metric";
 
 export interface DailyTrendPoint {
   date: string;
   spend: number;
   impressions: number;
-  reach: number;
+  reach: number | null;
   linkClicks: number;
   allClicks?: number;
   results: number;
@@ -24,45 +26,23 @@ interface PerformanceTrendChartProps {
 }
 
 /**
- * Generates a smooth cubic Bezier path from a series of points using Catmull-Rom spline interpolation.
+ * Generates straight line segments between points with clean vertices
+ * matching the high-precision reference design (Stripe/Linear style).
  */
-function getCubicBezierPath(points: Array<{ x: number; y: number }>): string {
+function getPolylinePath(points: Array<{ x: number; y: number }>): string {
   if (points.length === 0) return "";
-  if (points.length === 1) return `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-  if (points.length === 2) {
-    return `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)} L ${points[1].x.toFixed(1)} ${points[1].y.toFixed(1)}`;
-  }
-
-  let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = i > 0 ? points[i - 1] : points[i];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = i < points.length - 2 ? points[i + 2] : p2;
-
-    const tension = 0.22;
-    const cp1x = p1.x + (p2.x - p0.x) * tension;
-    const cp1y = p1.y + (p2.y - p0.y) * tension;
-
-    const cp2x = p2.x - (p3.x - p1.x) * tension;
-    const cp2y = p2.y - (p3.y - p1.y) * tension;
-
-    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
-  }
-
-  return d;
+  return `M ${points.map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" L ")}`;
 }
 
 /**
- * Creates closed area path under the curve for SVG linear gradient fills.
+ * Creates closed area path under the polyline for SVG linear gradient fills.
  */
-function getAreaPath(points: Array<{ x: number; y: number }>, bottomY: number): string {
+function getPolylineAreaPath(points: Array<{ x: number; y: number }>, bottomY: number): string {
   if (points.length < 2) return "";
-  const curvePath = getCubicBezierPath(points);
+  const line = getPolylinePath(points);
   const first = points[0];
   const last = points[points.length - 1];
-  return `${curvePath} L ${last.x.toFixed(1)} ${bottomY} L ${first.x.toFixed(1)} ${bottomY} Z`;
+  return `${line} L ${last.x.toFixed(1)} ${bottomY} L ${first.x.toFixed(1)} ${bottomY} Z`;
 }
 
 /**
@@ -88,17 +68,19 @@ function getNiceMax(val: number, minSteps = 3): number {
 }
 
 /**
- * Formats IDR amounts compactly (e.g., Rp0, Rp40rb, Rp80rb, Rp120rb, Rp1,2jt).
+ * Formats IDR amounts compactly (e.g., Rp0, Rp40rb/Rp40K, Rp1,2jt/Rp1.2M).
  */
-function formatCompactIdr(amount: number): string {
+function formatCompactIdr(amount: number, locale: "id" | "en" = "id"): string {
   if (amount === 0) return "Rp0";
   if (amount >= 1_000_000) {
     const val = amount / 1_000_000;
-    return `Rp${val % 1 === 0 ? val : val.toFixed(1)}jt`;
+    const numStr = val % 1 === 0 ? String(val) : locale === "id" ? val.toFixed(1).replace(".", ",") : val.toFixed(1);
+    return `Rp${numStr}${locale === "id" ? "jt" : "M"}`;
   }
   if (amount >= 1_000) {
     const val = amount / 1_000;
-    return `Rp${val % 1 === 0 ? val : val.toFixed(0)}rb`;
+    const numStr = val % 1 === 0 ? String(val) : val.toFixed(0);
+    return `Rp${numStr}${locale === "id" ? "rb" : "K"}`;
   }
   return `Rp${amount}`;
 }
@@ -112,23 +94,19 @@ export function PerformanceTrendChart({
 }: PerformanceTrendChartProps) {
   void _conversationDataAvailable;
   const { locale } = useI18n();
+  const uiLocale: "id" | "en" = locale === "en" ? "en" : "id";
 
-  // Default hover is derived (penultimate point); explicit hover overrides it.
-  const [hoverOverride, setHoveredIndex] = useState<number | null>(null);
+  const [hoveredIndexState, setHoveredIndex] = useState<number | null>(null);
   const hoveredIndex =
-    hoverOverride !== null && hoverOverride < dailyTrend.length
-      ? hoverOverride
-      : dailyTrend.length >= 2
-        ? dailyTrend.length - 2
-        : dailyTrend.length === 1
-          ? 0
-          : null;
+    hoveredIndexState !== null && hoveredIndexState < dailyTrend.length
+      ? hoveredIndexState
+      : null;
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   // SVG Geometry Dimensions
   const width = 860;
-  const height = 280;
-  const pad = { left: 64, right: 48, top: 24, bottom: 44 };
+  const height = 300;
+  const pad = { left: 68, right: 36, top: 26, bottom: 44 };
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
   const bottomY = pad.top + plotHeight;
@@ -149,109 +127,97 @@ export function PerformanceTrendChart({
   }, [rawMaxResults]);
 
   // Coordinate projection functions
-  const x = (index: number) => {
-    if (dailyTrend.length < 2) return pad.left + plotWidth / 2;
-    return pad.left + (index / (dailyTrend.length - 1)) * plotWidth;
-  };
+  const getX = useCallback(
+    (index: number) => {
+      if (dailyTrend.length < 2) return pad.left + plotWidth / 2;
+      return pad.left + (index / (dailyTrend.length - 1)) * plotWidth;
+    },
+    [dailyTrend.length, pad.left, plotWidth]
+  );
 
-  const ySpend = (val: number) => {
-    return pad.top + plotHeight - (maxSpend > 0 ? (val / maxSpend) * plotHeight : 0);
-  };
+  const getYSpend = useCallback(
+    (val: number) => {
+      return pad.top + plotHeight - (maxSpend > 0 ? (val / maxSpend) * plotHeight : 0);
+    },
+    [maxSpend, pad.top, plotHeight]
+  );
 
-  const yResults = (val: number) => {
-    return pad.top + plotHeight - (maxResults > 0 ? (val / maxResults) * plotHeight : 0);
-  };
+  const getYResults = useCallback(
+    (val: number) => {
+      return pad.top + plotHeight - (maxResults > 0 ? (val / maxResults) * plotHeight : 0);
+    },
+    [maxResults, pad.top, plotHeight]
+  );
 
   // Plot Points
   const spendPoints = useMemo(() => {
-    return dailyTrend.map((p, i) => ({ x: x(i), y: ySpend(p.spend) }));
-  }, [dailyTrend, maxSpend]);
+    return dailyTrend.map((p, i) => ({ x: getX(i), y: getYSpend(p.spend) }));
+  }, [dailyTrend, getX, getYSpend]);
 
   const resultPoints = useMemo(() => {
     return dailyTrend.map((p, i) => {
       const val = p.results > 0 ? p.results : p.conversations ?? 0;
-      return { x: x(i), y: yResults(val) };
+      return { x: getX(i), y: getYResults(val) };
     });
-  }, [dailyTrend, maxResults]);
+  }, [dailyTrend, getX, getYResults]);
 
-  // Smooth Bezier Curve Paths
-  const spendPath = useMemo(() => getCubicBezierPath(spendPoints), [spendPoints]);
-  const spendAreaPath = useMemo(() => getAreaPath(spendPoints, bottomY), [spendPoints, bottomY]);
-  const resultsPath = useMemo(() => getCubicBezierPath(resultPoints), [resultPoints]);
+  // Straight line paths with rounded joins matching the reference image
+  const spendPath = useMemo(() => getPolylinePath(spendPoints), [spendPoints]);
+  const spendAreaPath = useMemo(() => getPolylineAreaPath(spendPoints, bottomY), [spendPoints, bottomY]);
+  const resultsPath = useMemo(() => getPolylinePath(resultPoints), [resultPoints]);
 
-  // Aggregate Calculations for Bottom Stats Row
-  const spendTotal = useMemo(() => dailyTrend.reduce((sum, p) => sum + p.spend, 0), [dailyTrend]);
-  const resultTotal = useMemo(
-    () => dailyTrend.reduce((sum, p) => sum + (p.results > 0 ? p.results : p.conversations ?? 0), 0),
-    [dailyTrend]
-  );
-  const averageSpend = dailyTrend.length > 0 ? Math.round(spendTotal / dailyTrend.length) : 0;
-  const peakSpend = useMemo(
-    () =>
-      dailyTrend.reduce<DailyTrendPoint | null>(
-        (peak, p) => (peak === null || p.spend > peak.spend ? p : peak),
-        null
-      ),
-    [dailyTrend]
-  );
-
-  const formatCurrencyVal = (val: number) => {
-    if (currency === "IDR") {
-      return `Rp${Math.round(val).toLocaleString("id-ID")}`;
-    }
-    return new Intl.NumberFormat(locale === "en" ? "en-US" : "id-ID", {
-      style: "currency",
-      currency,
-    }).format(val);
-  };
+  const formatCurrencyVal = (val: number) =>
+    formatDisplayCurrency(val, currency || "IDR", locale === "en" ? "en" : "id");
 
   // Date Formatting Helpers
-  const formatDateDayMonth = (dateStr: string) => {
-    try {
-      const d = new Date(`${dateStr}T00:00:00Z`);
-      const day = d.getUTCDate();
-      const month = d.toLocaleDateString(locale === "en" ? "en-US" : "id-ID", {
-        month: "short",
-        timeZone: "UTC",
-      });
-      return `${day} ${month}`;
-    } catch {
-      return dateStr;
-    }
-  };
+  const formatDateDayMonth = useCallback(
+    (dateStr: string) => {
+      try {
+        const d = new Date(`${dateStr}T00:00:00Z`);
+        const day = d.getUTCDate();
+        const month = d.toLocaleDateString(locale === "en" ? "en-US" : "id-ID", {
+          month: "short",
+          timeZone: "UTC",
+        });
+        return `${day} ${month}`;
+      } catch {
+        return dateStr;
+      }
+    },
+    [locale]
+  );
 
-  const formatFullDate = (dateStr: string) => {
-    try {
-      const d = new Date(`${dateStr}T00:00:00Z`);
-      return d.toLocaleDateString(locale === "en" ? "en-US" : "id-ID", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        timeZone: "UTC",
-      });
-    } catch {
-      return dateStr;
-    }
-  };
+  const formatFullDate = useCallback(
+    (dateStr: string) => {
+      try {
+        const d = new Date(`${dateStr}T00:00:00Z`);
+        return d.toLocaleDateString(locale === "en" ? "en-US" : "id-ID", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          timeZone: "UTC",
+        });
+      } catch {
+        return dateStr;
+      }
+    },
+    [locale]
+  );
 
-  // Subtitle Date Range
+  // Subtitle Date Range (e.g. 19 Okt–1 Nov)
   const dateRangeSubtitle = useMemo(() => {
     if (dailyTrend.length === 0) return "";
     const first = formatDateDayMonth(dailyTrend[0].date);
     const last = formatDateDayMonth(dailyTrend[dailyTrend.length - 1].date);
     return `${first}–${last}`;
-  }, [dailyTrend, locale]);
+  }, [dailyTrend, formatDateDayMonth]);
 
-  const displayResultName =
-    locale === "en"
-      ? resultLabel === "Hasil"
-        ? "Results"
-        : resultLabel === "Pesan"
-        ? "Messages"
-        : resultLabel
-      : resultLabel || "Hasil";
+  const xAxisLabelStep = Math.max(1, Math.ceil((dailyTrend.length - 1) / 7));
 
-  // Mouse Move Event Listener for Smooth Nearest Point Snapping
+  const displayResultName = localizeResultLabel(resultLabel, uiLocale);
+
+  // Mouse Move Event Listener for Nearest Point Snapping
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!svgRef.current || dailyTrend.length === 0) return;
     const rect = svgRef.current.getBoundingClientRect();
@@ -261,7 +227,7 @@ export function PerformanceTrendChart({
     let closestIndex = 0;
     let minDistance = Infinity;
     for (let i = 0; i < dailyTrend.length; i++) {
-      const pointX = x(i);
+      const pointX = getX(i);
       const dist = Math.abs(svgX - pointX);
       if (dist < minDistance) {
         minDistance = dist;
@@ -275,24 +241,24 @@ export function PerformanceTrendChart({
   const activePoint = hoveredIndex !== null ? dailyTrend[hoveredIndex] : null;
   const activeResults =
     activePoint ? (activePoint.results > 0 ? activePoint.results : activePoint.conversations ?? 0) : 0;
-  const activeHoverX = hoveredIndex !== null ? x(hoveredIndex) : 0;
-  const activeSpendY = hoveredIndex !== null ? ySpend(activePoint?.spend ?? 0) : 0;
-  const activeResultsY = hoveredIndex !== null ? yResults(activeResults) : 0;
+  const activeHoverX = hoveredIndex !== null ? getX(hoveredIndex) : 0;
+  const activeSpendY = hoveredIndex !== null ? getYSpend(activePoint?.spend ?? 0) : 0;
+  const activeResultsY = hoveredIndex !== null ? getYResults(activeResults) : 0;
 
   // Tooltip position: position tooltip to the left if point is on the right side of the graph
   const isRightSide = hoveredIndex !== null && hoveredIndex > dailyTrend.length / 2;
 
   return (
     <section
-      className={`overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-[#0c0e14] ${className}`}
+      className={`surface-card overflow-hidden rounded-2xl border border-zinc-200/90 bg-white dark:border-zinc-800 dark:bg-zinc-900 ${className}`}
       aria-labelledby="daily-trend-title"
     >
       {/* 1. Card Header */}
-      <div className="flex flex-col gap-2 p-5 pb-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 p-5 pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2
             id="daily-trend-title"
-            className="text-base sm:text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-100"
+            className="text-[15px] sm:text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
           >
             {locale === "id" ? "Tren performa harian" : "Daily performance trend"}
           </h2>
@@ -303,20 +269,15 @@ export function PerformanceTrendChart({
           </p>
         </div>
 
-        {/* Legend */}
-        <div className="flex items-center gap-4 text-xs font-semibold">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#818cf8]" />
-            <span className="text-zinc-700 dark:text-zinc-300">
-              {locale === "id" ? "Belanja (IDR)" : "Spend (IDR)"}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#34d399]" />
-            <span className="text-zinc-700 dark:text-zinc-300">
-              {displayResultName}
-            </span>
-          </div>
+        {/* Date Range Badge with chevron (matching reference image top-right pill) */}
+        <div className="inline-flex items-center gap-2 self-start sm:self-auto rounded-xl border border-zinc-200/90 bg-zinc-50/80 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:border-zinc-700/80 dark:bg-zinc-800/60 dark:text-zinc-200 shadow-2xs">
+          <svg className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 9v7.5" />
+          </svg>
+          <span>{dateRangeSubtitle || (locale === "id" ? "Periode Aktif" : "Active Period")}</span>
+          <svg className="h-3 w-3 text-zinc-400 shrink-0 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
         </div>
       </div>
 
@@ -328,13 +289,16 @@ export function PerformanceTrendChart({
             : "No daily data available for this period."}
         </div>
       ) : (
-        <div className="relative w-full px-2 sm:px-4">
+        <div
+          className="relative w-full px-2 pb-1 sm:px-4"
+          onMouseLeave={() => setHoveredIndex(null)}
+        >
           <svg
             ref={svgRef}
             viewBox={`0 0 ${width} ${height}`}
             className="h-auto w-full cursor-crosshair select-none"
             role="img"
-            aria-label="Grafik tren performa harian"
+            aria-label={locale === "id" ? "Grafik tren performa harian" : "Daily performance trend chart"}
             onMouseMove={handleMouseMove}
             onTouchMove={(e) => {
               if (e.touches.length > 0 && svgRef.current) {
@@ -344,7 +308,7 @@ export function PerformanceTrendChart({
                 let closestIndex = 0;
                 let minDistance = Infinity;
                 for (let i = 0; i < dailyTrend.length; i++) {
-                  const dist = Math.abs(svgX - x(i));
+                  const dist = Math.abs(svgX - getX(i));
                   if (dist < minDistance) {
                     minDistance = dist;
                     closestIndex = i;
@@ -355,15 +319,33 @@ export function PerformanceTrendChart({
             }}
           >
             <defs>
-              {/* Gradient Fill under Belanja curve */}
+              {/* Gradient Fill under Belanja curve matching reference image */}
               <linearGradient id="spendGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#818cf8" stopOpacity="0.28" />
-                <stop offset="60%" stopColor="#818cf8" stopOpacity="0.08" />
-                <stop offset="100%" stopColor="#818cf8" stopOpacity="0.0" />
+                <stop offset="0%" stopColor="var(--chart-1)" stopOpacity="0.22" />
+                <stop offset="65%" stopColor="var(--chart-1)" stopOpacity="0.05" />
+                <stop offset="100%" stopColor="var(--chart-1)" stopOpacity="0.0" />
               </linearGradient>
             </defs>
 
-            {/* Horizontal Gridlines & Y-Axis Labels (4 Steps: 0, 1/3, 2/3, 1) */}
+            {/* Vertical Dashed Gridlines at each data point (Key feature matching reference image) */}
+            {dailyTrend.map((point, index) => {
+              const posX = getX(index);
+              return (
+                <line
+                  key={`vgrid-${point.date}`}
+                  x1={posX}
+                  x2={posX}
+                  y1={pad.top}
+                  y2={bottomY}
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeDasharray="3 3"
+                  className="text-zinc-200/70 dark:text-zinc-800/70"
+                />
+              );
+            })}
+
+            {/* Y-Axis Labels and Baseline at step 0 (Clean, uncluttered, no horizontal dashed lines) */}
             {[0, 1, 2, 3].map((step) => {
               const lineY = pad.top + (plotHeight * (3 - step)) / 3;
               const spendVal = (maxSpend * step) / 3;
@@ -371,31 +353,33 @@ export function PerformanceTrendChart({
 
               return (
                 <g key={step}>
-                  <line
-                    x1={pad.left}
-                    x2={width - pad.right}
-                    y1={lineY}
-                    y2={lineY}
-                    stroke="currentColor"
-                    strokeWidth="1"
-                    strokeDasharray={step === 0 ? "none" : "2 2"}
-                    className="text-zinc-200 dark:text-zinc-800/80"
-                  />
+                  {/* Subtle horizontal baseline at 0 only */}
+                  {step === 0 && (
+                    <line
+                      x1={pad.left}
+                      x2={width - pad.right}
+                      y1={lineY}
+                      y2={lineY}
+                      stroke="currentColor"
+                      strokeWidth="1"
+                      className="text-zinc-200/80 dark:text-zinc-800/80"
+                    />
+                  )}
                   {/* Left Axis: Compact Spend (e.g. Rp0, Rp40rb, Rp80rb, Rp120rb) */}
                   <text
-                    x={pad.left - 10}
+                    x={pad.left - 12}
                     y={lineY + 4}
                     textAnchor="end"
-                    className="fill-zinc-400 font-mono text-[11px] font-medium"
+                    className="fill-[var(--chart-axis)] font-mono text-[10.5px] font-medium tabular-nums"
                   >
-                    {formatCompactIdr(spendVal)}
+                    {formatCompactIdr(spendVal, uiLocale)}
                   </text>
                   {/* Right Axis: Results Count (e.g. 0, 8, 16, 24) */}
                   <text
                     x={width - pad.right + 10}
                     y={lineY + 4}
                     textAnchor="start"
-                    className="fill-zinc-400 font-mono text-[11px] font-medium"
+                    className="fill-[var(--chart-axis)] font-mono text-[10.5px] font-medium tabular-nums"
                   >
                     {resultVal}
                   </text>
@@ -403,48 +387,49 @@ export function PerformanceTrendChart({
               );
             })}
 
-            {/* Area Fill under Belanja Curve */}
+            {/* Area Fill under Belanja Polyline */}
             {spendAreaPath && (
               <path d={spendAreaPath} fill="url(#spendGradient)" />
             )}
 
-            {/* Belanja Curve Line (Purple/Indigo #818cf8) */}
+            {/* Belanja Polyline (Primary accent with rounded joins) */}
             {spendPath && (
               <path
                 d={spendPath}
                 fill="none"
-                stroke="#818cf8"
-                strokeWidth="2.8"
+                style={{ stroke: "var(--chart-1)" }}
+                strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
             )}
 
-            {/* Hasil Curve Line (Vivid Emerald #34d399) */}
+            {/* Hasil Polyline (Secondary accent with rounded joins) */}
             {resultsPath && (
               <path
                 d={resultsPath}
                 fill="none"
-                stroke="#34d399"
-                strokeWidth="2.8"
+                style={{ stroke: "var(--chart-2)" }}
+                strokeWidth="2.2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
             )}
 
-            {/* X-Axis Date Labels */}
+            {/* X-Axis Date Labels aligned with vertical gridlines */}
             {dailyTrend.map((point, index) => {
-              const posX = x(index);
+              if (index % xAxisLabelStep !== 0 && index !== dailyTrend.length - 1) return null;
+              const posX = getX(index);
               return (
                 <text
                   key={point.date}
                   x={posX}
-                  y={height - 12}
+                  y={height - 14}
                   textAnchor="middle"
                   className={`font-mono text-[11px] transition-colors ${
                     hoveredIndex === index
                       ? "fill-zinc-900 font-bold dark:fill-zinc-100"
-                      : "fill-zinc-500 dark:fill-zinc-400"
+                      : "fill-[var(--chart-axis)]"
                   }`}
                 >
                   {formatDateDayMonth(point.date)}
@@ -455,7 +440,7 @@ export function PerformanceTrendChart({
             {/* Interactive Hit-Testing Rectangles per Day */}
             {dailyTrend.map((point, index) => {
               const colW = plotWidth / Math.max(dailyTrend.length - 1, 1);
-              const rectX = index === 0 ? pad.left : x(index) - colW / 2;
+              const rectX = index === 0 ? pad.left : getX(index) - colW / 2;
               const rectWidth = index === 0 || index === dailyTrend.length - 1 ? colW / 2 : colW;
               return (
                 <rect
@@ -474,79 +459,105 @@ export function PerformanceTrendChart({
               );
             })}
 
-            {/* Hover Vertical Dashed Snapping Line and Dots */}
+            {/* Hover Vertical Guide Line and Hollow Indicator Circles (matching reference image) */}
             {hoveredIndex !== null && activePoint && (
               <g className="pointer-events-none">
-                {/* Vertical Dashed Line */}
+                {/* Vertical Solid Guide Line */}
                 <line
                   x1={activeHoverX}
                   x2={activeHoverX}
                   y1={pad.top}
                   y2={bottomY}
-                  stroke="#94a3b8"
-                  strokeWidth="1.5"
-                  strokeDasharray="4 4"
-                  className="dark:stroke-zinc-500"
+                  style={{ stroke: "var(--chart-crosshair)" }}
+                  strokeWidth="1.8"
                 />
 
-                {/* Belanja Dot Indicator */}
+                {/* Belanja Hollow Dot Indicator (white center with colored ring) */}
                 <circle
                   cx={activeHoverX}
                   cy={activeSpendY}
                   r="5.5"
-                  fill="#818cf8"
-                  stroke="#ffffff"
+                  className="fill-white dark:fill-zinc-900"
+                  style={{ stroke: "var(--chart-1)" }}
                   strokeWidth="2.5"
                 />
 
-                {/* Hasil Dot Indicator */}
+                {/* Hasil Hollow Dot Indicator (white center with colored ring) */}
                 <circle
                   cx={activeHoverX}
                   cy={activeResultsY}
                   r="5.5"
-                  fill="#34d399"
-                  stroke="#ffffff"
+                  className="fill-white dark:fill-zinc-900"
+                  style={{ stroke: "var(--chart-2)" }}
                   strokeWidth="2.5"
                 />
               </g>
             )}
           </svg>
 
-          {/* Interactive Floating Tooltip (matching reference image) */}
+          {/* Interactive Floating Tooltip (matching reference image card) */}
           {hoveredIndex !== null && activePoint && (
             <div
-              className="pointer-events-none absolute z-30 min-w-[175px] rounded-2xl border border-zinc-200/90 bg-white p-3.5 shadow-2xl transition-all duration-75 text-zinc-900"
+              className="pointer-events-none absolute z-30 min-w-[215px] rounded-2xl border border-zinc-200/90 bg-white/95 p-3.5 text-zinc-900 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.16)] backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-100"
               style={{
                 top: "16px",
                 left: isRightSide
-                  ? `calc(${((activeHoverX / width) * 100).toFixed(2)}% - 12px)`
-                  : `calc(${((activeHoverX / width) * 100).toFixed(2)}% + 12px)`,
+                  ? `calc(${((activeHoverX / width) * 100).toFixed(2)}% - 14px)`
+                  : `calc(${((activeHoverX / width) * 100).toFixed(2)}% + 14px)`,
                 transform: isRightSide ? "translateX(-100%)" : "translateX(0)",
               }}
             >
-              <p className="mb-2 text-[13px] font-bold text-zinc-900">
-                {formatFullDate(activePoint.date)}
-              </p>
-              <div className="space-y-1 text-xs">
-                <div className="flex items-center justify-between gap-4">
-                  <span className="text-zinc-500">
-                    {locale === "id" ? "Belanja" : "Spend"}
+              {/* Tooltip Header: Date + Status Badge */}
+              <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-zinc-100 pb-2 dark:border-zinc-800">
+                <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
+                  {formatFullDate(activePoint.date)}
+                </p>
+                {activeResults > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 ring-1 ring-inset ring-emerald-600/20">
+                    <span>↗</span>
+                    <span>
+                      {Math.round((activeResults / Math.max(1, activePoint.linkClicks)) * 100)}% CVR
+                    </span>
                   </span>
-                  <span className="font-semibold font-mono text-zinc-900">
+                ) : (
+                  <span className="inline-flex items-center rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                    {locale === "id" ? "0 Hasil" : "0 Results"}
+                  </span>
+                )}
+              </div>
+
+              {/* Tooltip Metric Rows with Color Dots */}
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400">
+                    <span
+                      className="h-2 w-2 rounded-full shrink-0"
+                      style={{ backgroundColor: "var(--chart-1)" }}
+                    />
+                    <span>{locale === "id" ? "Total Belanja" : "Total Spend"}</span>
+                  </span>
+                  <span className="font-mono font-bold tabular-nums text-zinc-900 dark:text-zinc-50">
                     {formatCurrencyVal(activePoint.spend)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-4">
-                  <span className="text-zinc-500">{displayResultName}</span>
-                  <span className="font-semibold font-mono text-zinc-900">
+                  <span className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400">
+                    <span
+                      className="h-2 w-2 rounded-full shrink-0"
+                      style={{ backgroundColor: "var(--chart-2)" }}
+                    />
+                    <span>{displayResultName}</span>
+                  </span>
+                  <span className="font-mono font-bold tabular-nums text-zinc-900 dark:text-zinc-50">
                     {activeResults}
                   </span>
                 </div>
-                <div className="flex items-center justify-between gap-4">
-                  <span className="text-zinc-500">
-                    {locale === "id" ? "Biaya/hasil" : "Cost/result"}
+                <div className="flex items-center justify-between gap-4 border-t border-zinc-100 pt-1.5 dark:border-zinc-800/80">
+                  <span className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400 text-[11px]">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" />
+                    <span>{locale === "id" ? "Biaya / Hasil" : "Cost / Result"}</span>
                   </span>
-                  <span className="font-semibold font-mono text-zinc-900">
+                  <span className="font-mono font-semibold tabular-nums text-zinc-800 dark:text-zinc-200">
                     {activeResults > 0
                       ? formatCurrencyVal(Math.round(activePoint.spend / activeResults))
                       : "—"}
@@ -558,46 +569,33 @@ export function PerformanceTrendChart({
         </div>
       )}
 
-      {/* 3. Bottom Summary Stats Row (4 Columns matching reference) */}
-      {dailyTrend.length > 0 && (
-        <div className="grid grid-cols-2 divide-x divide-y divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-800/80 dark:border-zinc-800/80 sm:grid-cols-4 sm:divide-y-0">
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {locale === "id" ? "Total belanja" : "Total spend"}
-            </p>
-            <p className="mt-1 font-mono text-lg sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {formatCurrencyVal(spendTotal)}
-            </p>
-          </div>
-
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {locale === "id" ? "Rata-rata per hari" : "Avg per day"}
-            </p>
-            <p className="mt-1 font-mono text-lg sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {formatCurrencyVal(averageSpend)}
-            </p>
-          </div>
-
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {locale === "id" ? "Puncak belanja" : "Peak spend"}
-            </p>
-            <p className="mt-1 font-mono text-lg sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {peakSpend ? formatCurrencyVal(peakSpend.spend) : "—"}
-            </p>
-          </div>
-
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {locale === "id" ? "Total hasil" : "Total results"}
-            </p>
-            <p className="mt-1 font-mono text-lg sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {resultTotal.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
-            </p>
-          </div>
+      {/* 3. Bottom Legend (matching reference design bottom row, clean without heavy border) */}
+      <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 px-4 pt-1 pb-4 text-xs font-medium">
+        <div className="flex items-center gap-2">
+          <span
+            className="h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: "var(--chart-1)" }}
+          />
+          <span className="text-zinc-700 dark:text-zinc-300">
+            {locale === "id" ? "Total Belanja" : "Total Spend"} ({currency || "IDR"})
+          </span>
         </div>
-      )}
+        <div className="flex items-center gap-2">
+          <span
+            className="h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: "var(--chart-2)" }}
+          />
+          <span className="text-zinc-700 dark:text-zinc-300">
+            {displayResultName}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          <span className="text-zinc-500 dark:text-zinc-400">
+            {locale === "id" ? "Biaya / Hasil (CPR)" : "Cost per Result"}
+          </span>
+        </div>
+      </div>
     </section>
   );
 }

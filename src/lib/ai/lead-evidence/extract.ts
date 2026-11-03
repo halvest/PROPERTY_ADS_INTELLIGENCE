@@ -11,21 +11,14 @@ import {
   type ExtractedLeadEvidence,
 } from "./schema";
 import { isMetaModelApiConfigured } from "../meta/config";
+import { sanitizeUntrustedText } from "@/lib/ai/sanitize-untrusted-text";
 
 export interface ExtractEvidenceOptions {
   client?: MetaModelApiClient;
-  allowDemoFallback?: boolean;
 }
 
-/**
- * Sanitizes untrusted conversation text before inserting it into the prompt.
- * Escapes boundary tags to prevent delimiter confusion attacks.
- */
 function sanitizeConversationInput(text: string): string {
-  return text
-    .replace(/<\/conversation_transcript>/gi, "[ESCAPED_TRANSCRIPT_TAG]")
-    .replace(/<conversation_transcript>/gi, "[ESCAPED_TRANSCRIPT_TAG]")
-    .trim();
+  return sanitizeUntrustedText(text);
 }
 
 /**
@@ -72,80 +65,6 @@ function verifyEvidenceQuotes(
 }
 
 /**
- * Deterministic fallback extractor for demo environments when MODEL_API_KEY is unset.
- * Extracts key patterns without calling external APIs.
- */
-function extractDemoFallback(
-  input: LeadEvidenceExtractionInput
-): ExtractedLeadEvidence {
-  const text = input.conversationText.toLowerCase();
-
-  // Simple heuristic checks for demo mode
-  const hasBudgetExplicit = text.includes("miliar") || text.includes("juta") || text.includes("rp");
-  const hasSurveyIntent = text.includes("survey") || text.includes("lihat lokasi") || text.includes("kapan bisa");
-  const hasLocation = text.includes("bsd") || text.includes("serpong") || text.includes("tangerang");
-
-  const quotes: Array<{ field: string; quote: string }> = [];
-
-  let purchaseIntent: "high" | "moderate" | "low" | "unconfirmed" = "moderate";
-  let readiness: "ready_for_survey" | "requesting_brochure" | "comparing_options" | "not_ready" | "unconfirmed" = "comparing_options";
-  let budgetAmount: number | null = null;
-  const unconfirmed: string[] = [];
-
-  // Quotes must be verbatim excerpts from the source text; never fabricated.
-  const sourceLines = input.conversationText
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  const findLine = (...keywords: string[]) =>
-    sourceLines.find((l) => keywords.some((k) => l.toLowerCase().includes(k)));
-
-  if (hasSurveyIntent) {
-    purchaseIntent = "high";
-    readiness = "ready_for_survey";
-    const line = findLine("survey", "survei", "lihat lokasi", "kapan bisa");
-    if (line) quotes.push({ field: "readinessForNextStep", quote: line });
-  } else {
-    unconfirmed.push("purchaseTimeline");
-  }
-
-  if (hasBudgetExplicit) {
-    if (text.includes("1,5 m") || text.includes("1.5 m") || text.includes("1,5 miliar")) {
-      budgetAmount = 1500000000;
-      const line = findLine("1,5 m", "1.5 m", "1,5 miliar", "1.5 miliar");
-      if (line) quotes.push({ field: "budget", quote: line });
-    }
-  } else {
-    unconfirmed.push("budget");
-  }
-
-  return {
-    purchaseIntent,
-    budget: budgetAmount
-      ? {
-          amount: budgetAmount,
-          currency: "IDR",
-          isExplicit: true,
-          rawText: quotes.find((q) => q.field === "budget")?.quote || "1,5 miliar",
-        }
-      : null,
-    preferredLocation: hasLocation ? "BSD City" : null,
-    propertyType: text.includes("hook") ? "Tipe 72 Hook" : "Rumah 2 Lantai",
-    purchaseTimeline: hasSurveyIntent ? "1-3_months" : "unconfirmed",
-    readinessForNextStep: readiness,
-    objections: text.includes("dp") ? ["Menanyakan skema DP dan cicilan"] : [],
-    recommendedFollowUp: "Apakah Bapak/Ibu ingin kami jadwalkan kunjungan show unit pada Sabtu jam 10 pagi?",
-    evidenceQuotes: quotes,
-    unconfirmedFields: unconfirmed,
-    confidenceScore: 0.85,
-    uncertaintyReason: "Ekstraksi dijalankan dalam mode demo lokal (fallback heuristik tanpa live LLM call)",
-    extractedAt: new Date().toISOString(),
-    model: "muse-spark-demo-fallback",
-    provider: "meta_model_api",
-  };
-}
-
-/**
  * Extracts structured property buyer evidence and facts from a conversation transcript using
  * Meta Model API (Muse Spark 1.3).
  *
@@ -173,9 +92,6 @@ export async function extractLeadEvidence(
   // Check API configuration
   const isConfigured = isMetaModelApiConfigured();
   if (!isConfigured) {
-    if (options.allowDemoFallback) {
-      return verifyEvidenceQuotes(extractDemoFallback(input), conversationText);
-    }
     throw new AIProviderError({
       code: "MISSING_CONFIGURATION",
       message:

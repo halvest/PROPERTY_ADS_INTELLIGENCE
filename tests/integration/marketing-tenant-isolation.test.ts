@@ -39,8 +39,30 @@ describe("Meta Marketing Integration - Tenant Isolation & Data Separation", () =
           }),
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockImplementation((_column, value) => {
-              // Return mocked records for campaign / ad ID resolution for the queried organization
+              // Return complete mocked records for campaign / ad ID resolution
+              // for the queried organization: every mock campaign and ad must
+              // resolve, otherwise the sync correctly reports unmapped rows
+              // as partial (DI-03) instead of silently dropping them.
               if (value === orgA) {
+                if (table === "campaigns") {
+                  return {
+                    data: [
+                      { id: "cmp_internal_1", provider_campaign_id: "cmp_sapphire_bsd" },
+                      { id: "cmp_internal_2", provider_campaign_id: "cmp_emerald_residence" },
+                      { id: "cmp_internal_3", provider_campaign_id: "cmp_grand_serpong" },
+                    ],
+                  };
+                }
+                if (table === "ads") {
+                  return {
+                    data: [
+                      { id: "ad_internal_1", provider_ad_id: "ad_sapphire_72" },
+                      { id: "ad_internal_2", provider_ad_id: "ad_sapphire_promo" },
+                      { id: "ad_internal_3", provider_ad_id: "ad_emerald_hook" },
+                      { id: "ad_internal_4", provider_ad_id: "ad_serpong_view" },
+                    ],
+                  };
+                }
                 return {
                   data: [
                     { id: "cmp_internal_1", provider_campaign_id: "cmp_sapphire_bsd" },
@@ -51,8 +73,13 @@ describe("Meta Marketing Integration - Tenant Isolation & Data Separation", () =
               return { data: [] };
             }),
           }),
-          update: vi.fn().mockReturnValue({
-            eq: vi.fn().mockResolvedValue({ data: null, error: null }),
+          update: vi.fn().mockImplementation(() => {
+            const builder = {
+              eq: vi.fn(() => builder),
+              then: (resolve: (value: { data: null; error: null }) => unknown) =>
+                Promise.resolve({ data: null, error: null }).then(resolve),
+            };
+            return builder;
           }),
         };
       }),
@@ -60,6 +87,7 @@ describe("Meta Marketing Integration - Tenant Isolation & Data Separation", () =
 
     const result = await executeMarketingSync({
       organizationId: orgA,
+      targetAdAccountId: "act_0812999001",
       client: new MockMetaMarketingApiClient(),
       supabaseClient: mockSupabase,
     });
@@ -77,8 +105,6 @@ describe("Meta Marketing Integration - Tenant Isolation & Data Separation", () =
     // Verify data source tag
     const insightRows = insertedRows["ad_insights"];
     expect(insightRows.length).toBeGreaterThan(0);
-    insightRows.forEach((row) => {
-      expect(["meta", "demo"]).toContain(row.source);
-    });
+    insightRows.forEach((row) => expect(row.source).toBe("meta"));
   });
 });

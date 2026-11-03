@@ -3,7 +3,7 @@ import "server-only";
 import { MarketingApiError, type MetaMarketingConfig } from "./types";
 
 const DEFAULT_GRAPH_BASE_URL = "https://graph.facebook.com";
-const DEFAULT_API_VERSION = "v21.0";
+const DEFAULT_API_VERSION = "v26.0";
 const DEFAULT_TIMEOUT_MS = 45000;
 const DEFAULT_MAX_RETRIES = 2;
 
@@ -94,14 +94,6 @@ export function sanitizeMarketingLog(text: string, knownToken?: string): string 
 }
 
 /**
- * Checks whether Meta Marketing API is configured with a valid token in the server environment.
- */
-export function isMetaMarketingConfigured(): boolean {
-  const token = process.env.META_ACCESS_TOKEN;
-  return typeof token === "string" && token.trim().length > 0;
-}
-
-/**
  * Safely parses bounded integer configuration.
  */
 function parseBoundedInt(val: string | undefined, defaultVal: number, min: number, max: number): number {
@@ -115,13 +107,14 @@ function parseBoundedInt(val: string | undefined, defaultVal: number, min: numbe
 
 /**
  * Retrieves the validated Meta Marketing API configuration.
- * When requireConfigured is false (default), it returns the config object with isConfigured=false
- * without throwing, enabling non-blocking server execution and demo mode fallback.
+ * When requireConfigured is false (default), it returns non-secret API settings
+ * without requiring a global token or account. Tenant credentials are explicit
+ * inputs to MetaMarketingApiClient and are never loaded from global fallbacks.
  */
 export function getMetaMarketingConfig(options: { requireConfigured?: boolean } = {}): MetaMarketingConfig {
-  const accessToken = (process.env.META_ACCESS_TOKEN || "").trim();
-  const rawAdAccountId = extractRawAdAccountId(process.env.META_AD_ACCOUNT_ID);
-  const adAccountId = normalizeAdAccountId(process.env.META_AD_ACCOUNT_ID);
+  const accessToken = "";
+  const rawAdAccountId = "";
+  const adAccountId = "";
   const appId = (process.env.META_APP_ID || "").trim() || undefined;
   const appSecret = (process.env.META_APP_SECRET || "").trim() || undefined;
 
@@ -131,12 +124,11 @@ export function getMetaMarketingConfig(options: { requireConfigured?: boolean } 
   const timeoutMs = parseBoundedInt(process.env.META_MARKETING_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 120000);
   const maxRetries = parseBoundedInt(process.env.META_MARKETING_MAX_RETRIES, DEFAULT_MAX_RETRIES, 0, 5);
 
-  const isConfigured = accessToken.length > 0 && adAccountId.length > 0;
+  const isConfigured = false;
 
   if (options.requireConfigured && !isConfigured) {
     const missing: string[] = [];
-    if (accessToken.length === 0) missing.push("META_ACCESS_TOKEN");
-    if (adAccountId.length === 0) missing.push("META_AD_ACCOUNT_ID");
+    missing.push("tenant Meta access token and selected ad account");
 
     throw new MarketingApiError({
       code: "MISSING_CONFIGURATION",

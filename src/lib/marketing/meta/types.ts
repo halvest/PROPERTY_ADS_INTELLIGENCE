@@ -1,14 +1,16 @@
 /**
  * Property Ads Intelligence - Meta Marketing API Types
- * Definitions for Meta Graph API v21.0 responses, pagination, rate limits, and internal domain models.
+ * Definitions for Meta Graph API v26.0 responses, pagination, rate limits, and internal domain models.
  */
 
 export type MarketingErrorCode =
   | "MISSING_CONFIGURATION"
   | "FORBIDDEN"
+  | "SYNC_IN_PROGRESS"
   | "AUTHENTICATION_ERROR"   // Code 190 (Expired/Invalid OAuth Token)
   | "PERMISSION_ERROR"       // Code 200, 294 (Missing ads_read / read_insights)
   | "RATE_LIMIT_ERROR"       // Code 17, 32, 613 (Throttling / calls limit)
+  | "PAGINATION_ERROR"
   | "TIMEOUT_ERROR"
   | "ACCOUNT_NOT_FOUND"      // Code 100 / invalid ad account id
   | "UPSTREAM_ERROR";
@@ -51,7 +53,7 @@ export interface MetaMarketingConfig {
   rawAdAccountId: string; // Numeric string without prefix
   appId?: string;
   appSecret?: string;
-  apiVersion: string; // e.g. "v21.0"
+  apiVersion: string; // e.g. "v26.0"
   baseUrl: string; // e.g. "https://graph.facebook.com"
   timeoutMs: number;
   maxRetries: number;
@@ -60,11 +62,11 @@ export interface MetaMarketingConfig {
 
 export interface MetaAdAccountResponse {
   id: string; // e.g. "act_123456789"
-  account_id: string; // e.g. "123456789"
-  name: string;
-  currency: string;
-  timezone_name: string;
-  account_status: number; // 1 = ACTIVE, 2 = DISABLED, 3 = UNSETTLED, 7 = PENDING_RISK_REVIEW, 8 = PENDING_SETTLEMENT, 9 = IN_GRACE_PERIOD, 100 = PENDING_CLOSURE, 101 = CLOSED
+  account_id?: string; // e.g. "123456789"
+  name?: string;
+  currency?: string;
+  timezone_name?: string;
+  account_status?: number; // 1 = ACTIVE, 2 = DISABLED, 3 = UNSETTLED, 7 = PENDING_RISK_REVIEW, 8 = PENDING_SETTLEMENT, 9 = IN_GRACE_PERIOD, 100 = PENDING_CLOSURE, 101 = CLOSED
   business_name?: string;
 }
 
@@ -109,12 +111,32 @@ export interface MetaInsightResponse {
   attribution_setting?: string;
   cpc?: string;
   cpm?: string;
+  account_currency?: string;
   ctr?: string;
   quality_ranking?: string;
   engagement_rate_ranking?: string;
   conversion_rate_ranking?: string;
   date_start: string; // "YYYY-MM-DD"
   date_stop: string; // "YYYY-MM-DD"
+}
+
+/** Account-scoped Insights row returned by /act_<id>/insights?level=account. */
+export interface MetaAccountInsightResponse {
+  spend?: string;
+  impressions?: string;
+  reach?: string;
+  frequency?: string;
+  cpm?: string;
+  inline_link_clicks?: string;
+  inline_link_click_ctr?: string;
+  cost_per_inline_link_click?: string;
+  clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  actions?: Array<{ action_type: string; value: string }>;
+  account_currency?: string;
+  date_start?: string;
+  date_stop?: string;
 }
 
 export interface MetaPagingCursors {
@@ -152,8 +174,8 @@ export interface NormalizedAdAccount {
   provider: "meta" | "demo";
   providerAccountId: string;
   accountName: string;
-  currency: string;
-  timezone: string;
+  currency: string | null;
+  timezone: string | null;
   connectionStatus: "connected" | "disconnected" | "error";
   lastSyncedAt?: string;
 }
@@ -181,18 +203,24 @@ export interface NormalizedAdInsight {
   dateStart: string;
   dateStop: string;
   level: "ad" | "campaign";
-  spend: number;
-  impressions: number;
-  clicks: number;
-  reach?: number;
-  linkClicks?: number;
-  conversions?: number;
+  /** Required metrics: null means Meta did not provide a usable value (row is invalid for persistence). */
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
+  /** Optional metrics: null means not available; 0 means Meta explicitly reported zero. */
+  reach: number | null;
+  linkClicks: number | null;
+  conversions: number | null;
+  /** BL-01: result types kept separate. Null = not reported by Meta. */
+  messagingConversations: number | null;
+  leads: number | null;
   adsetId?: string | null;
   adsetName?: string | null;
   attributionSetting?: string | null;
-  currency: string;
+  currency: string | null;
   source: "meta" | "demo";
   actionBreakdown?: Record<string, number>;
+  costPerActionType?: Record<string, number>;
   conversionActionType?: string | null;
   mappingVersion?: string;
 }
@@ -204,12 +232,25 @@ export interface MarketingSyncResult {
   campaignsSynced: number;
   adsSynced: number;
   insightsSynced: number;
+  warnings?: string[];
   recordsProcessed: number;
   recordsRejected: number;
   syncedAt: string;
   dateRange?: { since: string; until: string };
+  /** Live account-scoped values returned directly by Meta, independent of DB schema. */
+  accountInsights?: MetaAccountInsightResponse[];
   error?: string;
   syncJobId?: string;
+  /** Additive observability (Phase 1 data integrity). Optional for backward compatibility. */
+  syncDetails?: {
+    insightsReceived: number;
+    insightsValid: number;
+    insightsInvalid: number;
+    insightsUnmapped: number;
+    invalidReasons: Record<string, number>;
+    paginationComplete: boolean;
+    pagesProcessed: number;
+  };
 }
 
 export interface MetaInstagramAccount {
@@ -241,10 +282,29 @@ export interface MetaAssetSelection {
   lastValidatedAt?: string | null;
 }
 
+export type MetaTokenStatus =
+  | "not_connected"
+  | "valid"
+  | "invalid"
+  | "permission_insufficient"
+  | "unknown";
+
+export interface ConnectedAdAccount {
+  adAccountId: string;
+  adAccountName: string | null;
+  currency: string | null;
+  timezone: string | null;
+  connectionStatus: string;
+  lastSyncedAt: string | null;
+}
+
 export interface MetaAvailableAssetsResponse {
   pages: MetaFacebookPage[];
   adAccounts: MetaAdAccountResponse[];
+  accountError?: "rate_limited" | "network_error" | "pagination_error" | "api_error" | null;
   selected?: MetaAssetSelection | null;
+  tokenStatus: MetaTokenStatus;
+  connectedAccounts: ConnectedAdAccount[];
 }
 
 

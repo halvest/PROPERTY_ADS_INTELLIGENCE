@@ -20,8 +20,8 @@ export function EmptyState({
   const { dict } = useI18n();
 
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-200 bg-zinc-50/50 p-8 sm:p-12 text-center dark:border-zinc-800 dark:bg-zinc-900/30">
-      <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-400 shadow-2xs dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-500">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300/80 bg-white/60 p-8 sm:p-12 text-center dark:border-zinc-700/70 dark:bg-zinc-900/40">
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-500 shadow-2xs dark:border-zinc-700/80 dark:bg-zinc-800 dark:text-zinc-400">
         {icon || (
           <svg
             className="h-5 w-5"

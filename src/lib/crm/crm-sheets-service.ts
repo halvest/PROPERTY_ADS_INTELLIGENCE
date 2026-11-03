@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { AttributionStatus } from "@/domain/attribution/types";
-import type { LeadListItem } from "@/lib/data/types";
-import { addUploadedDemoLeads } from "@/lib/data/dashboard-service";
 
 /**
  * Computes a deterministic privacy-preserving hash of an E.164 phone number.
@@ -61,6 +59,12 @@ export interface CrmLeadTemplateRow {
   domisili?: string;
   tanggalKontak: string;
   namaIklan?: string;
+  adId?: string | null;
+  campaignId?: string | null;
+  adSetId?: string | null;
+  sourceAdSet?: string | null;
+  sourceCampaign?: string | null;
+  attributionNote?: string | null;
   tahapFunnel: FunnelStage;
   qualityLabel?: QualityLabel | null;
   catatan?: string;
@@ -76,13 +80,68 @@ export interface ParsedRowResult {
   data?: CrmLeadTemplateRow;
   errors: string[];
   warnings: string[];
+  attributionPreview?: string;
+  previewStatus?: CrmPreviewStatus;
 }
 
 export interface ParsedSheetSummary {
   totalRows: number;
   validRows: number;
   invalidRows: number;
+  duplicateRows?: number;
+  rowsToSave?: number;
+  attributionCounts?: Record<string, number>;
+  previewCounts?: Partial<Record<CrmPreviewStatus, number>>;
   rows: ParsedRowResult[];
+  headers?: string[];
+}
+
+export type CrmColumnMap = Partial<Record<"name" | "phone" | "ad" | "adId" | "adSet" | "campaign", string>>;
+
+export type CrmPreviewStatus =
+  | "READY_TO_IMPORT"
+  | "DUPLICATE"
+  | "INVALID_DATA"
+  | "INVALID_IDENTIFIER"
+  | "AMBIGUOUS_IDENTIFIER"
+  | "UNATTRIBUTED"
+  | "REQUIRES_USER_CONFIRMATION";
+
+export type CrmImportRowStatus = "SUCCESS" | "FAILED" | "DUPLICATE" | "SKIPPED";
+
+export function decideCrmImportRow(input: {
+  prospectValid: boolean;
+  seenInFile: boolean;
+  existsInWorkspace: boolean;
+  matchMethod: CrmMatchMethod;
+  allowUnattributed: boolean;
+}): { status: CrmImportRowStatus; previewStatus: CrmPreviewStatus; save: boolean; clearAttribution: boolean } {
+  if (!input.prospectValid) {
+    return { status: "SKIPPED", previewStatus: "INVALID_DATA", save: false, clearAttribution: true };
+  }
+  if (input.seenInFile || input.existsInWorkspace) {
+    return { status: "DUPLICATE", previewStatus: "DUPLICATE", save: false, clearAttribution: true };
+  }
+  if (input.matchMethod === "invalid_identifier") {
+    return {
+      status: input.allowUnattributed ? "SUCCESS" : "SKIPPED",
+      previewStatus: "INVALID_IDENTIFIER",
+      save: input.allowUnattributed,
+      clearAttribution: true,
+    };
+  }
+  if (input.matchMethod === "ambiguous") {
+    return {
+      status: input.allowUnattributed ? "SUCCESS" : "SKIPPED",
+      previewStatus: "AMBIGUOUS_IDENTIFIER",
+      save: input.allowUnattributed,
+      clearAttribution: true,
+    };
+  }
+  if (input.matchMethod === "none") {
+    return { status: "SUCCESS", previewStatus: "UNATTRIBUTED", save: true, clearAttribution: true };
+  }
+  return { status: "SUCCESS", previewStatus: "READY_TO_IMPORT", save: true, clearAttribution: false };
 }
 
 export interface CrmImportResult {
@@ -91,6 +150,18 @@ export interface CrmImportResult {
   insertedCount: number;
   updatedCount: number;
   failedCount: number;
+  duplicateCount?: number;
+  skippedCount?: number;
+  batchId?: string;
+  partial?: boolean;
+  attribution?: { direct: number; adSet: number; campaign: number; unattributed: number };
+  rowResults?: Array<{
+    rowNumber: number;
+    status: CrmImportRowStatus;
+    error: string | null;
+    recordId: string | null;
+    at: string;
+  }>;
   errors: Array<{ row: number; error: string }>;
   warnings: Array<{ row: number; warning: string }>;
   importedLeads: Array<{
@@ -103,6 +174,353 @@ export interface CrmImportResult {
     notes?: string;
     isNew: boolean;
   }>;
+}
+
+export interface CrmAdSourceOption {
+  adId: string;
+  providerAdId?: string | null;
+  campaignId: string;
+  providerCampaignId?: string | null;
+  adName: string;
+  campaignName: string;
+  adStatus: string;
+  campaignStatus: string;
+}
+
+export type CrmMatchMethod =
+  | "internal_ad_id"
+  | "meta_ad_id"
+  | "ad_name"
+  | "meta_adset_id"
+  | "adset_name"
+  | "internal_campaign_id"
+  | "meta_campaign_id"
+  | "campaign_name"
+  | "sole_campaign_ad"
+  | "ambiguous"
+  | "invalid_identifier"
+  | "none";
+
+export interface CrmAdSetSource {
+  providerAdSetId: string;
+  name: string;
+  campaignId: string;
+  adIds: string[];
+}
+
+export interface ResolvedCrmSource {
+  adId: string | null;
+  campaignId: string | null;
+  sourceName: string | null;
+  providerAdSetId: string | null;
+  matched: boolean;
+  matchMethod: CrmMatchMethod;
+}
+
+export function attributionStatusForCrmMatch(method: CrmMatchMethod): "verified" | "inferred" | "unknown" {
+  if (method === "internal_ad_id" || method === "meta_ad_id") return "verified";
+  if (method === "none" || method === "ambiguous" || method === "invalid_identifier") return "unknown";
+  return "inferred";
+}
+
+export function crmAttributionLabel(method: CrmMatchMethod): string {
+  if (method === "internal_ad_id" || method === "meta_ad_id") return "Terhubung ke iklan";
+  if (method === "meta_adset_id" || method === "adset_name") return "Terhubung ke ad set";
+  if (method === "sole_campaign_ad") return "Terhubung ke satu-satunya iklan kampanye";
+  if (method === "internal_campaign_id" || method === "meta_campaign_id" || method === "campaign_name") return "Terhubung ke kampanye";
+  if (method === "ad_name") return "Perlu verifikasi";
+  if (method === "ambiguous") return "Perlu verifikasi";
+  if (method === "invalid_identifier") return "Identifier tidak valid";
+  return "Sumber belum diketahui";
+}
+
+async function getTenantCrmSourceCatalog(supabase: SupabaseClient, organizationId: string) {
+  const [{ data: ads, error: adsError }, { data: campaigns, error: campaignsError }, { data: insightRows }] = await Promise.all([
+    supabase.from("ads").select("id, name, status, campaign_id, provider_ad_id").eq("organization_id", organizationId).order("name").limit(5000),
+    supabase.from("campaigns").select("id, name, status, provider_campaign_id").eq("organization_id", organizationId).order("name").limit(5000),
+    supabase.from("ad_insights").select("ad_id, adset_id, adset_name").eq("organization_id", organizationId).limit(5000),
+  ]);
+  if (adsError) throw new Error(`Gagal memuat referensi iklan: ${adsError.message}`);
+  if (campaignsError) throw new Error(`Gagal memuat referensi kampanye: ${campaignsError.message}`);
+  const campaignMap = new Map((campaigns || []).map((campaign) => [campaign.id, campaign]));
+  const adOptions: CrmAdSourceOption[] = (ads || []).flatMap((ad) => {
+    const campaign = campaignMap.get(ad.campaign_id);
+    if (!campaign) return [];
+    return [{
+      adId: ad.id,
+      providerAdId: ad.provider_ad_id,
+      campaignId: ad.campaign_id,
+      providerCampaignId: campaign.provider_campaign_id,
+      adName: ad.name,
+      campaignName: campaign.name,
+      adStatus: String(ad.status || "UNKNOWN").toUpperCase(),
+      campaignStatus: String(campaign.status || "UNKNOWN").toUpperCase(),
+    }];
+  });
+  const adCampaign = new Map((ads || []).map((ad) => [ad.id, ad.campaign_id]));
+  const adSets = new Map<string, CrmAdSetSource>();
+  for (const row of insightRows || []) {
+    if (!row.adset_id || !row.ad_id) continue;
+    const campaignId = adCampaign.get(row.ad_id);
+    if (!campaignId) continue;
+    const current: CrmAdSetSource = adSets.get(row.adset_id) || {
+      providerAdSetId: row.adset_id,
+      name: row.adset_name || row.adset_id,
+      campaignId,
+      adIds: [] as string[],
+    };
+    if (current.campaignId === campaignId && !current.adIds.includes(row.ad_id)) current.adIds.push(row.ad_id);
+    if (row.adset_name) current.name = row.adset_name;
+    adSets.set(row.adset_id, current);
+  }
+  return {
+    ads: adOptions,
+    campaigns: (campaigns || []).map((c) => ({
+      id: c.id,
+      providerCampaignId: c.provider_campaign_id,
+      name: c.name,
+      status: String(c.status || "UNKNOWN").toUpperCase(),
+    })),
+    adSets: [...adSets.values()],
+  };
+}
+
+export async function listCrmLeadSources(supabase: SupabaseClient, organizationId: string) {
+  const catalog = await getTenantCrmSourceCatalog(supabase, organizationId);
+  const { data: insightRows } = await supabase
+    .from("ad_insights")
+    .select("ad_id")
+    .eq("organization_id", organizationId)
+    .limit(5000);
+  const adsWithInsights = new Set((insightRows || []).map((row) => row.ad_id));
+  const ads = catalog.ads.filter((ad) =>
+    ["ACTIVE", "PAUSED"].includes(ad.adStatus) || adsWithInsights.has(ad.adId)
+  );
+  const campaignIds = new Set(ads.map((ad) => ad.campaignId));
+  const campaigns = catalog.campaigns.filter((campaign) =>
+    campaign.status === "ACTIVE" || campaignIds.has(campaign.id)
+  );
+  return { ads, campaigns, adSets: catalog.adSets.filter((adSet) => campaignIds.has(adSet.campaignId)) };
+}
+
+export function resolveCrmSourceFromCatalog(
+  catalog: Awaited<ReturnType<typeof getTenantCrmSourceCatalog>>,
+  input: {
+    adId?: string | null;
+    campaignId?: string | null;
+    adSetId?: string | null;
+    sourceName?: string | null;
+    sourceAdSet?: string | null;
+    sourceCampaign?: string | null;
+  }
+): ResolvedCrmSource {
+  const sourceName = input.sourceName?.trim() || null;
+  const adSets = catalog.adSets || [];
+  const linked = (
+    adId: string | null,
+    campaignId: string | null,
+    name: string | null,
+    matchMethod: CrmMatchMethod,
+    providerAdSetId: string | null = null
+  ): ResolvedCrmSource => ({
+    adId,
+    campaignId,
+    sourceName: name,
+    providerAdSetId,
+    matched: matchMethod !== "none" && matchMethod !== "ambiguous" && matchMethod !== "invalid_identifier",
+    matchMethod,
+  });
+  const soleAdInCampaign = (campaignId: string) => {
+    const matches = catalog.ads.filter((ad) => ad.campaignId === campaignId);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const finishCampaign = (campaignId: string, name: string | null, method: CrmMatchMethod): ResolvedCrmSource => {
+    const only = soleAdInCampaign(campaignId);
+    if (!only) return linked(null, campaignId, name, method);
+    return linked(only.adId, campaignId, only.adName, "sole_campaign_ad", adSetForAd(only.adId));
+  };
+  const finishAdSet = (adSet: CrmAdSetSource): ResolvedCrmSource => {
+    if (adSet.adIds.length === 1) {
+      const ad = catalog.ads.find((candidate) => candidate.adId === adSet.adIds[0]);
+      if (ad) return linked(ad.adId, ad.campaignId, ad.adName, "sole_campaign_ad", adSet.providerAdSetId);
+    }
+    return linked(null, adSet.campaignId, adSet.name, "meta_adset_id", adSet.providerAdSetId);
+  };
+  const adSetForAd = (adId: string, requested?: string | null) => {
+    const sets = adSets.filter((adSet) => adSet.adIds.includes(adId));
+    if (requested) {
+      const chosen = sets.find((adSet) => adSet.providerAdSetId === requested);
+      if (!chosen) throw new Error("Ad set tidak berisi iklan yang dipilih.");
+      return chosen.providerAdSetId;
+    }
+    return sets.length === 1 ? sets[0].providerAdSetId : null;
+  };
+
+  if (input.adId) {
+    const ad = catalog.ads.find((candidate) => candidate.adId === input.adId || candidate.providerAdId === input.adId);
+    if (!ad) throw new Error("Iklan yang dipilih tidak termasuk organisasi ini.");
+    if (
+      input.campaignId &&
+      input.campaignId !== ad.campaignId &&
+      input.campaignId !== ad.providerCampaignId
+    ) {
+      throw new Error("Kampanye tidak sesuai dengan iklan yang dipilih.");
+    }
+    return linked(
+      ad.adId,
+      ad.campaignId,
+      ad.adName,
+      ad.adId === input.adId ? "internal_ad_id" : "meta_ad_id",
+      adSetForAd(ad.adId, input.adSetId)
+    );
+  }
+  if (input.adSetId) {
+    const adSet = adSets.find((candidate) => candidate.providerAdSetId === input.adSetId);
+    if (!adSet) throw new Error("Ad set yang dipilih tidak termasuk organisasi ini.");
+    if (input.campaignId && input.campaignId !== adSet.campaignId) {
+      throw new Error("Kampanye tidak sesuai dengan ad set yang dipilih.");
+    }
+    return finishAdSet(adSet);
+  }
+  if (input.campaignId) {
+    const campaign = catalog.campaigns.find(
+      (candidate) => candidate.id === input.campaignId || candidate.providerCampaignId === input.campaignId
+    );
+    if (!campaign) throw new Error("Kampanye yang dipilih tidak termasuk organisasi ini.");
+    return finishCampaign(
+      campaign.id,
+      sourceName || campaign.name,
+      campaign.id === input.campaignId ? "internal_campaign_id" : "meta_campaign_id"
+    );
+  }
+  const textAdSet = input.sourceAdSet?.trim() || null;
+  const textCampaign = input.sourceCampaign?.trim() || null;
+  if (!sourceName && !textAdSet && !textCampaign) return linked(null, null, null, "none");
+  const looksLikeId = (value: string | null) => Boolean(value && /^\d{8,}$/.test(value));
+
+  const byAdId = catalog.ads.filter((ad) => ad.adId === sourceName || ad.providerAdId === sourceName);
+  if (byAdId.length === 1) {
+    const ad = byAdId[0];
+    return linked(ad.adId, ad.campaignId, ad.adName, ad.adId === sourceName ? "internal_ad_id" : "meta_ad_id", adSetForAd(ad.adId));
+  }
+  const byAdSetId = adSets.filter((adSet) => adSet.providerAdSetId === (textAdSet || sourceName));
+  if (byAdSetId.length === 1) {
+    return finishAdSet(byAdSetId[0]);
+  }
+  const byCampaignId = catalog.campaigns.filter(
+    (campaign) => campaign.id === sourceName || campaign.providerCampaignId === sourceName
+  );
+  if (byCampaignId.length === 1) {
+    const campaign = byCampaignId[0];
+    return finishCampaign(
+      campaign.id,
+      campaign.name,
+      campaign.id === sourceName ? "internal_campaign_id" : "meta_campaign_id"
+    );
+  }
+
+  const normalize = (value: string) => value.trim().toLocaleLowerCase("id-ID");
+  const query = sourceName ? normalize(sourceName) : "";
+  const exactAds = sourceName ? catalog.ads.filter((ad) => normalize(ad.adName) === query) : [];
+  if (exactAds.length > 1) return linked(null, null, sourceName, "ambiguous");
+  if (exactAds.length === 1) {
+    const ad = exactAds[0];
+    return linked(ad.adId, ad.campaignId, ad.adName, "ad_name", adSetForAd(ad.adId));
+  }
+  const adSetQuery = textAdSet ? normalize(textAdSet) : query;
+  const exactAdSets = adSets.filter((adSet) => normalize(adSet.name) === adSetQuery);
+  if (exactAdSets.length > 1) return linked(null, null, textAdSet || sourceName, "ambiguous");
+  if (exactAdSets.length === 1 && (textAdSet || !textCampaign)) {
+    const adSet = exactAdSets[0];
+    if (adSet.adIds.length === 1) {
+      const ad = catalog.ads.find((candidate) => candidate.adId === adSet.adIds[0]);
+      if (ad) return linked(ad.adId, ad.campaignId, ad.adName, "sole_campaign_ad", adSet.providerAdSetId);
+    }
+    return linked(null, adSet.campaignId, adSet.name, "adset_name", adSet.providerAdSetId);
+  }
+  const campaignQuery = textCampaign ? normalize(textCampaign) : query;
+  const exactCampaigns = catalog.campaigns.filter((campaign) => normalize(campaign.name) === campaignQuery);
+  if (exactCampaigns.length > 1) return linked(null, null, textCampaign || sourceName, "ambiguous");
+  if (exactCampaigns.length === 1) {
+    return finishCampaign(exactCampaigns[0].id, exactCampaigns[0].name, "campaign_name");
+  }
+  if (looksLikeId(sourceName) || looksLikeId(textAdSet) || looksLikeId(textCampaign)) {
+    return linked(null, null, sourceName || textAdSet || textCampaign, "invalid_identifier");
+  }
+
+  return linked(null, null, sourceName, "none");
+}
+
+export async function resolveCrmLeadSource(
+  supabase: SupabaseClient,
+  organizationId: string,
+  input: {
+    adId?: string | null;
+    campaignId?: string | null;
+    adSetId?: string | null;
+    sourceName?: string | null;
+    sourceAdSet?: string | null;
+    sourceCampaign?: string | null;
+  }
+) {
+  const catalog = await getTenantCrmSourceCatalog(supabase, organizationId);
+  return resolveCrmSourceFromCatalog(catalog, input);
+}
+
+export async function annotateCrmImportPreview(
+  supabase: SupabaseClient,
+  organizationId: string,
+  summary: ParsedSheetSummary
+): Promise<ParsedSheetSummary> {
+  const catalog = await getTenantCrmSourceCatalog(supabase, organizationId);
+  const hashes = summary.rows.flatMap((row) => (row.data?.phoneHash ? [row.data.phoneHash] : []));
+  const existing = new Set<string>();
+  for (let index = 0; index < hashes.length; index += 200) {
+    const slice = hashes.slice(index, index + 200);
+    const { data: contacts } = await supabase.from("contacts").select("id, phone_hash").eq("organization_id", organizationId).in("phone_hash", slice);
+    const ids = (contacts || []).map((contact) => contact.id);
+    if (ids.length === 0) continue;
+    const { data: conversations } = await supabase.from("conversations").select("contact_id").eq("organization_id", organizationId).in("contact_id", ids);
+    const withConversation = new Set((conversations || []).map((conversation) => conversation.contact_id));
+    for (const contact of contacts || []) {
+      if (contact.phone_hash && withConversation.has(contact.id)) existing.add(contact.phone_hash);
+    }
+  }
+  const seen = new Set<string>();
+  let duplicateRows = 0;
+  let rowsToSave = 0;
+  const attributionCounts: Record<string, number> = {};
+  const previewCounts: Partial<Record<CrmPreviewStatus, number>> = {};
+  const rows = summary.rows.map((row) => {
+    let method: CrmMatchMethod = "none";
+    if (row.valid && row.data) {
+      try {
+        method = resolveCrmSourceFromCatalog(catalog, {
+          sourceName: row.data.namaIklan,
+          sourceAdSet: row.data.sourceAdSet,
+          sourceCampaign: row.data.sourceCampaign,
+        }).matchMethod;
+      } catch {
+        method = "invalid_identifier";
+      }
+    }
+    const seenInFile = Boolean(row.data && seen.has(row.data.phoneHash));
+    if (row.data) seen.add(row.data.phoneHash);
+    const decision = decideCrmImportRow({
+      prospectValid: Boolean(row.valid && row.data),
+      seenInFile,
+      existsInWorkspace: Boolean(row.data && existing.has(row.data.phoneHash)),
+      matchMethod: method,
+      allowUnattributed: false,
+    });
+    if (decision.previewStatus === "DUPLICATE") duplicateRows += 1;
+    if (decision.save) rowsToSave += 1;
+    previewCounts[decision.previewStatus] = (previewCounts[decision.previewStatus] || 0) + 1;
+    const label = crmAttributionLabel(method);
+    if (row.valid) attributionCounts[label] = (attributionCounts[label] || 0) + 1;
+    return { ...row, attributionPreview: label, previewStatus: decision.previewStatus };
+  });
+  return { ...summary, rows, duplicateRows, rowsToSave, attributionCounts, previewCounts };
 }
 
 const VALID_STAGES: Record<string, FunnelStage> = {
@@ -147,10 +565,12 @@ export function normalizeFunnelStage(raw?: string | null): { stage: FunnelStage;
 export function normalizeAttributionStatus(raw?: string | null, hasAd = false): AttributionStatus {
   if (!raw) return hasAd ? "verified" : "unknown";
   const cleaned = raw.toLowerCase().trim();
-  if (cleaned.includes("verif") || cleaned === "terverifikasi") return "verified";
+  if (cleaned.includes("verif") || cleaned === "terverifikasi") {
+    return "verified";
+  }
   if (cleaned.includes("infer") || cleaned === "perkiraan" || cleaned === "diduga") return "inferred";
   if (cleaned.includes("unknown") || cleaned === "tidak diketahui" || cleaned === "organik") return "unknown";
-  return hasAd ? "inferred" : "unknown";
+  return hasAd ? "verified" : "unknown";
 }
 
 /**
@@ -183,7 +603,7 @@ export function normalizeQualityLabel(raw?: string | null): QualityLabel | null 
  * Generates an Excel (.xlsx) or CSV buffer containing the official HD Creative CRM leads template.
  * Focused on Tahap 1 core columns: Nama & WhatsApp, Domisili, Tanggal Masuk, Kampanye/Iklan, Tahap Funnel, Label Kualitas, Catatan Singkat.
  */
-export function generateCrmLeadsTemplate(format: "xlsx" | "csv" = "xlsx"): Buffer {
+export function generateCrmLeadsTemplate(format: "xlsx" | "csv" = "xlsx", sourceOptions: CrmAdSourceOption[] = []): Buffer {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: Data Prospek CRM (Core Columns Tahap 1)
@@ -325,6 +745,14 @@ export function generateCrmLeadsTemplate(format: "xlsx" | "csv" = "xlsx"): Buffe
     const wsGuide = XLSX.utils.aoa_to_sheet([guideHeaders, ...guideRows]);
     wsGuide["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 38 }, { wch: 65 }];
     XLSX.utils.book_append_sheet(wb, wsGuide, "Panduan & Validasi");
+
+    const sourceRows = sourceOptions.map((source) => [source.campaignName, source.adName, source.adStatus]);
+    const wsSources = XLSX.utils.aoa_to_sheet([
+      ["Nama Kampanye", "Nama Iklan", "Status Iklan"],
+      ...(sourceRows.length ? sourceRows : [["Belum ada kampanye/iklan aktif atau pernah tayang", "", ""]]),
+    ]);
+    wsSources["!cols"] = [{ wch: 42 }, { wch: 52 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, wsSources, "Daftar Iklan Aktif");
   }
 
   if (format === "csv") {
@@ -341,7 +769,7 @@ export function generateCrmLeadsTemplate(format: "xlsx" | "csv" = "xlsx"): Buffe
  */
 export const MAX_CRM_ROWS = 5000;
 
-export function parseCrmLeadsFile(buffer: Buffer): ParsedSheetSummary {
+export function parseCrmLeadsFile(buffer: Buffer, columnMap?: CrmColumnMap): ParsedSheetSummary {
   if (buffer.length > 5 * 1024 * 1024) {
     throw new Error("Ukuran file melebihi batas maksimum 5 MB.");
   }
@@ -368,21 +796,37 @@ export function parseCrmLeadsFile(buffer: Buffer): ParsedSheetSummary {
   const headerRow = (rawRows[0] || []).map((h) => String(h || "").trim().toLowerCase());
 
   // Precise index lookup avoiding false-matches (e.g. 'wa' in 'wajib')
-  const nameIdx = headerRow.findIndex(
+  const mappedIndex = (field: keyof CrmColumnMap, automatic: number) => {
+    const header = columnMap?.[field];
+    if (!header) return automatic;
+    const index = headerRow.findIndex((col) => col.trim().toLocaleLowerCase("id-ID") === header.trim().toLocaleLowerCase("id-ID"));
+    return index;
+  };
+  const nameIdx = mappedIndex("name", headerRow.findIndex(
     (col) => /(nama|lead_name|prospect_name|\bname\b)/i.test(col) && !/(iklan|campaign|\bad\b)/i.test(col)
-  );
-  const phoneIdx = headerRow.findIndex(
+  ));
+  const phoneIdx = mappedIndex("phone", headerRow.findIndex(
     (col) => /(whatsapp|telepon|phone|no\.?\s*hp|\bwa\b|\bhp\b)/i.test(col)
-  );
+  ));
   const domisiliIdx = headerRow.findIndex(
     (col) => /(domisili|kota|lokasi|city|location|daerah|kabupaten|asal)/i.test(col)
   );
   const dateIdx = headerRow.findIndex(
     (col) => /(tanggal|date|waktu|time|masuk)/i.test(col)
   );
-  const adIdx = headerRow.findIndex(
-    (col) => /(iklan|campaign|kampanye|\bad\b)/i.test(col)
+  const adSetIdx = mappedIndex("adSet", headerRow.findIndex((col) => /(ad\s*set|adset|kelompok iklan)/i.test(col)));
+  const campaignIdx = mappedIndex("campaign", headerRow.findIndex(
+    (col) => /(kampanye|campaign)/i.test(col) && !/(ad\s*set|adset|kelompok|iklan|\bad\b)/i.test(col)
+  ));
+  const adIdIdx = mappedIndex("adId", headerRow.findIndex(
+    (col) => /(id iklan|ad id|meta ad|provider ad)/i.test(col) && !/(ad\s*set|adset|kampanye|campaign)/i.test(col)
+  ));
+  const namedAdIdx = headerRow.findIndex(
+    (col) => /(nama iklan|iklan|\bad name\b|\bad\b)/i.test(col) && !/(ad\s*set|adset|kelompok|kampanye|campaign)/i.test(col)
   );
+  const adIdx = mappedIndex("ad", namedAdIdx >= 0
+    ? namedAdIdx
+    : headerRow.findIndex((col, index) => index !== adIdIdx && index !== adSetIdx && index !== campaignIdx && /(iklan|kampanye|campaign|\bad\b)/i.test(col) && !/(ad\s*set|adset)/i.test(col)));
   const stageIdx = headerRow.findIndex(
     (col) => /(funnel|stage|tahap|status_prospek)/i.test(col)
   );
@@ -457,7 +901,10 @@ export function parseCrmLeadsFile(buffer: Buffer): ParsedSheetSummary {
     }
 
     // 5. Ad name
+    const rawAdId = adIdIdx >= 0 ? String(row[adIdIdx] || "").trim() : "";
     const rawAdName = adIdx >= 0 ? String(row[adIdx] || "").trim() : "";
+    const rawAdSet = adSetIdx >= 0 ? String(row[adSetIdx] || "").trim() : "";
+    const rawCampaign = campaignIdx >= 0 ? String(row[campaignIdx] || "").trim() : "";
 
     // 6. Stage validation
     const rawStage = stageIdx >= 0 ? String(row[stageIdx] || "").trim() : "";
@@ -527,7 +974,9 @@ export function parseCrmLeadsFile(buffer: Buffer): ParsedSheetSummary {
         phoneMasked: maskPhoneNumber(cleanedDigits),
         domisili: rawDomisili || undefined,
         tanggalKontak,
-        namaIklan: rawAdName || undefined,
+        namaIklan: rawAdId || rawAdName || undefined,
+        sourceAdSet: rawAdSet || undefined,
+        sourceCampaign: rawCampaign || undefined,
         tahapFunnel: stage,
         qualityLabel,
         catatan: rawNotes || undefined,
@@ -555,6 +1004,7 @@ export function parseCrmLeadsFile(buffer: Buffer): ParsedSheetSummary {
     validRows: validCount,
     invalidRows: invalidCount,
     rows: results,
+    headers: headerRow.filter(Boolean),
   };
 }
 
@@ -565,27 +1015,26 @@ export async function importCrmLeadsToDatabase(params: {
   organizationId: string;
   leads: CrmLeadTemplateRow[];
   supabase: SupabaseClient;
+  allowUnattributed?: boolean;
+  updateExisting?: boolean;
 }): Promise<CrmImportResult> {
-  const { organizationId, leads, supabase } = params;
+  const { organizationId, leads, supabase, allowUnattributed = false, updateExisting = false } = params;
+  const batchId = crypto.randomUUID();
 
   let insertedCount = 0;
   let updatedCount = 0;
   let failedCount = 0;
+  let duplicateCount = 0;
+  let skippedCount = 0;
+  const attribution = { direct: 0, adSet: 0, campaign: 0, unattributed: 0 };
+  const rowResults: NonNullable<CrmImportResult["rowResults"]> = [];
   const errors: Array<{ row: number; error: string }> = [];
   const warnings: Array<{ row: number; warning: string }> = [];
   const importedLeads: CrmImportResult["importedLeads"] = [];
 
-  // 1. Fetch available registered ads to map ad_id by name
-  const { data: dbAds } = await supabase
-    .from("ads")
-    .select("id, name, campaigns(id, name)")
-    .limit(200);
-
-  const adMap = new Map<string, { id: string; name: string }>();
-  (dbAds || []).forEach((ad) => {
-    if (ad.id) adMap.set(ad.id.toLowerCase(), { id: ad.id, name: ad.name });
-    if (ad.name) adMap.set(ad.name.toLowerCase().trim(), { id: ad.id, name: ad.name });
-  });
+  // Resolve only against this organization's catalog. Ambiguous text is never
+  // linked to an arbitrary ad or campaign.
+  const sourceCatalog = await getTenantCrmSourceCatalog(supabase, organizationId);
 
   // 2. Fetch existing contacts for this organization to decide insert vs update
   const phoneHashes = leads.map((l) => l.phoneHash);
@@ -599,6 +1048,19 @@ export async function importCrmLeadsToDatabase(params: {
   (existingContacts || []).forEach((c) => {
     if (c.phone_hash) contactByHash.set(c.phone_hash, { id: c.id, name: c.name || "" });
   });
+  const conversationByContact = new Map<string, string>();
+  const existingContactIds = [...contactByHash.values()].map((contact) => contact.id);
+  if (existingContactIds.length > 0) {
+    const { data: existingConversations } = await supabase
+      .from("conversations")
+      .select("id, contact_id")
+      .eq("organization_id", organizationId)
+      .in("contact_id", existingContactIds);
+    for (const conversation of existingConversations || []) {
+      if (conversation.contact_id) conversationByContact.set(conversation.contact_id, conversation.id);
+    }
+  }
+  const seenInBatch = new Set<string>();
 
   // 3. Process each lead row sequentially to guarantee ACID-level integrity
   for (let idx = 0; idx < leads.length; idx++) {
@@ -606,25 +1068,45 @@ export async function importCrmLeadsToDatabase(params: {
     const rowNum = idx + 2;
 
     try {
-      // Find matching ad_id
-      let matchedAdId: string | null = null;
-      if (lead.namaIklan) {
-        const query = lead.namaIklan.toLowerCase().trim();
-        // Exact match
-        if (adMap.has(query)) {
-          matchedAdId = adMap.get(query)!.id;
-        } else {
-          // Partial search
-          for (const [key, value] of adMap.entries()) {
-            if (key.includes(query) || query.includes(key)) {
-              matchedAdId = value.id;
-              break;
-            }
-          }
-        }
-      }
-
+      const resolvedSource = resolveCrmSourceFromCatalog(sourceCatalog, {
+        adId: lead.adId,
+        campaignId: lead.campaignId,
+        adSetId: lead.adSetId,
+        sourceName: lead.namaIklan,
+        sourceAdSet: lead.sourceAdSet,
+        sourceCampaign: lead.sourceCampaign,
+      });
       const existingContact = contactByHash.get(lead.phoneHash);
+      const decision = decideCrmImportRow({
+        prospectValid: true,
+        seenInFile: seenInBatch.has(lead.phoneHash),
+        existsInWorkspace: !updateExisting && Boolean(existingContact && conversationByContact.has(existingContact.id)),
+        matchMethod: resolvedSource.matchMethod,
+        allowUnattributed,
+      });
+      seenInBatch.add(lead.phoneHash);
+      if (!decision.save) {
+        if (decision.status === "DUPLICATE") duplicateCount += 1;
+        else skippedCount += 1;
+        rowResults.push({
+          rowNumber: rowNum,
+          status: decision.status,
+          error: decision.previewStatus === "INVALID_IDENTIFIER"
+            ? "Identifier tidak ditemukan. Prospek tidak disimpan."
+            : decision.previewStatus === "AMBIGUOUS_IDENTIFIER"
+              ? "Nama cocok dengan lebih dari satu iklan. Prospek tidak disimpan."
+              : null,
+          recordId: existingContact ? conversationByContact.get(existingContact.id) || null : null,
+          at: new Date().toISOString(),
+        });
+        continue;
+      }
+      if (decision.clearAttribution) {
+        resolvedSource.adId = null;
+        resolvedSource.campaignId = null;
+        resolvedSource.providerAdSetId = null;
+        resolvedSource.matchMethod = "none";
+      }
       let contactId: string;
       const isNew = !existingContact;
 
@@ -675,7 +1157,13 @@ export async function importCrmLeadsToDatabase(params: {
       const evidencePayload = {
         source: "crm_sheet_upload",
         funnel_stage: lead.tahapFunnel,
-        ad_name: lead.namaIklan || null,
+        ad_name: resolvedSource.sourceName,
+        ad_id: resolvedSource.adId,
+        campaign_id: resolvedSource.campaignId,
+        provider_adset_id: resolvedSource.providerAdSetId,
+        attribution_note: lead.attributionNote || null,
+        match_method: resolvedSource.matchMethod,
+        import_batch_id: batchId,
         domisili: lead.domisili || null,
         quality_label: lead.qualityLabel || null,
         notes: lead.catatan || null,
@@ -683,29 +1171,38 @@ export async function importCrmLeadsToDatabase(params: {
         uploaded_at: new Date().toISOString(),
       };
 
-      if (existingConv) {
+      if (existingConv && !updateExisting) {
+        duplicateCount += 1;
+        rowResults.push({
+          rowNumber: rowNum,
+          status: "DUPLICATE",
+          error: null,
+          recordId: existingConv.id,
+          at: new Date().toISOString(),
+        });
+        continue;
+      } else if (existingConv) {
         conversationId = existingConv.id;
-        await supabase
-          .from("conversations")
-          .update({
-            ad_id: matchedAdId,
-            quality_label: lead.qualityLabel || null,
-            attribution_status: lead.statusAtribusi,
-            attribution_evidence: evidencePayload,
-            last_message_at: lead.tanggalKontak,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", conversationId);
+        await supabase.from("conversations").update({
+          ad_id: resolvedSource.adId,
+          campaign_id: resolvedSource.campaignId,
+          quality_label: lead.qualityLabel || null,
+          attribution_status: attributionStatusForCrmMatch(resolvedSource.matchMethod),
+          attribution_evidence: evidencePayload,
+          last_message_at: lead.tanggalKontak,
+          updated_at: new Date().toISOString(),
+        }).eq("id", conversationId).eq("organization_id", organizationId);
       } else {
         const { data: newConv, error: convError } = await supabase
           .from("conversations")
           .insert({
             organization_id: organizationId,
             contact_id: contactId,
-            ad_id: matchedAdId,
+            ad_id: resolvedSource.adId,
+            campaign_id: resolvedSource.campaignId,
             quality_label: lead.qualityLabel || null,
             channel: "crm_upload",
-            attribution_status: lead.statusAtribusi,
+            attribution_status: attributionStatusForCrmMatch(resolvedSource.matchMethod),
             attribution_evidence: evidencePayload,
             started_at: lead.tanggalKontak,
             last_message_at: lead.tanggalKontak,
@@ -726,7 +1223,7 @@ export async function importCrmLeadsToDatabase(params: {
       else if (lead.tahapFunnel === "closing") outcomeStage = "booking";
       else if (lead.tahapFunnel === "batal") outcomeStage = "lost";
 
-      await supabase.from("lead_outcomes").insert({
+      const { error: outcomeError } = await supabase.from("lead_outcomes").insert({
         organization_id: organizationId,
         conversation_id: conversationId,
         stage: outcomeStage,
@@ -736,48 +1233,20 @@ export async function importCrmLeadsToDatabase(params: {
         occurred_at: lead.tanggalKontak,
         notes: lead.catatan || `Diperbarui via CRM Sheets: tahap ${lead.tahapFunnel}`,
       });
+      if (outcomeError) warnings.push({ row: rowNum, warning: "Prospek tersimpan, tetapi tahap tindak lanjut belum tercatat." });
 
-      // Upsert lead assessment (scores)
-      const buyerScore = lead.skorProspek ?? (lead.tahapFunnel === "closing" ? 95 : lead.tahapFunnel === "survei" ? 85 : 70);
-      const salesScore = lead.skorPenjualan ?? 75;
+      if (resolvedSource.matchMethod === "internal_ad_id" || resolvedSource.matchMethod === "meta_ad_id") attribution.direct += 1;
+      else if (resolvedSource.matchMethod === "meta_adset_id" || resolvedSource.matchMethod === "adset_name") attribution.adSet += 1;
+      else if (resolvedSource.matchMethod === "none") attribution.unattributed += 1;
+      else attribution.campaign += 1;
 
-      // Check if assessment exists
-      const { data: existingAssessment } = await supabase
-        .from("lead_assessments")
-        .select("id")
-        .eq("conversation_id", conversationId)
-        .maybeSingle();
-
-      if (existingAssessment) {
-        await supabase
-          .from("lead_assessments")
-          .update({
-            buyer_score: buyerScore,
-            sales_score: salesScore,
-            summary: lead.catatan || `Diperbarui dari CRM Sheets: tahap ${lead.tahapFunnel}`,
-            completed_at: new Date().toISOString(),
-          })
-          .eq("id", existingAssessment.id);
-      } else {
-        await supabase.from("lead_assessments").insert({
-          organization_id: organizationId,
-          conversation_id: conversationId,
-          buyer_score: buyerScore,
-          sales_score: salesScore,
-          confidence: 0.85,
-          score_completeness: 1.0,
-          status: "completed",
-          missing_information: [],
-          summary: lead.catatan || `Diimpor dari CRM Sheets: tahap ${lead.tahapFunnel}`,
-          provider: "manual_crm",
-          model_id: "crm_sheet_v1",
-          prompt_version: "v1.0",
-          rubric_version: "v1.0",
-          completed_at: lead.tanggalKontak,
-        });
-      }
-
-      const orig = leads[idx];
+      rowResults.push({
+        rowNumber: rowNum,
+        status: "SUCCESS",
+        error: null,
+        recordId: conversationId,
+        at: new Date().toISOString(),
+      });
       importedLeads.push({
         id: conversationId,
         name: lead.nama,
@@ -792,74 +1261,22 @@ export async function importCrmLeadsToDatabase(params: {
       failedCount++;
       const message = err instanceof Error ? err.message : "Kesalahan database tidak terduga";
       errors.push({ row: rowNum, error: message });
+      rowResults.push({ rowNumber: rowNum, status: "FAILED", error: message, recordId: null, at: new Date().toISOString() });
     }
   }
 
-  // Also sync to demo store for smooth fallback & immediate UI reactivity
-  try {
-    const demoItems: LeadListItem[] = importedLeads.map((imp) => {
-      const orig = leads.find((l) => l.phoneMasked === imp.phoneMasked);
-      const buyerScore = orig?.skorProspek ?? (orig?.qualityLabel === "Hot" ? 90 : orig?.qualityLabel === "Warm" ? 70 : 45);
-      const salesScore = orig?.skorPenjualan ?? 80;
-
-      return {
-        id: imp.id,
-        name: imp.name,
-        phoneMasked: imp.phoneMasked,
-        domisili: imp.domisili || orig?.domisili || null,
-        funnelStage: imp.funnelStage,
-        qualityLabel: imp.qualityLabel || orig?.qualityLabel || null,
-        notes: imp.notes || orig?.catatan || null,
-        attributionStatus: orig?.statusAtribusi || "verified",
-        adName: orig?.namaIklan || null,
-        campaignName: null,
-        buyerAssessment: {
-          dimension: "buyer",
-          rawPoints: buyerScore,
-          maxRubricPoints: 100,
-          assessedValidWeight: 100,
-          completeness: 1.0,
-          normalizedScore: buyerScore,
-          confidence: 0.9,
-          status: "completed",
-          criteria: {},
-          missingCriteria: [],
-          invalidCriteria: [],
-          missingInformation: [],
-          rubricVersion: "v1.0",
-        },
-        salesAssessment: {
-          dimension: "sales",
-          rawPoints: salesScore,
-          maxRubricPoints: 100,
-          assessedValidWeight: 100,
-          completeness: 1.0,
-          normalizedScore: salesScore,
-          confidence: 0.9,
-          status: "completed",
-          criteria: {},
-          missingCriteria: [],
-          invalidCriteria: [],
-          missingInformation: [],
-          rubricVersion: "v1.0",
-        },
-        lastMessageAt: orig?.tanggalKontak || new Date().toISOString(),
-        messageCount: 1,
-        needsReview: false,
-      };
-    });
-
-    addUploadedDemoLeads(demoItems);
-  } catch {
-    // Non-blocking fallback
-  }
-
   return {
-    success: failedCount === 0 || insertedCount > 0 || updatedCount > 0,
+    success: failedCount === 0 || insertedCount > 0,
     totalProcessed: leads.length,
     insertedCount,
     updatedCount,
     failedCount,
+    duplicateCount,
+    skippedCount,
+    batchId,
+    partial: failedCount > 0 && insertedCount > 0,
+    attribution,
+    rowResults,
     errors,
     warnings,
     importedLeads,

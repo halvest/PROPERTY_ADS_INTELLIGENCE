@@ -14,44 +14,104 @@ export type Database = {
   }
   public: {
     Tables: {
+      ad_account_insights: {
+        Row: {
+          id: string
+          organization_id: string
+          ad_account_id: string
+          date_start: string
+          date_stop: string
+          impressions: number | null
+          reach: number | null
+          frequency: number | null
+          currency: string | null
+          source: string
+          fetched_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          ad_account_id: string
+          date_start: string
+          date_stop: string
+          impressions?: number | null
+          reach?: number | null
+          frequency?: number | null
+          currency?: string | null
+          source?: string
+          fetched_at?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          ad_account_id?: string
+          date_start?: string
+          date_stop?: string
+          impressions?: number | null
+          reach?: number | null
+          frequency?: number | null
+          currency?: string | null
+          source?: string
+          fetched_at?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_ad_account_insights_account_org"
+            columns: ["ad_account_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "ad_accounts"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "ad_account_insights_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ad_accounts: {
         Row: {
           account_name: string | null
           connection_status: string
           created_at: string
-          currency: string
+          currency: string | null
           id: string
           last_synced_at: string | null
           organization_id: string
           provider: string
           provider_account_id: string
-          timezone: string
+          timezone: string | null
           updated_at: string
         }
         Insert: {
           account_name?: string | null
           connection_status?: string
           created_at?: string
-          currency?: string
+          currency?: string | null
           id?: string
           last_synced_at?: string | null
           organization_id: string
           provider: string
           provider_account_id: string
-          timezone?: string
+          timezone?: string | null
           updated_at?: string
         }
         Update: {
           account_name?: string | null
           connection_status?: string
           created_at?: string
-          currency?: string
+          currency?: string | null
           id?: string
           last_synced_at?: string | null
           organization_id?: string
           provider?: string
           provider_account_id?: string
-          timezone?: string
+          timezone?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -73,7 +133,7 @@ export type Database = {
           clicks: number
           conversions: number
           created_at: string
-          currency: string
+          currency: string | null
           date_start: string
           date_stop: string
           fetched_at: string
@@ -86,6 +146,7 @@ export type Database = {
           source: string
           spend: number
           action_breakdown: Json
+          cost_per_action_type: Json
           conversion_action_type: string | null
           mapping_version: string
           quality_ranking: string | null
@@ -100,7 +161,7 @@ export type Database = {
           clicks?: number
           conversions?: number
           created_at?: string
-          currency?: string
+          currency?: string | null
           date_start: string
           date_stop: string
           fetched_at?: string
@@ -113,6 +174,7 @@ export type Database = {
           source?: string
           spend?: number
           action_breakdown?: Json
+          cost_per_action_type?: Json
           conversion_action_type?: string | null
           mapping_version?: string
           quality_ranking?: string | null
@@ -127,7 +189,7 @@ export type Database = {
           clicks?: number
           conversions?: number
           created_at?: string
-          currency?: string
+          currency?: string | null
           date_start?: string
           date_stop?: string
           fetched_at?: string
@@ -140,6 +202,7 @@ export type Database = {
           source?: string
           spend?: number
           action_breakdown?: Json
+          cost_per_action_type?: Json
           conversion_action_type?: string | null
           mapping_version?: string
           quality_ranking?: string | null
@@ -512,6 +575,7 @@ export type Database = {
           ad_id: string | null
           attribution_evidence: Json
           attribution_status: string
+          campaign_id: string | null
           channel: string
           channel_conversation_id: string | null
           contact_id: string
@@ -528,6 +592,7 @@ export type Database = {
           ad_id?: string | null
           attribution_evidence?: Json
           attribution_status?: string
+          campaign_id?: string | null
           channel?: string
           channel_conversation_id?: string | null
           contact_id: string
@@ -544,6 +609,7 @@ export type Database = {
           ad_id?: string | null
           attribution_evidence?: Json
           attribution_status?: string
+          campaign_id?: string | null
           channel?: string
           channel_conversation_id?: string | null
           contact_id?: string
@@ -563,6 +629,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "ads"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_conversations_campaign_org"
+            columns: ["campaign_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id", "organization_id"]
           },
           {
             foreignKeyName: "conversations_contact_id_fkey"
@@ -1220,6 +1293,372 @@ export type Database = {
           },
         ]
       }
+      creative_projects: {
+        Row: {
+          id: string
+          organization_id: string
+          user_id: string
+          project_name: string
+          campaign_name: string | null
+          headline: string | null
+          subheadline: string | null
+          description: string | null
+          property_type: string | null
+          property_location: string | null
+          starting_price: number | null
+          land_area: number | null
+          building_area: number | null
+          bedrooms: number | null
+          bathrooms: number | null
+          floors: number | null
+          promo_headline: string | null
+          cashback_amount: number | null
+          has_free_ppn: boolean
+          dp_amount: number | null
+          monthly_installment: number | null
+          kpr_rate: number | null
+          promo_deadline: string | null
+          cta_text: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          user_id: string
+          project_name: string
+          campaign_name?: string | null
+          headline?: string | null
+          subheadline?: string | null
+          description?: string | null
+          property_type?: string | null
+          property_location?: string | null
+          starting_price?: number | null
+          land_area?: number | null
+          building_area?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          floors?: number | null
+          promo_headline?: string | null
+          cashback_amount?: number | null
+          has_free_ppn?: boolean
+          dp_amount?: number | null
+          monthly_installment?: number | null
+          kpr_rate?: number | null
+          promo_deadline?: string | null
+          cta_text?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          user_id?: string
+          project_name?: string
+          campaign_name?: string | null
+          headline?: string | null
+          subheadline?: string | null
+          description?: string | null
+          property_type?: string | null
+          property_location?: string | null
+          starting_price?: number | null
+          land_area?: number | null
+          building_area?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          floors?: number | null
+          promo_headline?: string | null
+          cashback_amount?: number | null
+          has_free_ppn?: boolean
+          dp_amount?: number | null
+          monthly_installment?: number | null
+          kpr_rate?: number | null
+          promo_deadline?: string | null
+          cta_text?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_projects_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      creative_generations: {
+        Row: {
+          id: string
+          project_id: string
+          organization_id: string
+          user_id: string
+          aspect_ratio: string
+          style_preset: string
+          width: number
+          height: number
+          raw_image_url: string
+          final_composed_url: string | null
+          creative_direction: Json
+          prompt_used: string
+          quality_score: Json
+          status: string
+          error_message: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          organization_id: string
+          user_id: string
+          aspect_ratio: string
+          style_preset: string
+          width: number
+          height: number
+          raw_image_url: string
+          final_composed_url?: string | null
+          creative_direction?: Json
+          prompt_used?: string
+          quality_score?: Json
+          status?: string
+          error_message?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          organization_id?: string
+          user_id?: string
+          aspect_ratio?: string
+          style_preset?: string
+          width?: number
+          height?: number
+          raw_image_url?: string
+          final_composed_url?: string | null
+          creative_direction?: Json
+          prompt_used?: string
+          quality_score?: Json
+          status?: string
+          error_message?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_generations_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "creative_projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "creative_generations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      creative_assets: {
+        Row: {
+          id: string
+          project_id: string
+          organization_id: string
+          category: string
+          file_name: string
+          file_url: string
+          file_size_bytes: number | null
+          mime_type: string | null
+          is_primary: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          organization_id: string
+          category: string
+          file_name: string
+          file_url: string
+          file_size_bytes?: number | null
+          mime_type?: string | null
+          is_primary?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          organization_id?: string
+          category?: string
+          file_name?: string
+          file_url?: string
+          file_size_bytes?: number | null
+          mime_type?: string | null
+          is_primary?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_assets_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "creative_projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "creative_assets_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      creative_variations: {
+        Row: {
+          id: string
+          generation_id: string
+          project_id: string
+          organization_id: string
+          variation_label: string
+          style_preset: string
+          final_composed_url: string
+          headline: string
+          accent_color: string
+          creative_direction: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          generation_id: string
+          project_id: string
+          organization_id: string
+          variation_label: string
+          style_preset: string
+          final_composed_url: string
+          headline: string
+          accent_color: string
+          creative_direction?: Json
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          generation_id?: string
+          project_id?: string
+          organization_id?: string
+          variation_label?: string
+          style_preset?: string
+          final_composed_url?: string
+          headline?: string
+          accent_color?: string
+          creative_direction?: Json
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_variations_generation_id_fkey"
+            columns: ["generation_id"]
+            isOneToOne: false
+            referencedRelation: "creative_generations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      property_image_enhancements: {
+        Row: {
+          id: string
+          organization_id: string
+          user_id: string
+          original_image_path: string
+          original_image_url: string
+          enhanced_image_path: string | null
+          enhanced_image_url: string | null
+          original_width: number | null
+          original_height: number | null
+          output_width: number | null
+          output_height: number | null
+          file_name: string
+          file_size: number | null
+          enhanced_file_size: number | null
+          mime_type: string | null
+          enhancement_mode: string
+          preset: string
+          intensity: number
+          processing_config: Json
+          processing_status: "queued" | "validating" | "analyzing" | "processing" | "completed" | "failed"
+          processing_metadata: Json
+          scene_category: string | null
+          error_message: string | null
+          created_at: string
+          completed_at: string | null
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          user_id: string
+          original_image_path: string
+          original_image_url: string
+          enhanced_image_path?: string | null
+          enhanced_image_url?: string | null
+          original_width?: number | null
+          original_height?: number | null
+          output_width?: number | null
+          output_height?: number | null
+          file_name: string
+          file_size?: number | null
+          enhanced_file_size?: number | null
+          mime_type?: string | null
+          enhancement_mode: string
+          preset: string
+          intensity?: number
+          processing_config?: Json
+          processing_status: "queued" | "validating" | "analyzing" | "processing" | "completed" | "failed"
+          processing_metadata?: Json
+          scene_category?: string | null
+          error_message?: string | null
+          created_at?: string
+          completed_at?: string | null
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          user_id?: string
+          original_image_path?: string
+          original_image_url?: string
+          enhanced_image_path?: string | null
+          enhanced_image_url?: string | null
+          original_width?: number | null
+          original_height?: number | null
+          output_width?: number | null
+          output_height?: number | null
+          file_name?: string
+          file_size?: number | null
+          enhanced_file_size?: number | null
+          mime_type?: string | null
+          enhancement_mode?: string
+          preset?: string
+          intensity?: number
+          processing_config?: Json
+          processing_status?: "queued" | "validating" | "analyzing" | "processing" | "completed" | "failed"
+          processing_metadata?: Json
+          scene_category?: string | null
+          error_message?: string | null
+          created_at?: string
+          completed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "property_image_enhancements_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -1227,6 +1666,18 @@ export type Database = {
     Functions: {
       current_user_org_id: { Args: never; Returns: string }
       current_user_role: { Args: never; Returns: string }
+      reserve_ai_analysis_usage: {
+        Args: { p_user_id: string; p_idempotency_key: string }
+        Returns: { allowed: boolean; reservation_status: string; reservation_id: string | null; used_count: number; reserved_count: number; remaining_count: number; next_available_at: string | null }[]
+      }
+      complete_ai_analysis_usage: {
+        Args: { p_user_id: string; p_reservation_id: string; p_succeeded: boolean; p_failure_code?: string | null }
+        Returns: boolean
+      }
+      get_ai_analysis_usage: {
+        Args: { p_user_id: string }
+        Returns: { used_count: number; reserved_count: number; remaining_count: number; next_available_at: string | null }[]
+      }
     }
     Enums: {
       [_ in never]: never

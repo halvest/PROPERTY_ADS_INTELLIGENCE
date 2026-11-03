@@ -7,13 +7,9 @@ import {
   calculateCPM,
   calculateCPQL,
 } from "@/domain/metrics/marketing";
+import { calendarDayBounds, classifyTemperature } from "@/lib/crm/crm-analysis-context";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { AttributionStatus } from "@/domain/attribution/types";
-import {
-  getDashboardKPISummary as getDemoSummary,
-  getAdLeaderboard as getDemoLeaderboard,
-  getLeadsList as getDemoLeads,
-} from "./dashboard-service";
 import type {
   DashboardKPISummary,
   AdLeaderboardItem,
@@ -33,7 +29,8 @@ export type LiveDashboardState =
 
 export interface LiveDashboardResponse {
   state: LiveDashboardState;
-  isDemoMode: boolean;
+  /** Kept for API compatibility; live dashboard data is never synthetic. */
+  isDemoMode: false;
   organizationId: string;
   organizationName: string;
   selectedAdAccount: {
@@ -54,7 +51,6 @@ export interface GetLiveDashboardOptions {
   organizationId: string;
   supabaseClient: SupabaseClient;
   dateRange?: string; // 'all' | '30d' | '14d' | '7d' | 'today' | 'yesterday' | 'this_month' | 'last_month' | custom
-  forceDemoMode?: boolean;
 }
 
 const parseDateRangeToFilter = (dr?: string) => parseDateRange(dr, "Asia/Jakarta");
@@ -65,12 +61,12 @@ const parseDateRangeToFilter = (dr?: string) => parseDateRange(dr, "Asia/Jakarta
  * 1. Never invents metrics or falls back silently to mock data in production.
  * 2. Reads persisted records through authenticated tenant context.
  * 3. Returns honest integration states (not_connected, initial_sync_pending, no_data_for_period, etc.).
- * 4. Isolates demo mode strictly to explicit opt-in with unmistakable UI flags.
+ * 4. Has no demo data path.
  */
 export async function getLiveDashboardData(
   options: GetLiveDashboardOptions
 ): Promise<LiveDashboardResponse> {
-  const { organizationId, supabaseClient, dateRange = "all", forceDemoMode = false } = options;
+  const { organizationId, supabaseClient, dateRange = "all" } = options;
 
   // 1. Fetch organization metadata
   const { data: orgData } = await supabaseClient
@@ -80,45 +76,6 @@ export async function getLiveDashboardData(
     .maybeSingle();
 
   const orgName = orgData?.name || "Workspace";
-
-  // Check if explicit demo mode is requested
-  const isDemoActive = forceDemoMode || process.env.DATA_MODE === "demo";
-
-  if (isDemoActive) {
-    const demoSummary = getDemoSummary(dateRange);
-    const demoLeaderboard = getDemoLeaderboard({ dateRange });
-    const demoLeads = getDemoLeads({ dateRange });
-
-    const funnelCounts: Record<FunnelStage, number> = {
-      baru: 0,
-      dihubungi: 0,
-      prospek: 0,
-      survei: 0,
-      closing: 0,
-      batal: 0,
-    };
-    demoLeads.forEach((l) => {
-      if (funnelCounts[l.funnelStage] !== undefined) {
-        funnelCounts[l.funnelStage]++;
-      }
-    });
-
-    return {
-      state: "connected_with_data",
-      isDemoMode: true,
-      organizationId,
-      organizationName: orgName,
-      selectedAdAccount: {
-        id: "act_0812999001",
-        name: "Demo Developer Nusantara Ads",
-      },
-      summary: demoSummary,
-      leaderboard: demoLeaderboard,
-      leads: demoLeads,
-      funnelCounts,
-      lastSyncedAt: new Date().toISOString(),
-    };
-  }
 
   // 2. Query canonical integration_connections for Meta
   const { data: metaConnection } = await supabaseClient
@@ -136,12 +93,15 @@ export async function getLiveDashboardData(
     .maybeSingle();
 
   // Query ad_accounts
-  const { data: activeAdAccount } = await supabaseClient
+  const { data: selectedAccountRow } = await supabaseClient
     .from("ad_accounts")
     .select("*")
     .eq("organization_id", organizationId)
-    .eq("connection_status", "connected")
+    .eq("provider_account_id", assetSelection?.ad_account_id || "__no_selected_account__")
     .maybeSingle();
+  const activeAdAccount = selectedAccountRow?.connection_status === "connected"
+    ? selectedAccountRow
+    : null;
 
   const selectedAccountInfo = activeAdAccount
     ? { id: activeAdAccount.provider_account_id, name: activeAdAccount.account_name }
@@ -202,7 +162,7 @@ export async function getLiveDashboardData(
   }
 
   // Check initial sync status
-  if (!metaConnection.last_synced_at) {
+  if (!activeAdAccount || !metaConnection.last_synced_at) {
     return {
       state: "initial_sync_pending",
       isDemoMode: false,
@@ -223,7 +183,8 @@ export async function getLiveDashboardData(
   let insightsQuery = supabaseClient
     .from("ad_insights")
     .select("*, ads!inner(id, name, status, campaign_id, campaigns(id, name))")
-    .eq("organization_id", organizationId);
+    .eq("organization_id", organizationId)
+    .eq("ads.campaigns.ad_account_id", activeAdAccount.id);
 
   if (since && until) {
     insightsQuery = insightsQuery.gte("date_start", since).lte("date_stop", until);
@@ -248,23 +209,35 @@ export async function getLiveDashboardData(
   }
 
   // 4. Query Real Conversations & Leads
+  const { data: accountCampaignRows } = await supabaseClient
+    .from("campaigns")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("ad_account_id", activeAdAccount.id);
+  const accountCampaignIds = new Set((accountCampaignRows || []).map((campaign) => campaign.id));
+
   let convsQuery = supabaseClient
     .from("conversations")
     .select(`
       id,
       attribution_status,
       ad_id,
+      campaign_id,
+      quality_label,
+      channel,
+      attribution_evidence,
       started_at,
       last_message_at,
       contacts(id, name, phone_masked),
       lead_assessments(buyer_score, sales_score, status, confidence, score_completeness),
       lead_outcomes(stage, occurred_at)
     `)
-    .eq("organization_id", organizationId);
+    .eq("organization_id", organizationId)
+    .eq("channel", "crm_upload");
 
-  if (since && until) {
-    convsQuery = convsQuery.gte("started_at", `${since}T00:00:00Z`).lte("started_at", `${until}T23:59:59Z`);
-  }
+  const crmBounds = calendarDayBounds(since, until);
+  if (crmBounds.start) convsQuery = convsQuery.gte("started_at", crmBounds.start);
+  if (crmBounds.end) convsQuery = convsQuery.lte("started_at", crmBounds.end);
 
   const { data: rawConvs } = await convsQuery;
 
@@ -297,7 +270,7 @@ export async function getLiveDashboardData(
           total: 0,
           verifiedPercentage: 0,
         },
-        currency: "IDR",
+        currency: activeAdAccount.currency || "",
       },
       leaderboard: [],
       leads: [],
@@ -310,7 +283,7 @@ export async function getLiveDashboardData(
   let totalSpend = 0;
   let totalImpressions = 0;
   let totalClicks = 0;
-  let currency = "IDR";
+  let currency = activeAdAccount.currency || "";
 
   const adMap = new Map<
     string,
@@ -392,6 +365,12 @@ export async function getLiveDashboardData(
 
   rawConvs?.forEach((conv) => {
     const attrStatus = (conv.attribution_status || "unknown") as AttributionStatus;
+    const temperature = classifyTemperature(conv.quality_label);
+    const belongsToAccount = Boolean(
+      (conv.campaign_id && accountCampaignIds.has(conv.campaign_id)) ||
+      (conv.ad_id && adMap.has(conv.ad_id))
+    );
+    if (!belongsToAccount) return;
     if (attrStatus === "verified") verifiedCount++;
     else if (attrStatus === "inferred") inferredCount++;
     else unknownCount++;
@@ -403,11 +382,13 @@ export async function getLiveDashboardData(
     const buyerScore = assessment?.buyer_score ?? null;
     const salesScore = assessment?.sales_score ?? null;
 
+    if (temperature === "hot" || temperature === "warm") qualifiedLeads += 1;
+    if (conv.ad_id && (temperature === "hot" || temperature === "warm")) {
+      const adStats = adMap.get(conv.ad_id);
+      if (adStats) adStats.qualifiedLeads += 1;
+    }
     if (buyerScore !== null && Number.isFinite(buyerScore)) {
       buyerScores.push(buyerScore);
-      if (buyerScore >= 70) {
-        qualifiedLeads++;
-      }
     }
     if (salesScore !== null && Number.isFinite(salesScore)) {
       salesScores.push(salesScore);
@@ -423,6 +404,10 @@ export async function getLiveDashboardData(
         ? [conv.lead_outcomes]
         : [];
     const outcome = outcomes[0];
+    const evidence = conv.attribution_evidence;
+    const evidenceStage = evidence && typeof evidence === "object" && !Array.isArray(evidence) && typeof evidence.funnel_stage === "string"
+      ? evidence.funnel_stage
+      : null;
     const stageMap: Record<string, FunnelStage> = {
       survey: "survei",
       survei: "survei",
@@ -435,7 +420,7 @@ export async function getLiveDashboardData(
       dihubungi: "dihubungi",
       prospek: "prospek",
     };
-    const stage: FunnelStage = stageMap[(outcome?.stage || "baru").toLowerCase()] || "baru";
+    const stage: FunnelStage = stageMap[(evidenceStage || outcome?.stage || "baru").toLowerCase()] || "baru";
     if (funnelCounts[stage] !== undefined) {
       funnelCounts[stage]++;
     }
@@ -446,7 +431,6 @@ export async function getLiveDashboardData(
       adStat.attributedLeads++;
       if (attrStatus === "verified") adStat.verifiedLeads++;
       if (attrStatus === "inferred") adStat.inferredLeads++;
-      if (buyerScore !== null && buyerScore >= 70) adStat.qualifiedLeads++;
       if (buyerScore !== null) adStat.buyerScores.push(buyerScore);
     }
 
@@ -456,7 +440,7 @@ export async function getLiveDashboardData(
 
     leadsList.push({
       id: conv.id,
-      name: contact?.name || "Lead WhatsApp",
+      name: contact?.name || "Prospek CRM",
       phoneMasked: contact?.phone_masked || "+62 8•• •••• ••••",
       funnelStage: stage,
       attributionStatus: attrStatus,
@@ -508,7 +492,7 @@ export async function getLiveDashboardData(
     });
   });
 
-  const totalLeads = (rawConvs?.length || 0);
+  const totalLeads = verifiedCount + inferredCount + unknownCount;
   const verifiedPercentage = totalLeads > 0 ? Math.round((verifiedCount / totalLeads) * 100) : 0;
 
   const avgBuyer =

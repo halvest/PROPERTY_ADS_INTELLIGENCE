@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import type { TranslationDictionary } from "@/lib/i18n/types";
+import type { Locale } from "@/lib/i18n/types";
 
 type Landing = TranslationDictionary["landing"];
 
@@ -10,10 +11,10 @@ export function ClosingCta({ landing }: { landing: Landing }) {
   return (
     <section className="border-b border-line/60 bg-background py-14 sm:py-18 lg:py-20" aria-labelledby="cta-title">
       <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="grid gap-7 rounded-3xl bg-[#171a2b] p-6 text-white sm:p-9 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-12 lg:p-12">
+        <div className="grid gap-7 rounded-3xl bg-zinc-900 border border-zinc-800 p-6 text-white sm:p-9 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-12 lg:p-12">
           <div className="max-w-3xl">
             <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">
-              <span className="h-px w-6 bg-indigo-300" aria-hidden="true" />
+              <span className="h-px w-6 bg-amber-400" aria-hidden="true" />
               {c.eyebrow}
             </p>
             <h2 id="cta-title" className="mt-4 text-balance text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-4xl lg:text-[2.7rem]">
@@ -42,13 +43,13 @@ export function ClosingCta({ landing }: { landing: Landing }) {
   );
 }
 
-export function LandingFooter({ landing }: { landing: Landing }) {
+export function LandingFooter({ landing, locale = "id" }: { landing: Landing; locale?: Locale }) {
   const f = landing.footer;
   const anchors = ["#fitur", "#kalkulator", "#cara-kerja", "#keamanan", "#faq"];
 
   return (
     <footer className="border-t border-line/60 bg-subtle/30">
-      <div className="mx-auto grid w-full max-w-7xl grid-cols-2 gap-x-8 gap-y-10 px-4 py-10 sm:px-6 sm:py-12 lg:grid-cols-[minmax(0,1.4fr)_minmax(150px,0.65fr)_minmax(150px,0.65fr)] lg:px-8">
+      <div className="mx-auto grid w-full max-w-7xl grid-cols-2 gap-x-8 gap-y-10 px-4 py-10 sm:px-6 sm:py-12 lg:grid-cols-[minmax(0,1.4fr)_minmax(150px,0.65fr)_minmax(150px,0.65fr)_minmax(150px,0.65fr)] lg:px-8">
         <div className="col-span-2 max-w-md sm:col-span-1">
           <Link href="/" className="inline-flex items-center gap-3 transition-opacity hover:opacity-80">
             <BrandLogo size="md" />
@@ -100,6 +101,15 @@ export function LandingFooter({ landing }: { landing: Landing }) {
                 {f.dashboard}
               </Link>
             </li>
+          </ul>
+        </nav>
+
+        <nav aria-label="Kebijakan layanan" className="col-span-2 lg:col-span-1">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-foreground">{locale === "id" ? "Legal" : "Legal"}</h3>
+          <ul className="mt-4 space-y-2.5">
+            <li><Link href="/privacy-policy" className="inline-flex min-h-6 items-center text-sm text-muted hover:text-accent">{locale === "id" ? "Kebijakan Privasi" : "Privacy Policy"}</Link></li>
+            <li><Link href="/terms-of-service" className="inline-flex min-h-6 items-center text-sm text-muted hover:text-accent">{locale === "id" ? "Ketentuan Layanan" : "Terms of Service"}</Link></li>
+            <li><Link href="/data-deletion" className="inline-flex min-h-6 items-center text-sm text-muted hover:text-accent">{locale === "id" ? "Penghapusan Data Pengguna" : "User Data Deletion"}</Link></li>
           </ul>
         </nav>
       </div>

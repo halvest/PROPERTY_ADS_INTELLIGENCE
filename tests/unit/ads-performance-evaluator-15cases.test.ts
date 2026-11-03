@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   evaluateAdsPerformance,
   calculateMetricComparison,
+  qualifiesForScaleVerdict,
 } from "@/lib/ads/performance-evaluator";
 import { parseDateRange, getEquivalentPreviousPeriod } from "@/lib/ads/date-utils";
 import { classifyResult } from "@/lib/ads/service";
@@ -173,25 +174,6 @@ describe("Audit Section I: 15 Core Test Scenarios for Ads Performance Evaluation
     expect(res.dataStatusReason).toContain("perubahan signifikan");
   });
 
-  // Kasus 9: WhatsApp menerima pesan, tetapi hasil konversi Meta tercatat nol (tracking disconnect)
-  it("Kasus 9: WhatsApp menerima pesan, tetapi konversi Meta tercatat nol — tracking disconnect terdeteksi, aksi periksa_tracking", () => {
-    const res = evaluateAdsPerformance({
-      period: "7d",
-      durationDays: 7,
-      spend: 350000,
-      results: 0, // Meta recorded 0 conversions
-      whatsappMessagesActual: 15, // Actual incoming WhatsApp chats exist
-      targetCpr: 35000,
-      linkClicks: 220,
-      impressions: 18000,
-    });
-
-    expect(res.dataStatus).toBe("tidak_valid");
-    expect(res.performanceStatus).toBe("belum_dapat_dinilai");
-    expect(res.action).toBe("periksa_tracking");
-    expect(res.uncertaintyNotes.some((n) => n.includes("tracking") || n.includes("WhatsApp"))).toBe(true);
-  });
-
   // Kasus 10: Data hasil tidak tersedia akibat kegagalan pengambilan data (null / unavailable)
   it("Kasus 10: Data hasil tidak tersedia (null) — dataStatus tidak_valid, CPR null, aksi periksa_tracking", () => {
     const res = evaluateAdsPerformance({
@@ -251,12 +233,12 @@ describe("Audit Section I: 15 Core Test Scenarios for Ads Performance Evaluation
     expect(compResults.previous).toBe(0);
     expect(compResults.percentageDelta).toBeNull(); // Strictly null, not Infinity or NaN
     expect(compResults.isDefined).toBe(false);
-    expect(compResults.displayDelta).toBe("Pembanding 0");
+    expect(compResults.displayDelta).toBe("Belum ada data di periode pembanding");
     expect(compResults.absoluteDelta).toBe(10);
 
     const compSpend = calculateMetricComparison(500000, 0, "en");
     expect(compSpend.percentageDelta).toBeNull();
-    expect(compSpend.displayDelta).toBe("Baseline 0");
+    expect(compSpend.displayDelta).toBe("Belum ada data di periode pembanding");
   });
 
   // Kasus 14: Perbedaan tujuan optimasi atau definisi hasil
@@ -307,5 +289,162 @@ describe("Audit Section I: 15 Core Test Scenarios for Ads Performance Evaluation
     // Verify outcomes clearly differ between periods
     expect(eval1d.dataStatus).not.toEqual(eval14d.dataStatus);
     expect(eval1d.action).not.toEqual(eval14d.action);
+  });
+
+  it("Objek Dijeda dengan CPR historis buruk: INVESTIGATE/pantau, bukan STOP", () => {
+    const res = evaluateAdsPerformance({
+      period: "14d",
+      durationDays: 14,
+      spend: 250000,
+      results: 0,
+      targetCpr: 50000,
+      linkClicks: 180,
+      impressions: 15000,
+      trackingStatus: "verified",
+      entityStatus: "PAUSED",
+      analysisScope: "ad",
+    });
+    expect(res.action).toBe("optimasi");
+    expect(res.action).not.toBe("hentikan_sementara");
+    expect(res.action).not.toBe("kurangi");
+    expect(res.action).not.toBe("pertahankan");
+    expect(res.entityStatus).toBe("PAUSED");
+    expect(res.headline).toBe("Objek dijeda dengan histori efisiensi di bawah target");
+    expect(res.mainReason).not.toMatch(/DILARANG/);
+    expect(res.nextActions[0]?.title).toBe("Audit materi kreatif dan penawaran sebelum replikasi");
+  });
+
+  it("Objek dijeda tanpa belanja dan tayangan tidak menyuruh akumulasi data", () => {
+    const res = evaluateAdsPerformance({
+      period: "1d",
+      durationDays: 1,
+      spend: 0,
+      results: 0,
+      targetCpr: 50000,
+      linkClicks: 0,
+      impressions: 0,
+      entityStatus: "PAUSED",
+    });
+    expect(res.action).toBe("pantau");
+    expect(res.headline).toBe("Tidak ada penayangan aktif pada periode ini");
+    expect(res.subtext).toMatch(/tidak menyerap anggaran/);
+    expect(res.subtext).not.toMatch(/DILARANG|akumulasi data/i);
+    expect(res.nextActions[0]?.title).toBe("Ubah rentang tanggal ke periode historis");
+    expect(res.nextActions[0]?.do).not.toMatch(/Pertahankan budget/);
+  });
+
+  it("Diagnosis iklan menyebut rantai metrik dan tidak menilai creative", () => {
+    const res = evaluateAdsPerformance({
+      period: "14d",
+      durationDays: 14,
+      spend: 280000,
+      results: 8,
+      targetCpr: 40000,
+      linkClicks: 120,
+      impressions: 10000,
+      analysisScope: "ad",
+    });
+    expect(res.uncertaintyNotes.some((note) => note.includes("Diagnosis iklan") && note.includes("Creative, audience, dan placement tidak tersedia"))).toBe(true);
+  });
+
+  it("Tanpa target CPR, volume hasil tidak menjadi sesuai target", () => {
+    const res = evaluateAdsPerformance({
+      period: "30d",
+      durationDays: 30,
+      spend: 3000000,
+      results: 100,
+      linkClicks: 1800,
+      impressions: 120000,
+      entityStatus: "ACTIVE",
+    });
+    expect(res.performanceStatus).toBe("belum_dapat_dinilai");
+    expect(res.action).not.toBe("pertahankan");
+    expect(res.nextActions.some((item) => item.stop_loss.includes("2x target"))).toBe(false);
+  });
+
+  it("Objek dijeda tanpa target tidak menyarankan anggaran lama", () => {
+    const res = evaluateAdsPerformance({
+      period: "30d",
+      durationDays: 30,
+      spend: 900000,
+      results: 20,
+      linkClicks: 400,
+      impressions: 20000,
+      entityStatus: "PAUSED",
+    });
+    expect(res.action).toBe("tinjau_reaktivasi");
+    expect(res.headline).toBe("Objek dijeda dan target belum diatur");
+    expect(JSON.stringify(res.nextActions)).not.toMatch(/anggaran harian|2x target/);
+  });
+
+  it("Objek Dijeda dengan performa memenuhi target: RE-ACTIVATE", () => {
+    const res = evaluateAdsPerformance({
+      period: "30d",
+      durationDays: 30,
+      spend: 3000000,
+      results: 100,
+      targetCpr: 35000,
+      linkClicks: 1800,
+      impressions: 120000,
+      entityStatus: "PAUSED",
+      analysisScope: "campaign",
+    });
+    expect(res.performanceStatus).toBe("memenuhi_target");
+    expect(res.action).toBe("tinjau_reaktivasi");
+    expect(res.nextActions[0]?.do).not.toMatch(/anggaran harian yang sama/);
+    expect(res.periodConfidence).toBe("high");
+    expect(res.analysisScope).toBe("campaign");
+  });
+
+  it("Periode 1–3 hari memaksa confidence rendah dan aksi pantau", () => {
+    const res = evaluateAdsPerformance({
+      period: "3d",
+      durationDays: 3,
+      spend: 400000,
+      results: 0,
+      targetCpr: 50000,
+      linkClicks: 90,
+      impressions: 8000,
+      entityStatus: "ACTIVE",
+    });
+    expect(res.dataStatus).toBe("terbatas");
+    expect(res.action).toBe("pantau");
+    expect(res.periodConfidence).toBe("low");
+  });
+
+  it("SCALE tetap terbuka saat frekuensi multi-hari null, selama syarat ketat lain terpenuhi", () => {
+    expect(qualifiesForScaleVerdict({
+      performanceStatus: "memenuhi_target",
+      dataStatus: "cukup",
+      results: 40,
+      targetCpr: 50000,
+      frequency: null,
+      durationDays: 14,
+      entityStatus: "ACTIVE",
+    })).toBe(true);
+    expect(qualifiesForScaleVerdict({
+      performanceStatus: "memenuhi_target",
+      dataStatus: "cukup",
+      results: 40,
+      targetCpr: 50000,
+      frequency: 3.1,
+      durationDays: 14,
+      entityStatus: "ACTIVE",
+    })).toBe(false);
+  });
+
+  it("CTR rendah dengan CPR di atas target menandai masalah hook", () => {
+    const res = evaluateAdsPerformance({
+      period: "14d",
+      durationDays: 14,
+      spend: 1400000,
+      results: 20,
+      targetCpr: 40000,
+      linkClicks: 200,
+      impressions: 40000,
+      linkCtr: 0.5,
+      entityStatus: "ACTIVE",
+    });
+    expect(res.causalDiagnostics.some((item) => item.code === "creative_hook")).toBe(true);
   });
 });

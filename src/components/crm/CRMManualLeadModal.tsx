@@ -27,14 +27,14 @@ export function CRMManualLeadModal({
   const [telepon, setTelepon] = useState("");
   const [domisili, setDomisili] = useState("");
   const [tanggalMasuk, setTanggalMasuk] = useState(todayInJakarta);
-  const [namaIklan, setNamaIklan] = useState("");
   const [adId, setAdId] = useState<string | null>(null);
   const [campaignId, setCampaignId] = useState<string | null>(null);
+  const [adSetId, setAdSetId] = useState<string | null>(null);
+  const [leadSource, setLeadSource] = useState("");
+  const [attributionNote, setAttributionNote] = useState("");
   const [sourceOptions, setSourceOptions] = useState<Array<{ adId: string; campaignId: string; adName: string; campaignName: string; adStatus: string }>>([]);
   const [campaignOptions, setCampaignOptions] = useState<Array<{ id: string; name: string }>>([]);
-  const [sourceSearch, setSourceSearch] = useState("");
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
-  const [sourceMode, setSourceMode] = useState<"linked" | "manual" | "organic">("organic");
+  const [adSetOptions, setAdSetOptions] = useState<Array<{ providerAdSetId: string; name: string; campaignId: string; adIds: string[] }>>([]);
   const [smartPasteOpen, setSmartPasteOpen] = useState(false);
   const [smartPasteText, setSmartPasteText] = useState("");
   const [keepContext, setKeepContext] = useState(true);
@@ -54,6 +54,7 @@ export function CRMManualLeadModal({
         if (!response.ok || !json.success) throw new Error(json.error || "Gagal memuat sumber iklan.");
         setSourceOptions(json.data?.ads || []);
         setCampaignOptions(json.data?.campaigns || []);
+        setAdSetOptions(json.data?.adSets || []);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Gagal memuat sumber iklan."));
   }, [isOpen]);
@@ -63,12 +64,11 @@ export function CRMManualLeadModal({
     setTelepon("");
     setDomisili("");
     setTanggalMasuk(todayInJakarta());
-    setNamaIklan("");
     setAdId(null);
     setCampaignId(null);
-    setSourceSearch("");
-    setSourceMenuOpen(false);
-    setSourceMode("organic");
+    setAdSetId(null);
+    setLeadSource("");
+    setAttributionNote("");
     setSmartPasteOpen(false);
     setSmartPasteText("");
     setKeepContext(true);
@@ -136,10 +136,11 @@ export function CRMManualLeadModal({
           telepon: telepon.trim(),
           domisili: domisili.trim() || undefined,
           tanggalMasuk: tanggalMasuk || undefined,
-          namaIklan: namaIklan.trim() || undefined,
           adId: adId || undefined,
           campaignId: campaignId || undefined,
-          sourceMode,
+          adSetId: adSetId || undefined,
+          leadSource: leadSource || undefined,
+          attributionNote: attributionNote.trim() || undefined,
           tahapFunnel,
           qualityLabel: qualityLabel || null,
           catatan: catatan.trim() || undefined,
@@ -163,11 +164,11 @@ export function CRMManualLeadModal({
           if (!keepContext) {
             setDomisili("");
             setTanggalMasuk(todayInJakarta());
-            setNamaIklan("");
             setAdId(null);
             setCampaignId(null);
-            setSourceSearch("");
-            setSourceMode("organic");
+            setAdSetId(null);
+            setLeadSource("");
+            setAttributionNote("");
             setTahapFunnel("baru");
             setQualityLabel("");
           }
@@ -228,9 +229,13 @@ export function CRMManualLeadModal({
           </div>
         )}
 
-        <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900/50 dark:bg-amber-950/20">
-          <button type="button" onClick={() => setSmartPasteOpen((open) => !open)} className="text-left text-xs font-semibold text-amber-900 dark:text-amber-200">
-            ⚡ Tempel Cepat Format Chat/WA (Otomatis Isi Kolom) {smartPasteOpen ? "▴" : "▾"}
+        <div className="rounded-xl border border-amber-200/90 bg-amber-50/70 p-3 dark:border-amber-900/50 dark:bg-amber-950/20">
+          <button type="button" onClick={() => setSmartPasteOpen((open) => !open)} className="inline-flex items-center gap-1.5 text-left text-xs font-semibold text-amber-900 dark:text-amber-200 cursor-pointer">
+            <svg className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <span>{locale === "id" ? "Tempel Cepat Format Chat / WhatsApp (Otomatis Isi Kolom)" : "Smart Paste Chat / WhatsApp (Auto-Fill)"}</span>
+            <span className="text-[10px] text-amber-700 dark:text-amber-400 font-mono">{smartPasteOpen ? "▲" : "▼"}</span>
           </button>
           {smartPasteOpen && <div className="mt-2 space-y-2">
             <textarea rows={2} value={smartPasteText} onChange={(event) => setSmartPasteText(event.target.value)} placeholder="Budi Santoso - 081234567890 - Sleman - Tanya rumah tipe 45 KPR" className="w-full rounded-lg border border-amber-200 bg-white p-2 text-xs text-zinc-900 dark:border-amber-900 dark:bg-zinc-900 dark:text-zinc-100" />
@@ -297,54 +302,45 @@ export function CRMManualLeadModal({
             />
           </div>
 
-          {/* 5. Kampanye / Iklan */}
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Kampanye (opsional)" : "Campaign (optional)"}</label>
+            <select value={campaignId || ""} onChange={(event) => { setCampaignId(event.target.value || null); setAdSetId(null); setAdId(null); }} className="w-full cursor-pointer rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100">
+              <option value="">{locale === "id" ? "Sumber belum diketahui" : "Source unknown"}</option>
+              {campaignOptions.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Ad set (opsional)" : "Ad set (optional)"}</label>
+            <select value={adSetId || ""} onChange={(event) => { setAdSetId(event.target.value || null); setAdId(null); }} className="w-full cursor-pointer rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100">
+              <option value="">{locale === "id" ? "Tidak dipilih" : "Not selected"}</option>
+              {adSetOptions.filter((adSet) => !campaignId || adSet.campaignId === campaignId).map((adSet) => <option key={adSet.providerAdSetId} value={adSet.providerAdSetId}>{adSet.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Iklan (opsional)" : "Ad (optional)"}</label>
+            <select value={adId || ""} onChange={(event) => setAdId(event.target.value || null)} className="w-full cursor-pointer rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100">
+              <option value="">{locale === "id" ? "Tidak dipilih" : "Not selected"}</option>
+              {sourceOptions.filter((source) => {
+                if (campaignId && source.campaignId !== campaignId) return false;
+                const selectedSet = adSetOptions.find((adSet) => adSet.providerAdSetId === adSetId);
+                return !selectedSet || selectedSet.adIds.includes(source.adId);
+              }).map((source) => <option key={source.adId} value={source.adId}>{source.adName}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Sumber prospek" : "Lead source"}</label>
+            <select value={leadSource} onChange={(event) => setLeadSource(event.target.value)} className="w-full cursor-pointer rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100">
+              <option value="">{locale === "id" ? "Belum diketahui" : "Unknown"}</option>
+              <option value="Iklan Meta">Meta Ads</option>
+              <option value="Organik">Organik</option>
+              <option value="Referral">Referral</option>
+              <option value="Lainnya">{locale === "id" ? "Lainnya" : "Other"}</option>
+            </select>
+          </div>
           <div className="sm:col-span-2">
-            <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-              {locale === "id" ? "Sumber Kampanye / Iklan" : "Campaign / Source Ad"}
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                role="combobox"
-                aria-expanded={sourceMenuOpen}
-                aria-controls="crm-source-options"
-                placeholder={locale === "id" ? "Cari kampanye/iklan atau ketik sumber manual/organik" : "Search campaign/ad or type a manual/organic source"}
-                value={sourceSearch}
-                onFocus={() => setSourceMenuOpen(true)}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setSourceSearch(value);
-                  setNamaIklan(value);
-                  setAdId(null);
-                  setCampaignId(null);
-                  setSourceMode(value.trim() ? "manual" : "organic");
-                }}
-                onKeyDown={(event) => { if (event.key === "Escape") setSourceMenuOpen(false); }}
-                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100"
-              />
-              {sourceMenuOpen && <div id="crm-source-options" role="listbox" className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-                {campaignOptions.filter((campaign) => campaign.name.toLowerCase().includes(sourceSearch.toLowerCase())).slice(0, 15).map((campaign) => (
-                  <button key={`campaign:${campaign.id}`} type="button" role="option" aria-selected={sourceMode === "linked" && campaignId === campaign.id && !adId} onClick={() => {
-                    setAdId(null); setCampaignId(campaign.id); setNamaIklan(campaign.name); setSourceSearch(campaign.name); setSourceMode("linked"); setSourceMenuOpen(false);
-                  }} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-indigo-50 dark:hover:bg-indigo-950/40">
-                    <span className="block truncate text-xs font-semibold text-zinc-800 dark:text-zinc-200">{campaign.name}</span>
-                    <span className="text-[10px] text-zinc-400">{locale === "id" ? "Kampanye" : "Campaign"}</span>
-                  </button>
-                ))}
-                {sourceOptions.filter((source) => `${source.campaignName} ${source.adName}`.toLowerCase().includes(sourceSearch.toLowerCase())).slice(0, 40).map((source) => (
-                  <button key={source.adId} type="button" role="option" aria-selected={adId === source.adId} onClick={() => {
-                    setAdId(source.adId); setCampaignId(source.campaignId); setNamaIklan(source.adName); setSourceSearch(`${source.campaignName} / ${source.adName}`); setSourceMode("linked"); setSourceMenuOpen(false);
-                  }} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-indigo-50 dark:hover:bg-indigo-950/40">
-                    <span className="block truncate text-xs font-semibold text-zinc-800 dark:text-zinc-200">{source.campaignName} / {source.adName}</span>
-                    <span className="text-[10px] text-zinc-400">{source.adStatus}</span>
-                  </button>
-                ))}
-                {sourceSearch.trim() && <button type="button" role="option" aria-selected={sourceMode === "manual"} onClick={() => { setNamaIklan(sourceSearch.trim()); setAdId(null); setCampaignId(null); setSourceMode("manual"); setSourceMenuOpen(false); }} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs font-medium text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950/40">{locale === "id" ? `Gunakan sumber manual: “${sourceSearch.trim()}”` : `Use manual source: “${sourceSearch.trim()}”`}</button>}
-                <button type="button" role="option" aria-selected={sourceMode === "organic"} onClick={() => { setNamaIklan(""); setSourceSearch(""); setAdId(null); setCampaignId(null); setSourceMode("organic"); setSourceMenuOpen(false); }} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">{locale === "id" ? "Organik / Tidak diketahui" : "Organic / Unknown"}</button>
-                {sourceOptions.length === 0 && campaignOptions.length === 0 && <p className="px-2.5 py-2 text-[11px] text-zinc-400">{locale === "id" ? "Referensi iklan belum tersedia." : "No ad references available."}</p>}
-              </div>}
-            </div>
-            <p className="mt-1 text-[10px] text-zinc-400">{sourceMode === "linked" ? (locale === "id" ? "Terhubung ke ID iklan dan kampanye resmi." : "Linked to official ad and campaign IDs.") : sourceMode === "manual" ? (locale === "id" ? "Nama manual dicocokkan; sumber ambigu tidak dipaksa terhubung." : "Manual source is matched; ambiguous sources are not force-linked.") : (locale === "id" ? "Organik atau sumber belum diketahui." : "Organic or unknown source.")}</p>
+            <label className="mb-1 block text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Catatan atribusi" : "Attribution note"}</label>
+            <input type="text" value={attributionNote} onChange={(event) => setAttributionNote(event.target.value)} placeholder={locale === "id" ? "Opsional. Contoh: prospek dari grup kampanye, iklan pastinya belum diketahui." : "Optional."} className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100" />
+            <p className="mt-1 text-[10px] text-zinc-400">{locale === "id" ? "Kosongkan jika sumber iklan tidak diketahui. Memilih kampanye saja tidak menghubungkan prospek ke satu iklan." : "Leave blank when the ad source is unknown. A campaign selection does not attach the prospect to one ad."}</p>
           </div>
 
           {/* 6. Tahap Funnel */}
@@ -378,9 +374,9 @@ export function CRMManualLeadModal({
               className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-850 dark:text-zinc-100 cursor-pointer"
             >
               <option value="">{locale === "id" ? "Belum Dinilai (Tunda)" : "Not Assessed Yet"}</option>
-              <option value="Hot">🔥 Hot ({locale === "id" ? "Sangat Antusias & Siap Beli" : "High Intent"})</option>
-              <option value="Warm">☀️ Warm ({locale === "id" ? "Berminat / Masih Pertimbangkan" : "Medium Intent"})</option>
-              <option value="Cold">❄️ Cold ({locale === "id" ? "Minat Rendah / Belum Respon" : "Low Intent"})</option>
+              <option value="Hot">Hot ({locale === "id" ? "Sangat Antusias & Siap Beli" : "High Intent"})</option>
+              <option value="Warm">Warm ({locale === "id" ? "Berminat / Masih Pertimbangkan" : "Medium Intent"})</option>
+              <option value="Cold">Cold ({locale === "id" ? "Minat Rendah / Belum Respon" : "Low Intent"})</option>
             </select>
           </div>
 
@@ -419,7 +415,7 @@ export function CRMManualLeadModal({
           <button
             type="submit"
             disabled={isSubmitting}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50 disabled:pointer-events-none transition-colors cursor-pointer"
+            className="btn-solar inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold disabled:opacity-50 disabled:pointer-events-none transition-colors cursor-pointer"
           >
             {isSubmitting ? (
               <>

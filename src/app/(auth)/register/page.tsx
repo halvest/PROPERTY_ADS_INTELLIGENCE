@@ -208,7 +208,7 @@ export default function RegisterPage() {
             <label htmlFor="confirmPassword" className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">{dict.auth.confirmPasswordLabel}</label>
             <input id="confirmPassword" name="confirmPassword" type={showPassword ? "text" : "password"} autoComplete="new-password" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder={dict.auth.passwordPlaceholder} className="block min-h-11 w-full rounded-xl border border-zinc-200 bg-white px-4 text-sm text-zinc-950 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 dark:border-white/10 dark:bg-white/[0.04] dark:text-white" />
           </div>
-          <button type="submit" disabled={isLoading} className="flex min-h-12 w-full items-center justify-center rounded-xl bg-[#20263a] px-4 text-sm font-semibold text-white transition hover:bg-[#2c3450] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-indigo-500 dark:hover:bg-indigo-400 lg:col-span-2">
+          <button type="submit" disabled={isLoading} className="flex min-h-12 w-full items-center justify-center rounded-xl btn-solar px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-55 cursor-pointer lg:col-span-2">
             {isLoading ? dict.common.loading : dict.auth.signUpButton}
           </button>
         </form>

@@ -281,7 +281,7 @@ export async function POST(
       // Fetch current status
       const { data: conv } = await supabase
         .from("conversations")
-        .select("id, attribution_status, ad_id")
+        .select("id, attribution_status, ad_id, campaign_id")
         .eq("id", id)
         .eq("organization_id", organizationId)
         .maybeSingle();
@@ -294,12 +294,40 @@ export async function POST(
       }
 
       const prevStatus = conv.attribution_status as AttributionStatus;
+      const requestedAdId = typeof body.adId === "string" ? body.adId.trim() : "";
+      let nextAdId = conv.ad_id;
+      let nextStatus = newStatus as AttributionStatus;
+      if (requestedAdId) {
+        try {
+          const resolved = await resolveCrmLeadSource(supabase, organizationId, { adId: requestedAdId, campaignId: conv.campaign_id });
+          if (resolved.matchMethod !== "internal_ad_id" && resolved.matchMethod !== "meta_ad_id") {
+            return NextResponse.json(
+              { success: false, error: "ID iklan tidak terpetakan ke iklan di workspace ini." },
+              { status: 400 }
+            );
+          }
+          nextAdId = resolved.adId;
+          nextStatus = "verified";
+        } catch (error) {
+          return NextResponse.json(
+            { success: false, error: error instanceof Error ? error.message : "ID iklan tidak valid untuk workspace ini." },
+            { status: 400 }
+          );
+        }
+      }
 
-      // Update conversation status
+      if (nextStatus === "verified" && !nextAdId) {
+        return NextResponse.json(
+          { success: false, error: "Atribusi terverifikasi membutuhkan ID iklan yang ada di workspace ini." },
+          { status: 400 }
+        );
+      }
+
       await supabase
         .from("conversations")
         .update({
-          attribution_status: newStatus,
+          attribution_status: nextStatus,
+          ad_id: nextAdId,
           updated_at: new Date().toISOString(),
         })
         .eq("id", conv.id)
@@ -310,9 +338,9 @@ export async function POST(
         organizationId,
         conversationId: conv.id,
         previousStatus: prevStatus,
-        newStatus,
+        newStatus: nextStatus,
         previousAdId: conv.ad_id,
-        newAdId: conv.ad_id,
+        newAdId: nextAdId,
         attributionMethod: "manual_supervisor_correction",
         reason: reason.trim(),
         actorId: user?.id || "manual-sales-user",

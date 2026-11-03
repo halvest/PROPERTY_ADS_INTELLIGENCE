@@ -11,10 +11,10 @@ export function ClosingCta({ landing }: { landing: Landing }) {
   return (
     <section className="border-b border-line/60 bg-background py-14 sm:py-18 lg:py-20" aria-labelledby="cta-title">
       <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="grid gap-7 rounded-3xl bg-[#171a2b] p-6 text-white sm:p-9 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-12 lg:p-12">
+        <div className="grid gap-7 rounded-3xl bg-zinc-900 border border-zinc-800 p-6 text-white sm:p-9 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-12 lg:p-12">
           <div className="max-w-3xl">
             <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">
-              <span className="h-px w-6 bg-indigo-300" aria-hidden="true" />
+              <span className="h-px w-6 bg-amber-400" aria-hidden="true" />
               {c.eyebrow}
             </p>
             <h2 id="cta-title" className="mt-4 text-balance text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-4xl lg:text-[2.7rem]">

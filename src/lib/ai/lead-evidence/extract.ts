@@ -11,20 +11,14 @@ import {
   type ExtractedLeadEvidence,
 } from "./schema";
 import { isMetaModelApiConfigured } from "../meta/config";
+import { sanitizeUntrustedText } from "@/lib/ai/sanitize-untrusted-text";
 
 export interface ExtractEvidenceOptions {
   client?: MetaModelApiClient;
 }
 
-/**
- * Sanitizes untrusted conversation text before inserting it into the prompt.
- * Escapes boundary tags to prevent delimiter confusion attacks.
- */
 function sanitizeConversationInput(text: string): string {
-  return text
-    .replace(/<\/conversation_transcript>/gi, "[ESCAPED_TRANSCRIPT_TAG]")
-    .replace(/<conversation_transcript>/gi, "[ESCAPED_TRANSCRIPT_TAG]")
-    .trim();
+  return sanitizeUntrustedText(text);
 }
 
 /**

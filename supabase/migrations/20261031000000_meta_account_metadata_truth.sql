@@ -31,4 +31,8 @@ SET status = 'failed',
     error_message = 'Sync worker stopped before completion; run Sync Now to retry.',
     completed_at = now()
 WHERE status = 'running'
-  AND started_at < now() - interval '15 minutes';
+  AND started_at < now() - interval '3 minutes';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_jobs_one_running
+  ON public.sync_jobs (organization_id, target_account_id)
+  WHERE status = 'running' AND target_account_id IS NOT NULL;

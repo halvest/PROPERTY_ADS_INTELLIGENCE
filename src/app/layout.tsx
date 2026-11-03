@@ -83,7 +83,7 @@ export default async function RootLayout({
       <head>
         <ThemeScript />
       </head>
-      <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-[#090a0c] dark:text-zinc-100 transition-colors duration-150">
+      <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 transition-colors duration-150">
         <ThemeProvider>
           <I18nProvider initialLocale={initialLocale}>
             <ToastProvider>{children}</ToastProvider>

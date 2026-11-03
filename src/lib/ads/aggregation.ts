@@ -201,3 +201,85 @@ export function aggregateAdInsights(rows: AdInsightRowLike[]): AdMetricsAggregat
     rowCount: rows.length,
   };
 }
+
+export type PrimaryResultKind = "messaging" | "leads" | "legacy";
+
+export interface PrimaryResultSelection {
+  kind: PrimaryResultKind;
+  count: number | null;
+  cost: number | null;
+  label: string;
+}
+
+/**
+ * CTWA decision metric. Messaging conversations are the ad result.
+ * Lead and pixel counts stay on the aggregate and are not selected here.
+ */
+export function selectPrimaryResult(agg: AdMetricsAggregate, _objective?: string | null): PrimaryResultSelection {
+  if (agg.messagingConversations !== null) {
+    return {
+      kind: "messaging",
+      count: agg.messagingConversations,
+      cost: agg.costPerMessagingConversation,
+      label: "Percakapan Pesan (CTWA)",
+    };
+  }
+  return {
+    kind: "legacy",
+    count: agg.results,
+    cost: agg.costPerResult,
+    label: "Hasil Konversi",
+  };
+}
+
+export function enumerateInclusiveDates(since: string, until: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(since) || !/^\d{4}-\d{2}-\d{2}$/.test(until) || since > until) return [];
+  const dates: string[] = [];
+  const cursor = new Date(`${since}T00:00:00Z`);
+  const end = new Date(`${until}T00:00:00Z`);
+  while (cursor.getTime() <= end.getTime()) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+export interface ZeroFilledDailyTrends {
+  spend: number[];
+  results: number[];
+  cpr: number[];
+  ctr: number[];
+}
+
+/** Every calendar day from since through until is present. Missing insight rows are 0. */
+export function buildZeroFilledDailyTrends(
+  rows: AdInsightRowLike[],
+  since: string,
+  until: string,
+  resultOf: (row: AdInsightRowLike) => number = (row) => num(row.conversions) ?? 0
+): ZeroFilledDailyTrends {
+  const dates = enumerateInclusiveDates(since, until);
+  const daily = new Map<string, { spend: number; results: number; clicks: number; impressions: number }>();
+  for (const row of rows) {
+    const day = row.date_start ? String(row.date_start).slice(0, 10) : "";
+    if (!day || (dates.length > 0 && (day < since || day > until))) continue;
+    const bucket = daily.get(day) || { spend: 0, results: 0, clicks: 0, impressions: 0 };
+    bucket.spend += num(row.spend) ?? 0;
+    bucket.results += resultOf(row);
+    bucket.clicks += num(row.link_clicks ?? row.linkClicks) ?? 0;
+    bucket.impressions += num(row.impressions) ?? 0;
+    daily.set(day, bucket);
+  }
+  const spend: number[] = [];
+  const results: number[] = [];
+  const cpr: number[] = [];
+  const ctr: number[] = [];
+  for (const day of dates) {
+    const item = daily.get(day) || { spend: 0, results: 0, clicks: 0, impressions: 0 };
+    spend.push(Math.round(item.spend));
+    results.push(item.results);
+    cpr.push(item.results > 0 ? Math.round(item.spend / item.results) : 0);
+    ctr.push(item.impressions > 0 ? Number(((item.clicks / item.impressions) * 100).toFixed(2)) : 0);
+  }
+  return { spend, results, cpr, ctr };
+}

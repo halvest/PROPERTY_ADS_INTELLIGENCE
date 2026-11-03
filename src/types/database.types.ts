@@ -1293,6 +1293,372 @@ export type Database = {
           },
         ]
       }
+      creative_projects: {
+        Row: {
+          id: string
+          organization_id: string
+          user_id: string
+          project_name: string
+          campaign_name: string | null
+          headline: string | null
+          subheadline: string | null
+          description: string | null
+          property_type: string | null
+          property_location: string | null
+          starting_price: number | null
+          land_area: number | null
+          building_area: number | null
+          bedrooms: number | null
+          bathrooms: number | null
+          floors: number | null
+          promo_headline: string | null
+          cashback_amount: number | null
+          has_free_ppn: boolean
+          dp_amount: number | null
+          monthly_installment: number | null
+          kpr_rate: number | null
+          promo_deadline: string | null
+          cta_text: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          user_id: string
+          project_name: string
+          campaign_name?: string | null
+          headline?: string | null
+          subheadline?: string | null
+          description?: string | null
+          property_type?: string | null
+          property_location?: string | null
+          starting_price?: number | null
+          land_area?: number | null
+          building_area?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          floors?: number | null
+          promo_headline?: string | null
+          cashback_amount?: number | null
+          has_free_ppn?: boolean
+          dp_amount?: number | null
+          monthly_installment?: number | null
+          kpr_rate?: number | null
+          promo_deadline?: string | null
+          cta_text?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          user_id?: string
+          project_name?: string
+          campaign_name?: string | null
+          headline?: string | null
+          subheadline?: string | null
+          description?: string | null
+          property_type?: string | null
+          property_location?: string | null
+          starting_price?: number | null
+          land_area?: number | null
+          building_area?: number | null
+          bedrooms?: number | null
+          bathrooms?: number | null
+          floors?: number | null
+          promo_headline?: string | null
+          cashback_amount?: number | null
+          has_free_ppn?: boolean
+          dp_amount?: number | null
+          monthly_installment?: number | null
+          kpr_rate?: number | null
+          promo_deadline?: string | null
+          cta_text?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_projects_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      creative_generations: {
+        Row: {
+          id: string
+          project_id: string
+          organization_id: string
+          user_id: string
+          aspect_ratio: string
+          style_preset: string
+          width: number
+          height: number
+          raw_image_url: string
+          final_composed_url: string | null
+          creative_direction: Json
+          prompt_used: string
+          quality_score: Json
+          status: string
+          error_message: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          organization_id: string
+          user_id: string
+          aspect_ratio: string
+          style_preset: string
+          width: number
+          height: number
+          raw_image_url: string
+          final_composed_url?: string | null
+          creative_direction?: Json
+          prompt_used?: string
+          quality_score?: Json
+          status?: string
+          error_message?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          organization_id?: string
+          user_id?: string
+          aspect_ratio?: string
+          style_preset?: string
+          width?: number
+          height?: number
+          raw_image_url?: string
+          final_composed_url?: string | null
+          creative_direction?: Json
+          prompt_used?: string
+          quality_score?: Json
+          status?: string
+          error_message?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_generations_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "creative_projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "creative_generations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      creative_assets: {
+        Row: {
+          id: string
+          project_id: string
+          organization_id: string
+          category: string
+          file_name: string
+          file_url: string
+          file_size_bytes: number | null
+          mime_type: string | null
+          is_primary: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          organization_id: string
+          category: string
+          file_name: string
+          file_url: string
+          file_size_bytes?: number | null
+          mime_type?: string | null
+          is_primary?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          organization_id?: string
+          category?: string
+          file_name?: string
+          file_url?: string
+          file_size_bytes?: number | null
+          mime_type?: string | null
+          is_primary?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_assets_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "creative_projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "creative_assets_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      creative_variations: {
+        Row: {
+          id: string
+          generation_id: string
+          project_id: string
+          organization_id: string
+          variation_label: string
+          style_preset: string
+          final_composed_url: string
+          headline: string
+          accent_color: string
+          creative_direction: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          generation_id: string
+          project_id: string
+          organization_id: string
+          variation_label: string
+          style_preset: string
+          final_composed_url: string
+          headline: string
+          accent_color: string
+          creative_direction?: Json
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          generation_id?: string
+          project_id?: string
+          organization_id?: string
+          variation_label?: string
+          style_preset?: string
+          final_composed_url?: string
+          headline?: string
+          accent_color?: string
+          creative_direction?: Json
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "creative_variations_generation_id_fkey"
+            columns: ["generation_id"]
+            isOneToOne: false
+            referencedRelation: "creative_generations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      property_image_enhancements: {
+        Row: {
+          id: string
+          organization_id: string
+          user_id: string
+          original_image_path: string
+          original_image_url: string
+          enhanced_image_path: string | null
+          enhanced_image_url: string | null
+          original_width: number | null
+          original_height: number | null
+          output_width: number | null
+          output_height: number | null
+          file_name: string
+          file_size: number | null
+          enhanced_file_size: number | null
+          mime_type: string | null
+          enhancement_mode: string
+          preset: string
+          intensity: number
+          processing_config: Json
+          processing_status: "queued" | "validating" | "analyzing" | "processing" | "completed" | "failed"
+          processing_metadata: Json
+          scene_category: string | null
+          error_message: string | null
+          created_at: string
+          completed_at: string | null
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          user_id: string
+          original_image_path: string
+          original_image_url: string
+          enhanced_image_path?: string | null
+          enhanced_image_url?: string | null
+          original_width?: number | null
+          original_height?: number | null
+          output_width?: number | null
+          output_height?: number | null
+          file_name: string
+          file_size?: number | null
+          enhanced_file_size?: number | null
+          mime_type?: string | null
+          enhancement_mode: string
+          preset: string
+          intensity?: number
+          processing_config?: Json
+          processing_status: "queued" | "validating" | "analyzing" | "processing" | "completed" | "failed"
+          processing_metadata?: Json
+          scene_category?: string | null
+          error_message?: string | null
+          created_at?: string
+          completed_at?: string | null
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          user_id?: string
+          original_image_path?: string
+          original_image_url?: string
+          enhanced_image_path?: string | null
+          enhanced_image_url?: string | null
+          original_width?: number | null
+          original_height?: number | null
+          output_width?: number | null
+          output_height?: number | null
+          file_name?: string
+          file_size?: number | null
+          enhanced_file_size?: number | null
+          mime_type?: string | null
+          enhancement_mode?: string
+          preset?: string
+          intensity?: number
+          processing_config?: Json
+          processing_status?: "queued" | "validating" | "analyzing" | "processing" | "completed" | "failed"
+          processing_metadata?: Json
+          scene_category?: string | null
+          error_message?: string | null
+          created_at?: string
+          completed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "property_image_enhancements_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

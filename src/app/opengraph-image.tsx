@@ -48,7 +48,7 @@ export default function OpengraphImage() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
-          {["CPQL", "Buyer Score", "Response SLA", "Attribution"].map((chip) => (
+          {["CPQL", "Hot / Warm / Cold", "Response SLA", "Attribution"].map((chip) => (
             <div
               key={chip}
               style={{

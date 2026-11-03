@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { formatDisplayCurrency } from "@/lib/format/display-currency";
 
 interface CTWAFunnelPanelProps {
   impressions: number;
@@ -46,21 +47,7 @@ export function CTWAFunnelPanel({
   const nonLinkInteractions = safeAllClicks - safeLinkClicks;
 
   const formatPct = (value: number) => `${value.toFixed(2).replace(".", idLocale ? "," : ".")}%`;
-  const money = (value: number | null) => {
-    const amount = Math.round(value || 0);
-    if (currency === "IDR") return `Rp ${formatNumber(amount)}`;
-    return new Intl.NumberFormat(idLocale ? "id-ID" : "en-US", {
-      style: "currency",
-      currency,
-      maximumFractionDigits: 0,
-    }).format(amount);
-  };
-  const badgeTone: Record<Tone, string> = {
-    amber: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300",
-    emerald: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300",
-    blue: "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-300",
-  };
-  const progressWidth = (value: number) => `${Math.min(100, Math.max(0, value))}%`;
+  const money = (value: number | null) => formatDisplayCurrency(value, currency, idLocale ? "id" : "en");
 
   let summary: React.ReactNode;
   let recommendation: string;
@@ -71,8 +58,8 @@ export function CTWAFunnelPanel({
       <>Click-to-result conversion is strong at <strong>{formatPct(cvr)}</strong> (<strong>{formatNumber(safeResults)} results</strong> from <strong>{formatNumber(safeLinkClicks)} link clicks</strong>), while link CTR is <strong>{formatPct(effectiveLinkCtr)}</strong> (<strong>{formatNumber(nonLinkInteractions)} of {formatNumber(safeAllClicks)} interactions</strong> engaged with the ad content/caption without clicking the link button).</>
     );
     recommendation = idLocale
-      ? "💡 Fokus Optimasi: Perkuat hook pada visual awal atau 3 detik pertama video, serta pastikan penawaran utama/CTA langsung terlihat di 2 baris pertama caption."
-      : "💡 Focus: Strengthen the opening visual hook or the first 3 seconds of video, and make the main offer/CTA immediately visible in the first 2 caption lines.";
+      ? "Hipotesis, bukan fakta: CTR tautan lebih rendah daripada rasio klik ke hasil. Visual, penawaran, audiens, dan placement tidak ada pada data ini, jadi hook tidak dapat disimpulkan."
+      : "Focus: Strengthen the opening visual hook or the first 3 seconds of video, and make the main offer/CTA immediately visible in the first 2 caption lines.";
   } else if (effectiveLinkCtr >= 1 && cvr < 15) {
     summary = idLocale ? (
       <>Iklan menarik trafik klik tautan yang tinggi: CTR <strong>{formatPct(effectiveLinkCtr)}</strong> (<strong>{formatNumber(safeLinkClicks)} klik</strong> dari <strong>{formatNumber(safeImpressions)} tayangan</strong>), namun baru <strong>{formatPct(cvr)}</strong> (<strong>{formatNumber(safeResults)} hasil</strong>) berlanjut menjadi konversi.</>
@@ -80,8 +67,8 @@ export function CTWAFunnelPanel({
       <>The ad attracts strong link traffic: CTR is <strong>{formatPct(effectiveLinkCtr)}</strong> (<strong>{formatNumber(safeLinkClicks)} clicks</strong> from <strong>{formatNumber(safeImpressions)} impressions</strong>), but only <strong>{formatPct(cvr)}</strong> (<strong>{formatNumber(safeResults)} results</strong>) convert.</>
     );
     recommendation = idLocale
-      ? "💡 Fokus Optimasi: Evaluasi kesesuaian janji iklan dengan sapaan otomatis WhatsApp atau kecepatan muat landing page."
-      : "💡 Focus: Check the ad promise against the WhatsApp greeting or landing-page load speed.";
+      ? "Fokus Optimasi: Evaluasi kesesuaian janji iklan dengan sapaan otomatis WhatsApp atau kecepatan muat landing page."
+      : "Focus: Check the ad promise against the WhatsApp greeting or landing-page load speed.";
   } else if (effectiveLinkCtr >= 1 && cvr >= 25) {
     summary = idLocale ? (
       <>Seluruh tahapan funnel berjalan sangat sehat. CTR tautan mencapai <strong>{formatPct(effectiveLinkCtr)}</strong> (<strong>{formatNumber(safeLinkClicks)} klik</strong> dari <strong>{formatNumber(safeImpressions)} tayangan</strong>, di atas target 1%) dengan rasio konversi <strong>{formatPct(cvr)}</strong> (<strong>{formatNumber(safeResults)} hasil</strong>, di atas target 25%).</>
@@ -89,8 +76,8 @@ export function CTWAFunnelPanel({
       <>Every funnel stage is performing strongly. Link CTR is <strong>{formatPct(effectiveLinkCtr)}</strong> (<strong>{formatNumber(safeLinkClicks)} clicks</strong> from <strong>{formatNumber(safeImpressions)} impressions</strong>, above the 1% target), with a <strong>{formatPct(cvr)}</strong> conversion rate (<strong>{formatNumber(safeResults)} results</strong>, above the 25% target).</>
     );
     recommendation = idLocale
-      ? "💡 Fokus Optimasi: Pertahankan materi iklan pemenang dan pertimbangkan penambahan budget bertahap (scaling)."
-      : "💡 Focus: Keep the winning creative and consider scaling the budget gradually.";
+      ? "Fokus Optimasi: Pertahankan materi iklan pemenang dan pertimbangkan penambahan budget bertahap (scaling)."
+      : "Focus: Keep the winning creative and consider scaling the budget gradually.";
   } else {
     summary = idLocale ? (
       <>Dari <strong>{formatNumber(safeImpressions)} tayangan</strong>, tercatat <strong>{formatNumber(safeLinkClicks)} klik tautan</strong> (CTR <strong>{formatPct(effectiveLinkCtr)}</strong>) dan <strong>{formatNumber(safeResults)} hasil</strong> (CVR <strong>{formatPct(cvr)}</strong>).</>
@@ -98,8 +85,8 @@ export function CTWAFunnelPanel({
       <>From <strong>{formatNumber(safeImpressions)} impressions</strong>, there were <strong>{formatNumber(safeLinkClicks)} link clicks</strong> (CTR <strong>{formatPct(effectiveLinkCtr)}</strong>) and <strong>{formatNumber(safeResults)} results</strong> (CVR <strong>{formatPct(cvr)}</strong>).</>
     );
     recommendation = idLocale
-      ? "💡 Fokus Optimasi: Uji variasi visual, CTA, dan pengalaman setelah klik untuk meningkatkan tahap funnel yang masih di bawah benchmark."
-      : "💡 Focus: Test creative, CTA, and post-click experience to improve stages below benchmark.";
+      ? "Fokus Optimasi: Uji variasi visual, CTA, dan pengalaman setelah klik untuk meningkatkan tahap funnel yang masih di bawah benchmark."
+      : "Focus: Test creative, CTA, and post-click experience to improve stages below benchmark.";
   }
 
   const stages = [
@@ -160,47 +147,35 @@ export function CTWAFunnelPanel({
       : { label: idLocale ? "Rendah" : "Low", tone: "amber" };
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-[#0c0e14] sm:p-6" aria-labelledby="ctwa-funnel-title">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h2 id="ctwa-funnel-title" className="text-base font-semibold tracking-tight text-slate-900 dark:text-zinc-100 sm:text-lg">
-            {idLocale ? "Funnel Properti · Biaya per Tahap" : "Property Funnel · Cost by Stage"}
-          </h2>
-          <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
-            {idLocale ? "Alur dari paparan iklan sampai hasil yang tercatat di Meta." : "Progression from ad exposure to results reported by Meta."}
-          </p>
-        </div>
-        <span className="rounded-full border border-slate-200 px-2.5 py-1 text-[10px] font-medium text-slate-500 dark:border-zinc-700 dark:text-zinc-400">
-          {idLocale ? "RINGKASAN PERIODE" : "PERIOD SUMMARY"}
-        </span>
-      </div>
+    <section className="p-4" aria-labelledby="ctwa-funnel-title">
+      <h2 id="ctwa-funnel-title" className="sr-only">
+        {idLocale ? "Funnel Konversi & Biaya per Tahap" : "Conversion Funnel & Cost by Stage"}
+      </h2>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {stages.map((stage) => (
-          <article key={stage.number} className={`flex min-w-0 flex-col rounded-xl border p-4 ${stage.number === 4 ? "border-indigo-200 bg-indigo-50/50 dark:border-indigo-900/70 dark:bg-indigo-950/20" : "border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-900/60"}`}>
-            <div className="flex min-h-7 items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${stage.number === 4 ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{stage.number}</span>
-                <h3 className="truncate text-xs font-semibold text-slate-700 dark:text-zinc-200">{stage.title}</h3>
+          <article key={stage.number} className={`rounded-xl border px-3 py-2 ${stage.number === 4 ? "border-indigo-200 bg-indigo-50/60 dark:border-indigo-900/70 dark:bg-indigo-950/20" : "border-slate-200 bg-slate-50/70 dark:border-zinc-800 dark:bg-zinc-950/40"}`}>
+            <div className="flex items-center gap-2.5">
+              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${stage.number === 4 ? "bg-amber-500 text-zinc-950 font-bold shadow-xs" : "bg-white text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{stage.number}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <h3 className="truncate text-xs font-semibold text-slate-700 dark:text-zinc-200">{stage.title}</h3>
+                  <p className={`shrink-0 font-mono text-sm font-semibold tabular-nums tracking-tight ${stage.valueClass}`}>{formatNumber(stage.value)}</p>
+                </div>
+                <p className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-zinc-400">
+                  <span className={stage.ratioTone === "indigo" ? "font-semibold text-indigo-700 dark:text-indigo-300" : ""}>{stage.ratio}</span>
+                  {" · "}{stage.unitCost}
+                </p>
               </div>
-              <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-semibold tabular-nums tracking-tight ${stage.ratioTone === "indigo" ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300" : "bg-slate-100 text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                {stage.ratio}
-              </span>
             </div>
-
-            <p className={`mt-5 font-sans text-3xl font-bold tabular-nums tracking-tight ${stage.valueClass}`}>{formatNumber(stage.value)}</p>
-            <div className="my-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-zinc-800" aria-label={`${Math.round(stage.fill)}% progress`}>
+            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white dark:bg-zinc-800" aria-label={`${Math.round(stage.fill)}% progress`}>
               <div className={`h-full rounded-full ${stage.fillClass}`} style={{ width: `${Math.min(stage.fill, 100)}%` }} />
-            </div>
-            <div className="mt-auto space-y-1">
-              <p className="truncate text-sm font-semibold text-slate-800 dark:text-zinc-200">{stage.unitCost}</p>
-              <p className="truncate text-xs text-slate-500 dark:text-zinc-400">{stage.context}</p>
             </div>
           </article>
         ))}
       </div>
 
-      <section className="mt-4 rounded-xl border border-slate-200 border-l-[3px] border-l-indigo-500 bg-slate-50/70 px-4 py-3.5 dark:border-zinc-800 dark:border-l-indigo-400 dark:bg-zinc-900/60" aria-labelledby="funnel-diagnosis-title">
+      <section className="mt-3 rounded-xl border border-slate-200 border-l-[3px] border-l-indigo-500 bg-slate-50/70 px-3 py-3 dark:border-zinc-800 dark:border-l-indigo-400 dark:bg-zinc-900/60" aria-labelledby="funnel-diagnosis-title">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 id="funnel-diagnosis-title" className="text-xs font-semibold tracking-tight text-slate-800 dark:text-zinc-100">
             {idLocale ? "Diagnosis Funnel Otomatis" : "Automatic Funnel Diagnosis"}
@@ -217,7 +192,7 @@ export function CTWAFunnelPanel({
               : idLocale ? "Lihat Rumus & Benchmark ▾" : "View formulas & benchmarks ▾"}
           </button>
         </div>
-        <p className="mt-1.5 text-sm leading-relaxed text-slate-700 dark:text-zinc-300">{summary}</p>
+        <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-slate-700 dark:text-zinc-300">{summary}</p>
         <p className="mt-2.5 rounded-lg bg-indigo-50/70 px-3 py-2 text-xs font-medium leading-relaxed text-indigo-950 dark:bg-indigo-950/40 dark:text-indigo-200">{recommendation}</p>
 
         {isEvidenceOpen && (

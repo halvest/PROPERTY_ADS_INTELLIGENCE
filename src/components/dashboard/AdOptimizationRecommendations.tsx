@@ -298,12 +298,6 @@ export function AdOptimizationRecommendations({
                         {metrics.cpql !== null ? formatCurrency(metrics.cpql) : "—"}
                       </span>
                     </div>
-                    <div>
-                      <span className="block text-[10px] text-zinc-400 font-sans">Buyer Score</span>
-                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                        {metrics.avgBuyerScore !== null ? `${metrics.avgBuyerScore}/100` : "—"}
-                      </span>
-                    </div>
                   </div>
                 </div>
 

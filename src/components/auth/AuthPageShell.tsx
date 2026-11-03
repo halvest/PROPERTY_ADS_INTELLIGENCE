@@ -18,13 +18,13 @@ export function AuthPageShell({
   children,
 }: AuthPageShellProps) {
   return (
-    <main className="min-h-dvh bg-white text-zinc-950 dark:bg-[#090b12] dark:text-zinc-50 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(460px,0.88fr)]">
-      <aside className="relative hidden min-h-dvh overflow-hidden bg-[#141827] text-white lg:flex lg:flex-col lg:justify-between lg:px-12 lg:py-10 xl:px-20 xl:py-12">
+    <main className="min-h-dvh bg-white text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(460px,0.88fr)]">
+      <aside className="relative hidden min-h-dvh overflow-hidden bg-zinc-950 text-white lg:flex lg:flex-col lg:justify-between lg:px-12 lg:py-10 xl:px-20 xl:py-12">
         <div className="pointer-events-none absolute inset-0 opacity-70" aria-hidden="true">
           <div className="absolute -right-40 -top-40 h-[34rem] w-[34rem] rounded-full border border-white/[0.08]" />
           <div className="absolute -right-24 -top-24 h-[25rem] w-[25rem] rounded-full border border-white/[0.08]" />
           <div className="absolute -right-8 -top-8 h-[16rem] w-[16rem] rounded-full border border-white/[0.08]" />
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_78%_18%,rgba(100,116,255,0.26),transparent_42%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_78%_18%,var(--solar-ring),transparent_45%)]" />
         </div>
 
         <Link href="/" className="relative z-10 inline-flex w-fit items-center gap-3">
@@ -34,7 +34,7 @@ export function AuthPageShell({
 
         <div className="relative z-10 max-w-xl py-16">
           <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-white/75">
-            <span className="h-1.5 w-1.5 rounded-full bg-indigo-300" />
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
             Analisis iklan properti
           </div>
           <h2 className="max-w-lg text-4xl font-semibold leading-[1.12] tracking-[-0.04em] xl:text-5xl">

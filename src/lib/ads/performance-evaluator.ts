@@ -1,3 +1,13 @@
+import {
+  classifyPeriodConfidence,
+  meetsPerformanceSla,
+  normalizeEntityStatus,
+  spentBeyondDoubleTarget,
+  type AnalysisScope,
+  type EntityDeliveryStatus,
+  type PeriodConfidence,
+} from "@/lib/ai/ctwa-analysis/dynamic-context";
+
 /**
  * HD Creative Ads Performance Intelligence Evaluator
  *
@@ -21,7 +31,9 @@ export type DecisionAction =
   | "optimasi"
   | "pertahankan"
   | "kurangi"
-  | "hentikan_sementara";
+  | "hentikan_sementara"
+  | "reaktivasi"
+  | "tinjau_reaktivasi";
 
 export type ResultsCondition =
   | "verified_zero" // Data lengkap dan tidak terdapat hasil yang sesuai dalam periode
@@ -50,6 +62,16 @@ export interface EvaluationInput {
   campaignObjective?: string | null;
   leadQualityReported?: string | null; // Outside Meta Ads data
   locale?: "id" | "en";
+  entityStatus?: string | null;
+  analysisScope?: AnalysisScope;
+  /** Link CTR in percent. Used for causal diagnostics. */
+  linkCtr?: number | null;
+}
+
+export interface CausalDiagnostic {
+  code: "creative_hook" | "conversion_dropoff";
+  title: string;
+  insight: string;
 }
 
 export interface MetricComparison {
@@ -88,6 +110,69 @@ export interface PerformanceEvaluationResult {
     do: string;
     stop_loss: string;
   }>;
+  entityStatus: EntityDeliveryStatus;
+  analysisScope: AnalysisScope;
+  periodConfidence: PeriodConfidence;
+  scaleEligible: boolean;
+  causalDiagnostics: CausalDiagnostic[];
+}
+
+/** Multi-day aggregates cannot produce frequency. Null does not block SCALE. */
+export function frequencyAllowsScale(frequency: number | null | undefined): boolean {
+  if (frequency === null || frequency === undefined || !Number.isFinite(frequency)) return true;
+  return frequency > 0 && frequency < 2.5;
+}
+
+export function qualifiesForScaleVerdict(input: {
+  performanceStatus: PerformanceStatus;
+  dataStatus: DataSufficiencyStatus;
+  results: number | null;
+  targetCpr: number | null;
+  frequency?: number | null;
+  durationDays: number;
+  entityStatus: EntityDeliveryStatus;
+}): boolean {
+  return (
+    input.performanceStatus === "memenuhi_target" &&
+    input.dataStatus === "cukup" &&
+    (input.results ?? 0) >= 30 &&
+    input.targetCpr !== null &&
+    input.targetCpr > 0 &&
+    frequencyAllowsScale(input.frequency) &&
+    input.durationDays >= 14 &&
+    input.entityStatus === "ACTIVE"
+  );
+}
+
+export function diagnoseCausalFriction(input: {
+  linkCtr: number | null;
+  actualCpr: number | null;
+  targetCpr: number | null;
+  results: number | null;
+}): CausalDiagnostic[] {
+  const notes: CausalDiagnostic[] = [];
+  const linkCtr = input.linkCtr;
+  const target = input.targetCpr && input.targetCpr > 0 ? input.targetCpr : null;
+  const cpr = input.actualCpr;
+  if (linkCtr !== null && linkCtr < 0.8 && target !== null && cpr !== null && cpr > target) {
+    notes.push({
+      code: "creative_hook",
+      title: "Respons klik perlu ditinjau",
+      insight: `CTR tautan ${linkCtr.toLocaleString("id-ID")}% berada di bawah 0,8% sementara CPR di atas target. Ini hipotesis bahwa materi, penawaran, audiens, atau placement perlu dibandingkan. Penyebab belum dapat dipastikan tanpa data creative dan placement.`,
+    });
+  }
+  if (
+    linkCtr !== null &&
+    linkCtr >= 1.2 &&
+    (input.results === 0 || (target !== null && cpr !== null && cpr > 1.4 * target))
+  ) {
+    notes.push({
+      code: "conversion_dropoff",
+      title: "Klik tidak sebanding dengan hasil",
+      insight: `CTR tautan ${linkCtr.toLocaleString("id-ID")}% relatif kuat, tetapi hasil nol atau CPR jauh di atas target. Hipotesis meliputi penawaran, halaman tujuan, atau proses balasan. CRM tidak ikut dihitung pada diagnosis ini.`,
+    });
+  }
+  return notes;
 }
 
 function formatRupiah(value: number): string {
@@ -160,6 +245,9 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     prevResults,
     prevCpr,
     locale = "id",
+    entityStatus: rawEntityStatus,
+    analysisScope = "ad",
+    linkCtr: reportedLinkCtr,
   } = input;
 
   const loc = forceIndonesianLocale(locale);
@@ -286,8 +374,7 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
         performanceStatus = "di_atas_target";
       }
     } else {
-      // No target CPR: evaluate based on volume stability
-      performanceStatus = resultsCondition === "sufficient" ? "memenuhi_target" : "belum_dapat_dinilai";
+      performanceStatus = "belum_dapat_dinilai";
     }
   }
 
@@ -299,7 +386,7 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     action = "periksa_tracking";
     mainReason = corruptReason || (loc === "en"
       ? "Review the ad destination and Meta result settings before changing the budget."
-      : "Periksa tujuan tautan iklan dan pengaturan hasil Meta sebelum mengubah anggaran.");
+      : "Periksa tracking tujuan tautan iklan dan pengaturan hasil Meta sebelum mengubah anggaran.");
   } else if (dataStatus === "terbatas") {
     // When data is limited, NEVER conclude "hentikan_sementara" or permanent failure
     action = "pantau";
@@ -361,6 +448,45 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     }
   }
 
+  const entityStatus = normalizeEntityStatus(rawEntityStatus);
+  const paused = entityStatus === "PAUSED" || entityStatus === "ARCHIVED";
+  const slaMet = meetsPerformanceSla(performanceStatus, actualCpr, effectiveTargetCpr);
+  const doubleBurn = spentBeyondDoubleTarget(spend, effectiveTargetCpr, results);
+  const noDelivery = spend === 0 && impressions === 0;
+  let pausedScenario: "none" | "idle" | "efficient" | "inefficient" | "review" = "none";
+
+  if (paused) {
+    if (noDelivery) {
+      pausedScenario = "idle";
+      action = "pantau";
+      mainReason = "Objek sedang dijeda dan tidak menyerap anggaran pada rentang tanggal ini. Pilih periode 7 atau 30 hari terakhir untuk mengaudit histori performa.";
+    } else if (!effectiveTargetCpr) {
+      pausedScenario = "review";
+      action = "tinjau_reaktivasi";
+      mainReason = "Objek sedang dijeda. Target CPR belum diatur, jadi histori tidak disebut sesuai target dan bukan perintah aktivasi. Anggaran harian tidak tersimpan di snapshot.";
+    } else if (slaMet && (results ?? 0) >= 5 && durationDays >= 14 && dataStatus === "cukup") {
+      pausedScenario = "efficient";
+      action = "tinjau_reaktivasi";
+      mainReason = "Histori biaya per hasil berada pada atau di bawah target. Ini hanya kelayakan peninjauan, bukan perintah menyalakan kembali dan bukan saran memakai anggaran lama.";
+    } else {
+      pausedScenario = "inefficient";
+      action = "optimasi";
+      mainReason = "Data historis menunjukkan biaya per hasil melampaui target atau belum menghasilkan konversi. Evaluasi ulang penawaran, materi kreatif, dan penargetan sebelum menayangkan kembali.";
+    }
+  } else if (durationDays <= 3 && action !== "periksa_tracking") {
+    const structural = action === "hentikan_sementara" || action === "kurangi" || action === "optimasi" || action === "pertahankan";
+    action = "pantau";
+    if (doubleBurn || structural) {
+      mainReason = doubleBurn
+        ? (loc === "en"
+          ? "1–3 day window with spend above 2x target CPR and no results. Monitor/investigate; do not make structural budget changes."
+          : "Jendela 1–3 hari, belanja > 2x target CPR tanpa hasil. PANTAU/INVESTIGATE; jangan ubah struktur budget.")
+        : (loc === "en"
+          ? "1–3 day observation: keep MAINTAIN/MONITOR. Confidence is low until a 14-day window."
+          : "Observasi 1–3 hari: gunakan MAINTAIN/PANTAU. Confidence LOW hingga jendela 14 hari.");
+    }
+  }
+
   // 5. Build Period Comparisons
   const comparisons = {
     spend: calculateMetricComparison(spend, prevSpend, loc),
@@ -394,7 +520,19 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
   let headline = "";
   let subtext = "";
 
-  if (action === "periksa_tracking") {
+  if (pausedScenario === "idle") {
+    headline = "Tidak ada penayangan aktif pada periode ini";
+    subtext = mainReason;
+  } else if (pausedScenario === "efficient") {
+    headline = "Histori layak ditinjau, bukan perintah aktivasi";
+    subtext = mainReason;
+  } else if (pausedScenario === "review") {
+    headline = "Objek dijeda dan target belum diatur";
+    subtext = mainReason;
+  } else if (pausedScenario === "inefficient") {
+    headline = "Objek dijeda dengan histori efisiensi di bawah target";
+    subtext = mainReason;
+  } else if (action === "periksa_tracking") {
     headline = loc === "en"
       ? "Tracking check needed before budget decisions."
       : "Pemeriksaan tracking diperlukan sebelum keputusan budget.";
@@ -423,7 +561,43 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
 
   const nextActions: PerformanceEvaluationResult["nextActions"] = [];
 
-  if (action === "periksa_tracking") {
+  if (pausedScenario === "idle") {
+    nextActions.push({
+      priority: "high",
+      title: "Ubah rentang tanggal ke periode historis",
+      why: "Periode yang dipilih tidak memiliki riwayat tayangan karena objek sedang dijeda.",
+      do: "Ganti filter periode ke 7 Hari, 14 Hari, atau 30 Hari terakhir untuk melihat rekam jejak CPR dan CTR sebelum memutuskan aktivasi ulang.",
+      stop_loss: "Jangan mengaktifkan kembali kampanye/iklan tanpa memeriksa histori biaya per hasil pada periode tayang sebelumnya.",
+    });
+  } else if (pausedScenario === "review") {
+    nextActions.push({
+      priority: "medium",
+      title: "Tinjau histori tanpa menyalakan objek",
+      why: "Target CPR belum diatur, jadi efisiensi dan stop-loss tidak dapat dihitung.",
+      do: "Jangan menyalakan objek dari laporan ini. Anggaran harian tidak tersimpan di snapshot.",
+      stop_loss: "Stop-loss numerik tidak dihitung karena target CPR belum diatur.",
+    });
+  } else if (pausedScenario === "inefficient") {
+    nextActions.push({
+      priority: "high",
+      title: "Audit materi kreatif dan penawaran sebelum replikasi",
+      why: "Riwayat penayangan sebelumnya belum mencapai target efisiensi biaya per hasil.",
+      do: "Bandingkan biaya per hasil dengan target yang sudah diatur. Isi visual tidak ada pada laporan ini, jadi hook tidak dinilai.",
+      stop_loss: "Batasi anggaran uji coba awal maksimal 1x–2x target CPR per hari saat menayangkan materi baru.",
+    });
+  } else if (pausedScenario === "efficient") {
+    nextActions.push({
+      priority: "medium",
+      title: "Tinjau histori sebelum membahas aktivasi",
+      why: effectiveTargetCpr
+        ? "Rekam jejak biaya per hasil berada pada atau di bawah target yang dikonfigurasi."
+        : "Target CPR belum diatur, jadi efisiensi tidak dapat dinyatakan.",
+      do: "Jangan menyalakan objek dari laporan ini. Anggaran harian tidak tersimpan, jadi anggaran lama tidak disarankan.",
+      stop_loss: effectiveTargetCpr
+        ? "Jika nanti diuji manual, hentikan uji saat belanja melewati 2x target CPR tanpa hasil baru."
+        : "Stop-loss numerik tidak dihitung karena target CPR belum diatur.",
+    });
+  } else if (action === "periksa_tracking") {
     nextActions.push({
       priority: "high",
       title: loc === "en" ? "Review the ad destination" : "Periksa tujuan tautan iklan",
@@ -437,7 +611,9 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
       title: loc === "en" ? "Accumulate delivery data" : "Akumulasi data penayangan",
       why: loc === "en" ? "Current data volume is below statistical stability threshold." : "Volume data saat ini masih di bawah ambang kestabilan statistik.",
       do: loc === "en" ? "Maintain existing budget for 3–5 days without editing creative." : "Pertahankan budget saat ini selama 3–5 hari tanpa mengubah materi.",
-      stop_loss: loc === "en" ? "Re-evaluate if spend reaches 2x target CPR with zero conversions." : "Evaluasi ulang jika belanja mencapai 2x target CPR tanpa hasil.",
+      stop_loss: effectiveTargetCpr
+        ? (loc === "en" ? "Re-evaluate if spend reaches 2x target CPR with zero conversions." : "Evaluasi ulang jika belanja mencapai 2x target CPR tanpa hasil.")
+        : (loc === "en" ? "A numeric stop-loss is unavailable because target CPR is not configured." : "Stop-loss numerik tidak dihitung karena target CPR belum diatur."),
     });
   } else if (action === "optimasi") {
     nextActions.push({
@@ -452,7 +628,7 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
       priority: "high",
       title: loc === "en" ? "Pause underperforming creative" : "Jeda materi yang belum menghasilkan",
       why: loc === "en" ? "Prevent budget bleed when conversion rate is below target." : "Mencegah kebocoran budget ketika rasio konversi di bawah target.",
-      do: loc === "en" ? "Pause ad temporarily and audit buyer hook and property pricing." : "Jeda iklan sementara dan audit hook pembeli serta harga properti.",
+      do: loc === "en" ? "Pause the test if the pattern holds. Creative content is not in this evidence." : "Jeda uji jika polanya bertahan. Isi creative tidak ada pada evidence ini.",
       stop_loss: loc === "en" ? "Only re-enable with refreshed creative angle." : "Aktifkan kembali hanya setelah sudut penawaran diperbarui.",
     });
   } else {
@@ -472,6 +648,11 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     });
   }
 
+  if (input.analysisScope === "ad") {
+    const ctrText = impressions > 0 ? formatIdPercent((linkClicks / impressions) * 100) : "tidak tersedia";
+    uncertaintyNotes.push(`Diagnosis iklan: ${impressions} impresi, ${linkClicks} klik tautan, CTR ${ctrText}, hasil ${results ?? "null"}, CPR ${actualCpr === null ? "null" : formatRupiah(actualCpr)}. Creative, audience, dan placement tidak tersedia.`);
+  }
+
   return {
     dataStatus,
     dataStatusReason,
@@ -489,5 +670,23 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     headline,
     subtext,
     nextActions,
+    entityStatus,
+    analysisScope,
+    periodConfidence: classifyPeriodConfidence(durationDays),
+    scaleEligible: qualifiesForScaleVerdict({
+      performanceStatus,
+      dataStatus,
+      results,
+      targetCpr: effectiveTargetCpr,
+      frequency: input.frequency,
+      durationDays,
+      entityStatus,
+    }),
+    causalDiagnostics: diagnoseCausalFriction({
+      linkCtr: reportedLinkCtr ?? (impressions > 0 ? (linkClicks / impressions) * 100 : null),
+      actualCpr,
+      targetCpr: effectiveTargetCpr,
+      results,
+    }),
   };
 }

@@ -13,6 +13,7 @@ import {
   normalizeQualityLabel,
   normalizeFunnelStage,
   resolveCrmLeadSource,
+  attributionStatusForCrmMatch,
 } from "@/lib/crm/crm-sheets-service";
 
 function jakartaBoundary(date: string, endOfDay = false) {
@@ -292,13 +293,21 @@ export async function GET(request: NextRequest) {
     });
 
     const total = leads.length;
-    const hotWarm = leads.filter((lead) => lead.qualityLabel === "Hot" || lead.qualityLabel === "Warm").length;
+    const hot = leads.filter((lead) => lead.qualityLabel === "Hot").length;
+    const warm = leads.filter((lead) => lead.qualityLabel === "Warm").length;
+    const cold = leads.filter((lead) => lead.qualityLabel === "Cold").length;
+    const hotWarm = hot + warm;
     const surveyOrClosing = leads.filter((lead) => lead.funnelStage === "survei" || lead.funnelStage === "closing").length;
     const linkedSources = leads.filter((lead) => Boolean(lead.adId || lead.campaignId)).length;
     const summary = {
       total,
       newLeads: leads.filter((lead) => lead.funnelStage === "baru").length,
       hotWarm,
+      hot,
+      warm,
+      cold,
+      qualifiedLeads: hot + warm,
+      unclassifiedLeads: total - hot - warm - cold,
       hotWarmRate: total ? (hotWarm / total) * 100 : 0,
       surveyOrClosing,
       leadToSurveyRate: total ? (surveyOrClosing / total) * 100 : 0,
@@ -404,6 +413,9 @@ export async function POST(request: NextRequest) {
     const namaIklan = typeof body.namaIklan === "string" ? body.namaIklan.trim() : undefined;
     const adId = typeof body.adId === "string" && body.adId.trim() ? body.adId.trim() : null;
     const campaignId = typeof body.campaignId === "string" && body.campaignId.trim() ? body.campaignId.trim() : null;
+    const adSetId = typeof body.adSetId === "string" && body.adSetId.trim() ? body.adSetId.trim() : null;
+    const leadSource = typeof body.leadSource === "string" ? body.leadSource.trim() : "";
+    const attributionNote = typeof body.attributionNote === "string" ? body.attributionNote.trim() : "";
     const catatan = typeof body.catatan === "string" ? body.catatan.trim() : undefined;
     const tanggalKontak = body.tanggalMasuk
       ? new Date(body.tanggalMasuk).toISOString()
@@ -411,7 +423,7 @@ export async function POST(request: NextRequest) {
 
     let resolvedSource;
     try {
-      resolvedSource = await resolveCrmLeadSource(supabase, organizationId, { adId, campaignId, sourceName: namaIklan });
+      resolvedSource = await resolveCrmLeadSource(supabase, organizationId, { adId, campaignId, adSetId, sourceName: adId || campaignId || adSetId ? null : namaIklan });
     } catch (error) {
       return NextResponse.json(
         { success: false, error: error instanceof Error ? error.message : "Sumber iklan tidak valid." },
@@ -429,16 +441,19 @@ export async function POST(request: NextRequest) {
       namaIklan: resolvedSource.sourceName || namaIklan,
       adId: resolvedSource.adId,
       campaignId: resolvedSource.campaignId,
+      adSetId: resolvedSource.providerAdSetId,
+      attributionNote: [leadSource, attributionNote].filter(Boolean).join(" — ") || null,
       tahapFunnel: stage,
       qualityLabel,
       catatan,
-      statusAtribusi: (resolvedSource.adId || resolvedSource.campaignId || namaIklan ? "inferred" : "unknown") as AttributionStatus,
+      statusAtribusi: attributionStatusForCrmMatch(resolvedSource.matchMethod),
     };
 
     const importResult = await importCrmLeadsToDatabase({
       organizationId,
       leads: [singleLead],
       supabase,
+      updateExisting: true,
     });
 
     if (!importResult.success && importResult.insertedCount === 0 && importResult.updatedCount === 0) {

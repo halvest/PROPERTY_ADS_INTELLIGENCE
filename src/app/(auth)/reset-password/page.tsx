@@ -46,7 +46,7 @@ export default function ResetPasswordPage() {
       <input type={show ? "text" : "password"} autoComplete="new-password" required minLength={8} value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder={id ? "Konfirmasi password baru" : "Confirm new password"} className="min-h-12 w-full rounded-xl border border-zinc-200 bg-white px-4 text-sm text-zinc-950 outline-none focus:border-indigo-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-white"/>
       <label className="flex items-center gap-2 text-xs text-zinc-500"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="rounded border-zinc-300"/>{id ? "Tampilkan password" : "Show password"}</label>
       {error && <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{error}</p>}
-      <button disabled={busy} className="min-h-12 w-full rounded-xl bg-[#20263a] px-4 text-sm font-semibold text-white hover:bg-[#2c3450] disabled:opacity-50 dark:bg-indigo-500">{busy ? (id ? "Memperbarui…" : "Updating…") : (id ? "Simpan password baru" : "Save new password")}</button>
+      <button disabled={busy} className="min-h-12 w-full rounded-xl btn-solar px-4 text-sm font-semibold disabled:opacity-50 cursor-pointer">{busy ? (id ? "Memperbarui…" : "Updating…") : (id ? "Simpan password baru" : "Save new password")}</button>
     </form>}
   </AuthPageShell>;
 }

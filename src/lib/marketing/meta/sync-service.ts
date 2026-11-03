@@ -26,6 +26,50 @@ import { decryptAccessToken } from "@/lib/security/credential-crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseDateRange } from "@/lib/ads/date-utils";
 
+const STALE_SYNC_MS = 3 * 60 * 1000;
+
+async function closeSyncJob(
+  db: SupabaseClient,
+  syncJobId: string,
+  patch: {
+    status: "completed" | "partial" | "failed";
+    records_processed?: number;
+    records_rejected?: number;
+    error_code?: string | null;
+    error_message?: string | null;
+    diagnostic_info?: Record<string, unknown>;
+    completed_at: string;
+  }
+): Promise<void> {
+  const table = db.from("sync_jobs");
+  if (typeof table?.update !== "function") return;
+
+  const write = async (status: "completed" | "partial" | "failed") => {
+    const { error } = await table.update({ ...patch, status }).eq("id", syncJobId);
+    return error as { code?: string; message?: string } | null;
+  };
+
+  const error = await write(patch.status);
+  if (!error) return;
+
+  // Databases that have not applied the partial-status migration reject
+  // status = 'partial' and leave the row running, which blocks the next sync.
+  if (patch.status === "partial") {
+    const fallback = await write("failed");
+    if (!fallback) return;
+    console.warn("[Meta Marketing Sync] Could not close sync job:", {
+      syncJobId,
+      errorCode: fallback.code || null,
+    });
+    return;
+  }
+
+  console.warn("[Meta Marketing Sync] Could not close sync job:", {
+    syncJobId,
+    errorCode: error.code || null,
+  });
+}
+
 export interface ExecuteMarketingSyncOptions {
   organizationId: string;
   targetAdAccountId?: string;
@@ -186,20 +230,34 @@ export async function executeMarketingSync(
   }
   const db = adminClient || supabaseClient || dbClient;
 
-  // 0. Duplicate-sync lock: refuse a second concurrent sync for the same
-  // organization + ad account while one is still running (15-minute window).
+  // 0. Duplicate-sync lock. A live job blocks a second run. A job still
+  // marked running after the worker window is closed so a failed status
+  // write cannot lock the account for the old 15-minute window.
   if (db) {
     try {
-      const windowStart = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const staleBefore = new Date(Date.now() - STALE_SYNC_MS).toISOString();
       const { data: running } = await db
         .from("sync_jobs")
-        .select("id")
+        .select("id, started_at")
         .eq("organization_id", organizationId)
         .eq("target_account_id", accountId)
         .eq("status", "running")
-        .gte("started_at", windowStart)
-        .limit(1);
-      if (running && running.length > 0) {
+        .limit(5);
+      const active: Array<{ id: string }> = [];
+      for (const job of running || []) {
+        const startedAt = typeof job.started_at === "string" ? job.started_at : "";
+        if (startedAt && startedAt < staleBefore) {
+          await closeSyncJob(db, job.id, {
+            status: "failed",
+            error_code: "SYNC_INTERRUPTED",
+            error_message: "Sinkronisasi sebelumnya terhenti sebelum statusnya diperbarui.",
+            completed_at: new Date().toISOString(),
+          });
+        } else {
+          active.push(job);
+        }
+      }
+      if (active.length > 0) {
         throw new MarketingApiError({
           code: "SYNC_IN_PROGRESS",
           message: "Sinkronisasi untuk akun iklan ini sedang berjalan. Tunggu hingga selesai.",
@@ -699,39 +757,33 @@ export async function executeMarketingSync(
         // G. Mark the sync job only after all data and freshness writes have
         // succeeded, so a failed freshness write cannot leave a false success.
         if (syncJobId) {
-          const syncJobTable = db.from("sync_jobs");
-          if (typeof syncJobTable?.update === "function") {
-            const isComplete = recordsRejected === 0 && !persistenceFailed && !incompleteProviderFetch;
-            const { error: jobUpdateError } = await syncJobTable
-              .update({
-                status: isComplete ? "completed" : "partial",
-                records_processed: recordsProcessed,
-                records_rejected: recordsRejected,
-                error_code: isComplete ? null : incompleteProviderFetch ? "PAGINATION_INCOMPLETE" : "PERSISTENCE_PARTIAL",
-                error_message: isComplete ? null : incompleteProviderFetch ? "Meta pagination did not complete; fetched data was stored additively and previous data was preserved." : "Meta sync was incomplete; previous data and last successful sync were preserved.",
-                diagnostic_info: {
-                  recordsProcessed,
-                  recordsRejected,
-                  mode: "live",
-                  targetAccountId: accountId,
-                  timeRange,
-                  adAccountsSynced: 1,
-                  campaignsSynced: normalizedCampaigns.length,
-                  adsSynced: normalizedAds.length,
-                  insightsSynced: insightsStored,
-                  insightsReceived: metaInsights.length,
-                  insightsValid: normalizedInsights.length,
-                  insightsInvalid,
-                  insightsUnmapped,
-                  invalidReasons,
-                  paginationComplete: !incompleteProviderFetch,
-                  pagesProcessed: insightsPages,
-                },
-                completed_at: new Date().toISOString(),
-              })
-              .eq("id", syncJobId);
-            if (jobUpdateError) persistenceFailed = true;
-          }
+          const isComplete = recordsRejected === 0 && !persistenceFailed && !incompleteProviderFetch;
+          await closeSyncJob(db, syncJobId, {
+            status: isComplete ? "completed" : "partial",
+            records_processed: recordsProcessed,
+            records_rejected: recordsRejected,
+            error_code: isComplete ? null : incompleteProviderFetch ? "PAGINATION_INCOMPLETE" : "PERSISTENCE_PARTIAL",
+            error_message: isComplete ? null : incompleteProviderFetch ? "Meta pagination did not complete; fetched data was stored additively and previous data was preserved." : "Meta sync was incomplete; previous data and last successful sync were preserved.",
+            diagnostic_info: {
+              recordsProcessed,
+              recordsRejected,
+              mode: "live",
+              targetAccountId: accountId,
+              timeRange,
+              adAccountsSynced: 1,
+              campaignsSynced: normalizedCampaigns.length,
+              adsSynced: normalizedAds.length,
+              insightsSynced: insightsStored,
+              insightsReceived: metaInsights.length,
+              insightsValid: normalizedInsights.length,
+              insightsInvalid,
+              insightsUnmapped,
+              invalidReasons,
+              paginationComplete: !incompleteProviderFetch,
+              pagesProcessed: insightsPages,
+            },
+            completed_at: new Date().toISOString(),
+          });
         }
 
         // H. Update canonical integration_connections freshness only on a
@@ -757,9 +809,20 @@ export async function executeMarketingSync(
           }
         }
       } catch (dbErr) {
-        // Persistence failure must not be reported as a successful sync.
+        // Persistence failure must not be reported as a successful sync, and
+        // must not leave the job row running.
         persistenceFailed = true;
         console.warn("[Meta Marketing Sync] Database persistence failed:", dbErr);
+        if (syncJobId) {
+          await closeSyncJob(db, syncJobId, {
+            status: "failed",
+            records_processed: recordsProcessed,
+            records_rejected: recordsRejected,
+            error_code: "PERSISTENCE_FAILED",
+            error_message: "Penyimpanan hasil sinkronisasi gagal. Data sebelumnya tetap dipertahankan.",
+            completed_at: new Date().toISOString(),
+          });
+        }
       }
     }
 
@@ -798,19 +861,16 @@ export async function executeMarketingSync(
     // Update sync_job status to failed if connected
     if (db && syncJobId) {
       try {
-        await db
-          .from("sync_jobs")
-          .update({
-            status: "failed",
-            error_code: error instanceof MarketingApiError ? error.code : "UPSTREAM_ERROR",
-            error_message: errorMsg,
-            diagnostic_info: {
-              error: errorMsg,
-              targetAccountId: accountId,
-            },
-            completed_at: new Date().toISOString(),
-          })
-          .eq("id", syncJobId);
+        await closeSyncJob(db, syncJobId, {
+          status: "failed",
+          error_code: error instanceof MarketingApiError ? error.code : "UPSTREAM_ERROR",
+          error_message: errorMsg,
+          diagnostic_info: {
+            error: errorMsg,
+            targetAccountId: accountId,
+          },
+          completed_at: new Date().toISOString(),
+        });
       } catch {
         // Suppress secondary error
       }

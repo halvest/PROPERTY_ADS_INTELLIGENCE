@@ -26,10 +26,10 @@ export function WorkflowSection({ landing }: { landing: Landing }) {
   return (
     <section id="cara-kerja" className="border-b border-line/60 bg-subtle/30 py-16 sm:py-20 lg:py-24" aria-labelledby="workflow-title">
       <div className="mx-auto grid w-full max-w-7xl gap-4 px-4 sm:px-6 lg:grid-cols-[0.82fr_1.18fr] lg:gap-5 lg:px-8">
-        <div className="flex min-h-[340px] flex-col justify-between rounded-3xl bg-[#171a2b] p-6 text-white sm:min-h-[380px] sm:p-8 lg:p-9">
+        <div className="flex min-h-[340px] flex-col justify-between rounded-3xl bg-zinc-900 border border-zinc-800 p-6 text-white sm:min-h-[380px] sm:p-8 lg:p-9">
           <div>
             <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">
-              <span className="h-px w-6 bg-indigo-300" aria-hidden="true" />
+              <span className="h-px w-6 bg-amber-400" aria-hidden="true" />
               {w.eyebrow}
             </p>
             <h2 id="workflow-title" className="mt-5 max-w-lg text-balance text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-4xl lg:text-[2.65rem]">

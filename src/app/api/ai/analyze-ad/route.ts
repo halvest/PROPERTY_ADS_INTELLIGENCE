@@ -7,6 +7,17 @@ import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
 import { aggregateAdInsights, type AdInsightRowLike, type AdMetricsAggregate } from "@/lib/ads/aggregation";
 import { parseDateRange } from "@/lib/ads/date-utils";
+import { evaluateAdsPerformance } from "@/lib/ads/performance-evaluator";
+import { sanitizeUntrustedText, wrapUntrustedChatBlock } from "@/lib/ai/sanitize-untrusted-text";
+import { CtwaModelOutputSchema as ModelOutputSchema } from "@/lib/ai/ctwa-analysis/schema";
+import { applyGuardrailsToModelOutput } from "@/lib/ai/ctwa-analysis/guardrails";
+import { effectiveDeliveryStatus } from "@/lib/ai/ctwa-analysis/dynamic-context";
+import { CTWA_SYSTEM_PROMPT, buildCtwaUserPrompt } from "@/lib/ai/ctwa-analysis/prompt";
+import { composeAdCardCopy } from "@/lib/ai/ctwa-analysis/ad-card-copy";
+import { parseModelJson } from "@/lib/ai/parse-model-json";
+import type { CtwaGroundTruthMetrics } from "@/lib/ai/ctwa-analysis/types";
+import { summarizeCrmForAd, type CrmAdSummary } from "@/lib/crm/ad-drawer-crm";
+import { buildCrmAnalysisContext, calendarDayBounds, formatCrmContextForPrompt } from "@/lib/crm/crm-analysis-context";
 
 // Request Schema
 const AnalyzeAdRequestSchema = z.object({
@@ -15,8 +26,9 @@ const AnalyzeAdRequestSchema = z.object({
   campaignName: z.string().optional(),
   campaignObjective: z.string().nullable().optional(),
   status: z.string().optional(),
-  /** Dashboard period preset (e.g. "7d", "30d", "all" or "YYYY-MM-DD:YYYY-MM-DD"). */
-  dateRange: z.string().optional(),
+  /** Same presets as GET /api/ads → getAdsIntelligenceData (default 30d). */
+  dateRange: z.string().default("30d"),
+  locale: z.enum(["id", "en"]).optional().default("id"),
   metrics: z.object({
     spend: z.number().default(0),
     impressions: z.number().default(0),
@@ -77,6 +89,7 @@ export type BudgetDecisionKey =
 export interface SourceDataStatusSection {
   metaResults: string;
   crmProspects: string;
+  crmLines?: string[];
   note?: string | null;
 }
 
@@ -163,50 +176,20 @@ export interface AIAdAnalysisResponse {
     headline: string;
     justification: string;
   };
-}
 
-// Zod schema to validate live model JSON
-const ModelOutputSchema = z.object({
-  performanceSummary: z.string(),
-  sourceDataStatus: z.object({
-    metaResults: z.string(),
-    crmProspects: z.string(),
-    note: z.string().nullable().optional(),
-  }),
-  budgetDecision: z.object({
-    decision: z.enum(["NAIKKAN", "PERTAHANKAN", "TAHAN KENAIKAN", "KURANGI", "HENTIKAN SEMENTARA"]),
-    reason: z.string(),
-  }),
-  keyFindings: z
-    .array(
-      z.object({
-        finding: z.string(),
-        evidence: z.string(),
-        impact: z.string(),
-        isHypothesis: z.boolean().default(false),
-      })
-    )
-    .max(3),
-  priorityActions: z
-    .array(
-      z.object({
-        action: z.string(),
-        howToCheck: z.string(),
-        expectedResult: z.string(),
-      })
-    )
-    .max(3),
-  additionalDetails: z.object({
-    funnelEvaluation: z.object({
-      firstFailingStage: z.string(),
-      explanation: z.string(),
-    }),
-    facts: z.array(z.string()).default([]),
-    hypotheses: z.array(z.string()).default([]),
-    unknowns: z.array(z.string()).default([]),
-    creativeNotes: z.string().nullable().optional(),
-  }),
-});
+  recommended_action?: "SCALE" | "MAINTAIN" | "OPTIMIZE" | "STOP" | "INVESTIGATE" | "RE_ACTIVATE";
+  chain_of_thought?: {
+    meta_metrics: string;
+    chat_semantics: string;
+    score_conclusion: string;
+  };
+  context_awareness?: {
+    analyzed_scope: "Account" | "Campaign" | "Ad";
+    entity_status: "Active" | "Paused" | "Unknown";
+    period_confidence: "High" | "Medium" | "Low";
+    period_days: number;
+  };
+}
 
 /**
  * Format currency without space after Rp (e.g. Rp323.001)
@@ -214,17 +197,6 @@ const ModelOutputSchema = z.object({
 export function formatRupiah(amount: number | null | undefined): string {
   if (amount === null || amount === undefined || Number.isNaN(amount)) return "Tidak dapat dihitung";
   return `Rp${Math.round(amount).toLocaleString("id-ID")}`;
-}
-
-/**
- * Safely parses raw string from model, stripping markdown fences if present.
- */
-function parseModelJson(raw: string): unknown {
-  let cleaned = raw.trim();
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-  }
-  return JSON.parse(cleaned);
 }
 
 /**
@@ -237,11 +209,13 @@ export function buildCoreMetrics(params: {
   linkCpc: number | null;
   metaConversations: number | null;
   crmLeadsCount?: number | null;
+  crmMetricNote?: string | null;
   verifiedWhatsAppMessages?: number | null;
   hasActiveIntegration?: boolean;
   costPerConversation?: number | null;
   isCostPerConversationValid?: boolean;
   costPerConversationNote?: string;
+  locale?: "id" | "en";
 }): CoreMetricItem[] {
   const {
     spend,
@@ -249,58 +223,90 @@ export function buildCoreMetrics(params: {
     linkCpc,
     metaConversations,
     crmLeadsCount = null,
+    crmMetricNote = null,
+    locale = "id",
   } = params;
+  const isEn = locale === "en";
+  const numLocale = isEn ? "en-US" : "id-ID";
+  const fmtMoney = (amt: number | null | undefined) => {
+    if (amt === null || amt === undefined || Number.isNaN(amt)) {
+      return isEn ? "Cannot be calculated" : "Tidak dapat dihitung";
+    }
+    return `Rp${Math.round(amt).toLocaleString(numLocale)}`;
+  };
 
   return [
     {
       id: "spend",
-      label: "Belanja Iklan",
+      label: isEn ? "Ad Spend" : "Belanja Iklan",
       rawValue: spend,
-      formattedValue: formatRupiah(spend),
+      formattedValue: fmtMoney(spend),
       isValid: true,
     },
     {
       id: "linkClicks",
-      label: "Klik Tautan",
+      label: isEn ? "Link Clicks" : "Klik Tautan",
       rawValue: linkClicks,
-      formattedValue: `${linkClicks.toLocaleString("id-ID")} klik tautan`,
+      formattedValue: isEn
+        ? `${linkClicks.toLocaleString(numLocale)} link clicks`
+        : `${linkClicks.toLocaleString(numLocale)} klik tautan`,
       isValid: true,
     },
     {
       id: "linkCpc",
-      label: "CPC Tautan",
+      label: isEn ? "Link CPC" : "CPC Tautan",
       rawValue: linkCpc,
-      formattedValue: linkCpc !== null ? `${formatRupiah(linkCpc)} / klik` : "Tidak dapat dihitung",
+      formattedValue:
+        linkCpc !== null
+          ? `${fmtMoney(linkCpc)} / ${isEn ? "click" : "klik"}`
+          : isEn
+          ? "Cannot be calculated"
+          : "Tidak dapat dihitung",
       isValid: linkCpc !== null,
     },
     {
       id: "metaConversations",
-      label: "Hasil menurut Meta",
+      label: isEn ? "Meta Reported Results" : "Hasil menurut Meta",
       rawValue: metaConversations,
-      formattedValue: metaConversations !== null ? `${metaConversations.toLocaleString("id-ID")} hasil` : "Tidak tersedia",
+      formattedValue:
+        metaConversations !== null
+          ? `${metaConversations.toLocaleString(numLocale)} ${isEn ? "results" : "hasil"}`
+          : isEn
+          ? "Unavailable"
+          : "Tidak tersedia",
       isValid: metaConversations !== null,
     },
     {
       id: "crmLeads",
-      label: "Prospek CRM Tercatat",
+      label: isEn ? "Recorded CRM Leads" : "Prospek CRM Tercatat",
       rawValue: crmLeadsCount,
       formattedValue:
         crmLeadsCount === null
-          ? "Belum tersedia"
-          : `${crmLeadsCount.toLocaleString("id-ID")} prospek`,
+          ? isEn
+            ? "Not available yet"
+            : "Belum tersedia"
+          : `${crmLeadsCount.toLocaleString(numLocale)} ${isEn ? "leads" : "prospek"}`,
       isValid: crmLeadsCount !== null,
-      note: "Jumlah dari input atau unggahan klien; bukan pesan yang diverifikasi otomatis.",
+      note:
+        crmMetricNote ||
+        (isEn
+          ? "Number of leads storing this ad's ad_id, not the entire workspace."
+          : "Jumlah prospek yang menyimpan ad_id iklan ini, bukan seluruh workspace."),
     },
     {
       id: "costPerCrmLead",
-      label: "Biaya per Prospek CRM",
+      label: isEn ? "Cost per CRM Lead" : "Biaya per Prospek CRM",
       rawValue: crmLeadsCount !== null && crmLeadsCount > 0 ? Number((spend / crmLeadsCount).toFixed(2)) : null,
       formattedValue:
         crmLeadsCount !== null && crmLeadsCount > 0
-          ? `${formatRupiah(spend / crmLeadsCount)} / prospek`
+          ? `${fmtMoney(spend / crmLeadsCount)} / ${isEn ? "lead" : "prospek"}`
+          : isEn
+          ? "Cannot be calculated"
           : "Tidak dapat dihitung",
       isValid: crmLeadsCount !== null && crmLeadsCount > 0,
-      note: "Belanja Meta dibagi jumlah prospek CRM terkait dengan iklan ini.",
+      note: isEn
+        ? "Meta spend divided by CRM leads attributed to this ad."
+        : "Belanja Meta dibagi jumlah prospek CRM terkait dengan iklan ini.",
     },
   ];
 }
@@ -454,8 +460,8 @@ export function buildVerifiedMetricsSummary(params: {
       id: "qualifiedLeads",
       label: "Prospek Berkualitas (CRM)",
       rawValue: (qualifiedLeads ?? 0) > 0 ? qualifiedLeads : null,
-      formattedValue: (qualifiedLeads ?? 0) > 0 ? `${qualifiedLeads} prospek` : "Belum dicatat di CRM",
-      plainExplanation: "Calon pembeli yang telah dikonfirmasi memiliki anggaran dan minat survei lokasi.",
+      formattedValue: qualifiedLeads === undefined || qualifiedLeads === null ? "Data tidak tersedia" : `${qualifiedLeads} prospek`,
+      plainExplanation: "Qualified Lead = Hot + Warm. Cold bukan qualified lead. CQPL tidak ditampilkan sebagai Rp0 bila qualified lead nol.",
     },
   ];
 }
@@ -472,6 +478,7 @@ function generateDeterministicAdAnalysis(
     metaConversions: number | null;
     verifiedInboundMessages: number | null;
     crmLeadsCount: number | null;
+    crmSummary?: CrmAdSummary | null;
     crmSurveysCount: number;
     crmClosingsCount: number;
     detectedStatus?: SourceVerificationStatus;
@@ -493,6 +500,7 @@ function generateDeterministicAdAnalysis(
   const metaConversations = context.metaConversions ?? (metrics.results > 0 ? metrics.results : null);
   const verifiedMessages = context.verifiedInboundMessages;
   const crmLeads = context.crmLeadsCount;
+  const crmSummary = context.crmSummary;
 
   // Determine conversation verification status
   let verificationStatus: SourceVerificationStatus = context.detectedStatus || "BELUM TERVERIFIKASI";
@@ -549,8 +557,9 @@ function generateDeterministicAdAnalysis(
   // 2. Status Hasil WhatsApp
   const sourceDataStatus: SourceDataStatusSection = {
     metaResults: metaConversations !== null ? `${metaConversations.toLocaleString("id-ID")} hasil` : "Tidak tersedia",
-    crmProspects: crmLeads !== null ? `${crmLeads.toLocaleString("id-ID")} prospek dari CRM` : "Belum tersedia",
-    note: statusNote || "Data prospek berasal dari input atau unggahan klien. Pesan tidak dikumpulkan otomatis.",
+    crmProspects: crmSummary?.prospectsLine || (crmLeads !== null ? `${crmLeads.toLocaleString("id-ID")} prospek dari CRM` : "Belum tersedia"),
+    crmLines: crmSummary?.lines,
+    note: crmSummary?.note || statusNote || "Data prospek berasal dari input atau unggahan klien. Pesan tidak dikumpulkan otomatis.",
   };
 
   // 3. Keputusan (Satu keputusan utama + alasan maksimal 2 kalimat)
@@ -564,7 +573,9 @@ function generateDeterministicAdAnalysis(
     decision = "TAHAN KENAIKAN";
     decisionReason = crmLeads !== null && crmLeads > 0
       ? `CRM mencatat ${crmLeads.toLocaleString("id-ID")} prospek terkait iklan ini. Gunakan jumlah tersebut sebagai catatan yang diunggah klien, bukan sebagai verifikasi pesan otomatis.`
-      : "Belum ada prospek CRM yang dicatat untuk iklan ini. Lengkapi data prospek sebelum menilai biaya per prospek.";
+      : crmSummary && (crmSummary.workspaceTotal || 0) > 0
+      ? "Workspace memiliki prospek pada periode ini, tetapi tidak ada yang terhubung ke iklan ini. Jangan memakai total workspace sebagai hasil iklan."
+      : "Belum ada prospek CRM yang tercatat untuk iklan ini pada periode ini. Lengkapi data sebelum menilai biaya per prospek.";
   } else if (spend === 0 || impressions === 0) {
     decision = "TAHAN KENAIKAN";
     decisionReason = "Iklan belum memiliki data penayangan yang cukup. Biarkan materi iklan tayang untuk mengumpulkan respon awal.";
@@ -698,6 +709,7 @@ function generateDeterministicAdAnalysis(
     linkCpc,
     metaConversations,
     crmLeadsCount: context.crmLeadsCount,
+    crmMetricNote: context.crmSummary?.note,
     verifiedWhatsAppMessages: verifiedMessages,
     hasActiveIntegration: context.hasActiveIntegration,
     costPerConversation,
@@ -760,7 +772,22 @@ function generateDeterministicAdAnalysis(
       "Gunakan foto atau video bangunan/lahan asli dengan pencahayaan siang hari yang jelas. Sertakan kejelasan legalitas dan skema pembayaran yang telah terverifikasi.",
   };
 
-  return {
+  const cardCopy = composeAdCardCopy({
+    locale: "id",
+    paused: /paused|dijeda|archived|arsip/i.test(input.status || ""),
+    spend,
+    conversations: input.metrics.messagingConversations ?? metaConversations,
+    costPerConversation: input.metrics.costPerMessagingConversation ?? null,
+    linkCtr,
+    hasTarget: false,
+    directProspects: crmSummary?.availability === "error" ? null : crmLeads,
+    campaignOnly: crmSummary?.availability === "error" ? null : crmSummary?.campaignOnly ?? null,
+    crmFailed: crmSummary?.availability === "error",
+  });
+  performanceSummary = cardCopy.summary;
+  decisionReason = cardCopy.reason;
+
+  const result: AIAdAnalysisResponse = {
     isLiveAi: false,
     provider: "haspro_intelligence_engine",
     model: "haspro-ctwa-analyst-v1",
@@ -797,12 +824,318 @@ function generateDeterministicAdAnalysis(
       justification: decisionReason,
     },
   };
+
+  if (input.locale === "en") {
+    return localizeDeterministicAdAnalysisEn(result, {
+      spend,
+      impressions,
+      reach,
+      linkClicks,
+      allClicks,
+      linkCtr,
+      linkCpc,
+      cpm,
+      metaConversations,
+      verifiedMessages,
+      crmLeads,
+      crmSummary,
+      crmSurveysCount: context.crmSurveysCount,
+      crmClosingsCount: context.crmClosingsCount,
+      verificationStatus,
+      isCostPerConversationValid,
+      costPerConversation,
+      paused: /paused|dijeda|archived|arsip/i.test(input.status || ""),
+      messagingCost: input.metrics.costPerMessagingConversation ?? null,
+    });
+  }
+
+  return result;
 }
 
 /**
  * POST /api/ai/analyze-ad
  * Strictly manual AI analysis. Never triggered automatically.
  */
+
+function localizeDeterministicAdAnalysisEn(
+  base: AIAdAnalysisResponse,
+  params: {
+    spend: number;
+    impressions: number;
+    reach: number | null;
+    linkClicks: number;
+    allClicks: number;
+    linkCtr: number | null;
+    linkCpc: number | null;
+    cpm: number | null;
+    metaConversations: number | null;
+    verifiedMessages: number | null;
+    crmLeads: number | null;
+    crmSummary?: CrmAdSummary | null;
+    crmSurveysCount: number;
+    crmClosingsCount: number;
+    verificationStatus: SourceVerificationStatus;
+    isCostPerConversationValid: boolean;
+    costPerConversation: number | null;
+    paused: boolean;
+    messagingCost: number | null;
+  }
+): AIAdAnalysisResponse {
+  const {
+    spend,
+    impressions,
+    reach,
+    linkClicks,
+    allClicks,
+    linkCtr,
+    linkCpc,
+    cpm,
+    metaConversations,
+    verifiedMessages,
+    crmLeads,
+    crmSummary,
+    crmSurveysCount,
+    crmClosingsCount,
+    verificationStatus,
+    isCostPerConversationValid,
+    costPerConversation,
+  } = params;
+  const fmtMoney = (amt: number | null | undefined) => {
+    if (amt === null || amt === undefined || Number.isNaN(amt)) return "Cannot be calculated";
+    return `Rp${Math.round(amt).toLocaleString("en-US")}`;
+  };
+
+  let performanceSummary = "";
+  if (verificationStatus === "TERVERIFIKASI ADA" && crmLeads !== null) {
+    performanceSummary = `This ad has spent ${fmtMoney(spend)} and generated ${linkClicks.toLocaleString("en-US")} link clicks with ${verifiedMessages} verified inbound WhatsApp messages. Cost per chat is ${fmtMoney(costPerConversation)}. Continue monitoring response quality and accelerate sales follow-up speed.`;
+  } else if (verificationStatus === "BELUM TERVERIFIKASI") {
+    performanceSummary = `This ad spent ${fmtMoney(spend)} and generated ${linkClicks.toLocaleString("en-US")} link clicks. Recorded CRM leads are ${crmLeads === null ? "not available yet" : `${crmLeads.toLocaleString("en-US")}`}; this figure excludes chats not yet logged into CRM.`;
+  } else if (verificationStatus === "DATA TIDAK KONSISTEN") {
+    performanceSummary = `This ad recorded ${fmtMoney(spend)} in spend and ${linkClicks.toLocaleString("en-US")} link clicks. Meta results and CRM leads use different definitions; review both data sources before comparing them.`;
+  } else {
+    performanceSummary = `This ad has spent ${fmtMoney(spend)} and generated ${linkClicks.toLocaleString("en-US")} link clicks. No CRM leads have been recorded for this ad yet; ensure lead records are logged before evaluating post-click conversion.`;
+  }
+
+  let decisionReason = "";
+  if (verificationStatus === "DATA TIDAK KONSISTEN") {
+    decisionReason = "Meta results and CRM leads use different definitions. Review source data before comparing them for budget decisions.";
+  } else if (verificationStatus === "BELUM TERVERIFIKASI") {
+    decisionReason =
+      crmLeads !== null && crmLeads > 0
+        ? `CRM recorded ${crmLeads.toLocaleString("en-US")} leads linked to this ad. Treat that figure as client-uploaded CRM data rather than automated chat verification.`
+        : crmSummary && (crmSummary.workspaceTotal || 0) > 0
+        ? "The workspace has leads in this period, but none are attributed to this ad. Do not use workspace totals as this ad's outcome."
+        : "No CRM leads are recorded for this ad in this period. Complete CRM attribution before judging cost per lead.";
+  } else if (spend === 0 || impressions === 0) {
+    decisionReason = "This ad does not have enough delivery data yet. Allow the creative to run and gather initial audience response.";
+  } else if (verificationStatus === "TERVERIFIKASI ADA") {
+    if ((verifiedMessages || 0) >= 5 && isCostPerConversationValid && (costPerConversation || 999999) < 35000) {
+      decisionReason = `This ad generated ${verifiedMessages} verified WhatsApp chats at an efficient ${fmtMoney(costPerConversation)} per contact. Budget can be scaled gradually.`;
+    } else if (isCostPerConversationValid && (costPerConversation || 0) > 80000) {
+      decisionReason = `Cost per verified conversation (${fmtMoney(costPerConversation)}) exceeds the healthy efficiency threshold. Reduce the daily budget allocation.`;
+    } else {
+      decisionReason = "This ad is generating verified inbound messages within a reasonable cost range. Maintain current budget to keep lead flow stable.";
+    }
+  } else if (verificationStatus === "TERVERIFIKASI NOL") {
+    if (spend >= 300000 && linkClicks < 15) {
+      decisionReason = `Spend reached ${fmtMoney(spend)} without adequate click or message response. Pause temporarily to rework the offer and creative hook.`;
+    } else if (linkClicks >= 40) {
+      decisionReason = `There are ${linkClicks.toLocaleString("en-US")} link clicks, but no CRM leads are recorded yet. Check destination routing and update CRM records before scaling budget.`;
+    } else {
+      decisionReason = "No inbound messages are recorded in the system yet. Monitor performance until click volume is sufficient for evaluation.";
+    }
+  }
+
+  const keyFindings: KeyFindingItem[] = [
+    {
+      finding: "The ad creative is generating click interest from prospective buyers.",
+      evidence: `${linkClicks.toLocaleString("en-US")} link clicks at ${fmtMoney(linkCpc)} per click.`,
+      impact: "Social media viewers are interested enough to tap the call-to-action button.",
+      isHypothesis: false,
+    },
+  ];
+  if (verificationStatus === "TERVERIFIKASI ADA" && crmLeads !== null) {
+    keyFindings.push({
+      finding: "CRM data records leads attributed to this ad.",
+      evidence: `${crmLeads} leads recorded at ${fmtMoney(spend / crmLeads)} per CRM lead.`,
+      impact: "The sales team can review lead quality and follow-up progress in CRM.",
+      isHypothesis: false,
+    });
+  } else if (verificationStatus === "BELUM TERVERIFIKASI") {
+    keyFindings.push({
+      finding: "CRM data is not yet available to verify post-click outcomes.",
+      evidence: "Automated conversation tracking is not active for this ad.",
+      impact: "Down-funnel sales effectiveness cannot be calculated with certainty yet.",
+      isHypothesis: false,
+    });
+  } else if (verificationStatus === "DATA TIDAK KONSISTEN") {
+    keyFindings.push({
+      finding: "Meta results and CRM lead counts come from different tracking sources.",
+      evidence: `Meta reports ${metaConversations || 0} results while CRM records ${crmLeads ?? 0} leads.`,
+      impact: "Both sources should be reviewed separately before calculating cost per lead.",
+      isHypothesis: false,
+    });
+  } else {
+    keyFindings.push({
+      finding: "No CRM leads are attributed to this ad yet.",
+      evidence: `${linkClicks.toLocaleString("en-US")} link clicks and 0 recorded CRM leads.`,
+      impact: "Available data does not yet show post-click lead conversion.",
+      isHypothesis: true,
+    });
+  }
+  if (linkCtr !== null && linkCtr < 0.5 && impressions >= 2000) {
+    keyFindings.push({
+      finding: "Link click-through rate is low relative to impression volume.",
+      evidence: `Link CTR of ${linkCtr}% across ${impressions.toLocaleString("en-US")} impressions.`,
+      impact: "Most viewers scroll past the ad without opening the property offer link.",
+      isHypothesis: false,
+    });
+  } else if (crmSurveysCount > 0) {
+    keyFindings.push({
+      finding: "Some contacts progressed to the site-visit stage.",
+      evidence: `${crmSurveysCount} site visits recorded in CRM.`,
+      impact: "This ad is contributing directly toward property sales opportunities.",
+      isHypothesis: false,
+    });
+  }
+
+  const priorityActions: PriorityActionItem[] = [];
+  if (verificationStatus === "BELUM TERVERIFIKASI" || verificationStatus === "DATA TIDAK KONSISTEN") {
+    priorityActions.push({
+      action: "Upload or complete CRM lead records associated with this campaign.",
+      howToCheck: "Verify that your CRM upload includes ad or campaign identifiers matching Meta.",
+      expectedResult: "Leads can be evaluated alongside ad spend and click performance.",
+    });
+  } else if (verificationStatus === "TERVERIFIKASI NOL" && linkClicks >= 20) {
+    priorityActions.push({
+      action: "Review the ad destination link and pre-filled WhatsApp greeting.",
+      howToCheck: "Test the ad link on mobile to ensure it opens the active WhatsApp number smoothly.",
+      expectedResult: "Prospective buyers can send their inquiry message with minimal friction.",
+    });
+  }
+  if (verificationStatus === "TERVERIFIKASI ADA") {
+    priorityActions.push({
+      action: "Follow up on recorded CRM leads and guide qualified prospects to a site visit.",
+      howToCheck: "Update follow-up stages and site-visit schedules in CRM based on sales notes.",
+      expectedResult: "Prospective buyers receive unit floor plans and confirm a property visit schedule.",
+    });
+  }
+  if (linkCtr !== null && linkCtr < 0.6 && impressions >= 3000) {
+    priorityActions.push({
+      action: "Prepare 1 new exterior facade photo or walkthrough video variation to test.",
+      howToCheck: "Upload a brighter front-elevation image or neighborhood tour video.",
+      expectedResult: "Link CTR improves on initial delivery.",
+    });
+  } else {
+    priorityActions.push({
+      action: "Log or upload leads into CRM after sales follow-up.",
+      howToCheck: "Review periodic reports in HD Creative Ads without resetting ad set targeting.",
+      expectedResult: "Ad performance can be evaluated together with client-recorded lead quality.",
+    });
+  }
+
+  const firstFailingStage =
+    impressions === 0
+      ? "Impressions"
+      : linkClicks === 0
+      ? "Link Clicks"
+      : (verifiedMessages ?? 0) === 0
+      ? "CRM Lead Data"
+      : crmSurveysCount === 0
+      ? "Site Visit"
+      : crmClosingsCount === 0
+      ? "Sales Closing"
+      : "No critical bottleneck";
+
+  const stageExplanation =
+    firstFailingStage === "CRM Lead Data"
+      ? "Link clicks are recorded, but no CRM leads have been logged for this ad yet."
+      : firstFailingStage === "Site Visit"
+      ? "No site-visit records are present in the available CRM data yet."
+      : "Funnel is operating within normal parameters.";
+
+  const cardCopy = composeAdCardCopy({
+    locale: "en",
+    paused: params.paused,
+    spend,
+    conversations: metaConversations,
+    costPerConversation: params.messagingCost,
+    linkCtr,
+    hasTarget: false,
+    directProspects: crmSummary?.availability === "error" ? null : crmLeads,
+    campaignOnly: crmSummary?.availability === "error" ? null : crmSummary?.campaignOnly ?? null,
+    crmFailed: crmSummary?.availability === "error",
+  });
+  performanceSummary = cardCopy.summary;
+  decisionReason = cardCopy.reason;
+
+  return {
+    ...base,
+    performanceSummary,
+    sourceDataStatus: {
+      metaResults: metaConversations !== null ? `${metaConversations.toLocaleString("en-US")} results` : "Unavailable",
+      crmProspects: crmLeads !== null ? `${crmLeads.toLocaleString("en-US")} CRM leads` : "Not available yet",
+      crmLines: base.sourceDataStatus.crmLines,
+      note: "Lead data comes from client CRM input or uploads. Messages are not collected automatically.",
+    },
+    budgetDecision: {
+      decision: base.budgetDecision.decision,
+      reason: decisionReason,
+    },
+    keyFindings: keyFindings.slice(0, 3),
+    priorityActions: priorityActions.slice(0, 3),
+    coreMetrics: buildCoreMetrics({
+      spend,
+      linkClicks,
+      linkCpc,
+      metaConversations,
+      crmLeadsCount: crmLeads,
+      verifiedWhatsAppMessages: verifiedMessages,
+      hasActiveIntegration: Boolean(verifiedMessages && verifiedMessages > 0),
+      costPerConversation,
+      isCostPerConversationValid,
+      locale: "en",
+    }),
+    additionalDetails: {
+      funnelEvaluation: {
+        firstFailingStage,
+        explanation: stageExplanation,
+      },
+      facts: [
+        `Total actual spend recorded is ${fmtMoney(spend)}.`,
+        `The ad was displayed ${impressions.toLocaleString("en-US")} times.`,
+        `Generated ${linkClicks.toLocaleString("en-US")} outbound link clicks.`,
+        "Automated message collection is not used; lead context comes from client CRM inputs and uploads.",
+      ],
+      hypotheses: [
+        (verifiedMessages ?? (metaConversations || 0)) === 0 && linkClicks > 20
+          ? "The destination WhatsApp number or greeting template may be creating friction before prospects press send."
+          : "Current creative format shows reasonable acceptance among the target audience.",
+      ],
+      unknowns: [
+        "Leads that have not been logged or uploaded to CRM are not available for analysis.",
+        reach === null || reach === 0 ? "Unique individuals reached." : "",
+        crmSurveysCount === 0 ? "No site-visit records in the available CRM data yet." : "",
+      ].filter(Boolean),
+      allMetrics: [
+        { label: "Total Spend", value: fmtMoney(spend), explanation: "Official billed spend from Meta." },
+        { label: "Impressions", value: `${impressions.toLocaleString("en-US")} views`, explanation: "Total times the ad appeared on screen." },
+        { label: "Reach", value: reach !== null && reach > 0 ? `${reach.toLocaleString("en-US")} people` : "Unavailable", explanation: "Unique people who saw the ad (multi-day reach is not summed)." },
+        { label: "Link Clicks", value: `${linkClicks.toLocaleString("en-US")} clicks`, explanation: "Button/link clicks toward WhatsApp or destination." },
+        { label: "All Clicks", value: `${allClicks.toLocaleString("en-US")} interactions`, explanation: "All touch interactions on the ad post." },
+        { label: "Link CTR", value: linkCtr !== null ? `${linkCtr}%` : "Cannot be calculated", explanation: "Percentage of impressions resulting in a link click." },
+        { label: "CPM", value: cpm !== null ? fmtMoney(cpm) : "Cannot be calculated", explanation: "Cost per 1,000 ad impressions." },
+      ],
+      creativeNotes:
+        "Use authentic daylight photos or walkthrough videos of the property/site. Highlight verified legal status and clear payment terms.",
+    },
+    executiveSummary: performanceSummary,
+    actionDecision: {
+      ...base.actionDecision,
+      justification: decisionReason,
+    },
+  };
+}
 export async function POST(request: NextRequest) {
   let quotaReservation: { userId: string; reservationId: string } | null = null;
   try {
@@ -883,18 +1216,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const hasActiveIntegration = false;
-    const verifiedInboundMessages: number | null = null;
+    let hasActiveIntegration = false;
+    let verifiedInboundMessages: number | null = null;
     let crmLeadsCount: number | null = null;
+    let crmSummary: CrmAdSummary | null = null;
+    let crmContextBlock: string | null = null;
     let crmSurveysCount = 0;
     let crmClosingsCount = 0;
+    let sanitizedChat = "";
 
     // 2. Ground-Truth Data Sourcing from Server Database (Tenant Isolated)
     if (data.adId) {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.adId);
       let query = supabase
         .from("ads")
-        .select("id, name, status, provider_ad_id, campaign_id, campaigns(id, name, objective)")
+        .select("id, name, status, provider_ad_id, campaign_id, campaigns(id, name, objective, status)")
         .eq("organization_id", organizationId);
 
       if (isUuid) {
@@ -941,9 +1277,8 @@ export async function POST(request: NextRequest) {
       }
 
       // Fetch authentic persisted insights from database, aggregated with the
-      // SAME shared aggregation as the dashboard (AI-02). An explicit period
-      // from the caller is resolved in the ad account's timezone; without a
-      // period, all stored rows are used and labelled as such.
+      // SAME shared aggregation and dateRange parser as getAdsIntelligenceData (AI-02).
+      // Default period is 30d so lifetime rows are never mixed into a dashboard view.
       const { data: campRow } = await supabase
         .from("campaigns")
         .select("ad_account_id")
@@ -984,10 +1319,19 @@ export async function POST(request: NextRequest) {
 
       const agg: AdMetricsAggregate = aggregateAdInsights(insights || []);
       analysisAggregate = agg;
+      let calendarDays = agg.days;
+      if (range.since && range.until) {
+        const span =
+          Math.round(
+            (new Date(`${range.until}T00:00:00Z`).getTime() - new Date(`${range.since}T00:00:00Z`).getTime()) /
+              86_400_000
+          ) + 1;
+        calendarDays = Math.max(1, span);
+      }
       analysisPeriod = {
         since: range.since || null,
         until: range.until || null,
-        days: agg.days,
+        days: calendarDays,
         timezone: accountTimezone,
         label: range.since && range.until ? `${range.since} s.d. ${range.until}` : "Semua data tersimpan",
       };
@@ -1005,25 +1349,87 @@ export async function POST(request: NextRequest) {
       const serverCpm = agg.cpm;
       const serverCostPerResult = agg.costPerResult;
 
-      // Query CRM leads count
-      const { count: leadsCount } = await supabase
+      const applyPeriod = <T extends { gte: (column: string, value: string) => T; lte: (column: string, value: string) => T }>(
+        query: T,
+        column: string
+      ) => {
+        let next = query;
+        if (range.since) next = next.gte(column, `${range.since}T00:00:00.000Z`);
+        if (range.until) next = next.lte(column, `${range.until}T23:59:59.999Z`);
+        return next;
+      };
+
+      // CRM is read for the whole workspace in the same period, then split.
+      // A row counts for this ad only when conversations.ad_id stores this ad's id.
+      const crmBounds = calendarDayBounds(range.since, range.until);
+      let crmQuery = supabase
         .from("conversations")
-        .select("id", { count: "exact", head: true })
-        .eq("ad_id", verifiedAd.id)
+        .select("id, ad_id, campaign_id, attribution_status, quality_label, channel, attribution_evidence", { count: "exact" })
         .eq("organization_id", organizationId)
         .eq("channel", "crm_upload")
-        .neq("attribution_status", "unknown");
-
-      crmLeadsCount = leadsCount;
-
-      // Query CRM surveys & closings for THIS ad only (via its conversations)
-      const { data: adConvs } = await supabase
-        .from("conversations")
-        .select("id")
+        .limit(2000);
+      if (crmBounds.start) crmQuery = crmQuery.gte("started_at", crmBounds.start);
+      if (crmBounds.end) crmQuery = crmQuery.lte("started_at", crmBounds.end);
+      const crmResult = await crmQuery;
+      const crmRows = (crmResult.data || []).map((row) => {
+        const evidence = row.attribution_evidence;
+        const evidenceObject = evidence && typeof evidence === "object" && !Array.isArray(evidence) ? evidence : null;
+        const funnelStage = evidenceObject && typeof evidenceObject.funnel_stage === "string" ? evidenceObject.funnel_stage : null;
+        const providerAdSetOnRow = evidenceObject && typeof evidenceObject.provider_adset_id === "string" ? evidenceObject.provider_adset_id : null;
+        return {
+          id: row.id,
+          ad_id: row.ad_id,
+          campaign_id: row.campaign_id,
+          attribution_status: row.attribution_status,
+          quality_label: row.quality_label,
+          channel: row.channel,
+          attribution_evidence: { funnel_stage: funnelStage, provider_adset_id: providerAdSetOnRow },
+        };
+      });
+      const { data: adSetInsight } = await supabase
+        .from("ad_insights")
+        .select("adset_id")
         .eq("ad_id", verifiedAd.id)
         .eq("organization_id", organizationId)
-        .eq("channel", "crm_upload");
-      const adConvIds = (adConvs || []).map((c) => c.id);
+        .limit(1)
+        .maybeSingle();
+      crmSummary = summarizeCrmForAd(
+        crmResult.error ? null : crmRows,
+        Boolean(crmResult.error),
+        verifiedAd.id,
+        verifiedAd.campaign_id,
+        {
+          truncated: !crmResult.error && crmResult.count !== null && crmRows.length < crmResult.count,
+          providerAdSetId: adSetInsight?.adset_id || null,
+        }
+      );
+      crmLeadsCount = crmSummary.attributedToAd;
+      crmContextBlock = formatCrmContextForPrompt(buildCrmAnalysisContext(crmResult.error ? null : crmRows, {
+        failed: Boolean(crmResult.error),
+        truncated: !crmResult.error && crmResult.count !== null && crmRows.length < crmResult.count,
+        organizationId,
+        since: range.since,
+        until: range.until,
+        scope: "ad",
+        campaignId: verifiedAd.campaign_id,
+        adId: verifiedAd.id,
+        providerAdSetId: adSetInsight?.adset_id || null,
+        spend: serverSpend,
+      }));
+
+      const adConversations = await applyPeriod(
+        supabase
+          .from("conversations")
+          .select("id, channel")
+          .eq("ad_id", verifiedAd.id)
+          .eq("organization_id", organizationId),
+        "started_at"
+      );
+      const periodConversationRows = adConversations.error ? [] : adConversations.data || [];
+      const conversationIds = periodConversationRows.map((row) => row.id);
+      hasActiveIntegration = conversationIds.length > 0;
+
+      const adConvIds = crmSummary.attributedIds;
       const { data: outcomes } = adConvIds.length
         ? await supabase
             .from("lead_outcomes")
@@ -1051,14 +1457,36 @@ export async function POST(request: NextRequest) {
       // here (qualifiedLeads stays null). CRM counts below are raw recorded
       // prospects/outcomes, not quality judgments.
 
-      const campaignData = verifiedAd.campaigns as { id?: string; name?: string; objective?: string } | null;
+      if (conversationIds.length > 0) {
+        let messageQuery = supabase
+          .from("messages")
+          .select("body, sender_type, direction, sent_at")
+          .eq("organization_id", organizationId)
+          .in("conversation_id", conversationIds)
+          .order("sent_at", { ascending: true })
+          .limit(80);
+        if (range.since) messageQuery = messageQuery.gte("sent_at", `${range.since}T00:00:00.000Z`);
+        if (range.until) messageQuery = messageQuery.lte("sent_at", `${range.until}T23:59:59.999Z`);
+        const { data: chatRows } = await messageQuery;
+        const rows = chatRows || [];
+        verifiedInboundMessages = rows.filter((row) => {
+          const direction = (row.direction || "").toLowerCase();
+          const sender = (row.sender_type || "").toLowerCase();
+          return direction === "inbound" || sender === "contact" || sender === "customer" || sender === "user";
+        }).length;
+        sanitizedChat = sanitizeUntrustedText(
+          rows.map((row) => `${row.sender_type || row.direction || "unknown"}: ${row.body || ""}`).join("\n")
+        );
+      }
+
+      const campaignData = verifiedAd.campaigns as { id?: string; name?: string; objective?: string; status?: string } | null;
 
       data = {
         ...data,
         adName: verifiedAd.name,
         campaignName: campaignData?.name || data.campaignName,
         campaignObjective: campaignData?.objective || data.campaignObjective,
-        status: verifiedAd.status,
+        status: effectiveDeliveryStatus(verifiedAd.status, campaignData?.status),
         metrics: {
           spend: serverSpend,
           impressions: serverImpressions,
@@ -1077,7 +1505,7 @@ export async function POST(request: NextRequest) {
           costPerMessagingConversation: agg.costPerMessagingConversation,
           costPerLead: agg.costPerLead,
           resultType: "Hasil Meta",
-          attributedLeads: crmLeadsCount || 0,
+          attributedLeads: crmSummary?.attributedToAd || 0,
           qualifiedLeads: null,
         },
       };
@@ -1095,6 +1523,7 @@ export async function POST(request: NextRequest) {
         metaConversions: data.metrics.results,
         verifiedInboundMessages,
         crmLeadsCount,
+        crmSummary,
         crmSurveysCount,
         crmClosingsCount,
       });
@@ -1132,116 +1561,76 @@ export async function POST(request: NextRequest) {
       try {
         const client = new MetaModelApiClient({ timeoutMs: 35000, maxRetries: 0 });
 
-        const systemPrompt = `Anda adalah Analis Meta Ads untuk pemasaran properti. Analisis performa iklan Meta dan catatan CRM yang dimasukkan atau diunggah klien.
+        const evalResult = evaluateAdsPerformance({
+          period: data.dateRange,
+          durationDays: analysisPeriod.days,
+          spend: data.metrics.spend,
+          results: data.metrics.messagingConversations ?? data.metrics.results,
+          reportedCpr: data.metrics.costPerMessagingConversation ?? data.metrics.costPerResult,
+          targetCpr: null,
+          linkClicks: data.metrics.linkClicks,
+          impressions: data.metrics.impressions,
+          reach: data.metrics.reach ?? undefined,
+          frequency: analysisAggregate?.frequency ?? null,
+          campaignObjective: data.campaignObjective,
+          locale: "id",
+          entityStatus: data.status || "UNKNOWN",
+          analysisScope: "ad",
+        });
 
-TUGAS UTAMA:
-Membantu pemilik bisnis dan tim marketing memahami:
-1. Apa yang ditunjukkan data hasil Meta dan catatan prospek CRM yang tersedia.
-2. Apakah biaya iklan sebanding dengan hasil yang diperoleh.
-3. Apa masalah paling mungkin berdasarkan data yang tersedia.
-4. Tindakan apa yang harus dilakukan selanjutnya.
+        const groundTruth: CtwaGroundTruthMetrics = {
+          spend: data.metrics.spend,
+          link_ctr: data.metrics.linkCtr ?? null,
+          cpm: data.metrics.cpm ?? null,
+          link_cpc: data.metrics.linkCpc ?? null,
+          messaging_conversations: data.metrics.messagingConversations ?? null,
+          leads: data.metrics.leads ?? null,
+          cost_per_messaging_conversation: data.metrics.costPerMessagingConversation ?? null,
+          cost_per_lead: data.metrics.costPerLead ?? null,
+          unique_reach: data.metrics.reach ?? null,
+          impressions: data.metrics.impressions,
+          link_clicks: data.metrics.linkClicks,
+          all_clicks: data.metrics.allClicks,
+          frequency: analysisAggregate?.frequency ?? null,
+          results_legacy: data.metrics.results ?? null,
+          cost_per_result_legacy: data.metrics.costPerResult ?? null,
+        };
 
-GAYA BAHASA & ATURAN WAJIB:
-- Gunakan bahasa Indonesia sehari-hari yang profesional, kalimat pendek, langsung ke inti.
-- Maksimal 2 kalimat per paragraf.
-- Hindari frasa berulang ("Hal ini menunjukkan bahwa...", "Dampak bisnis properti...", "Keramaian ini belum menghasilkan peluang...").
-- Gunakan format Rupiah yang konsisten tanpa spasi, contoh: Rp323.001.
-
-ATURAN MUTLAK VALIDASI DATA:
-1. Jangan menyamakan klik tautan, hasil Meta, dan jumlah prospek CRM.
-2. Status sumber data (sourceDataStatus) harus menjelaskan hasil Meta dan prospek CRM apa adanya:
-   - Pesan tidak diambil otomatis; CRM hanya memuat catatan yang dimasukkan/diunggah klien.
-   - Tandai ketidakkonsistenan di catatan hanya jika angka dari sumber yang tersedia saling bertentangan.
-3. Jika jumlah percakapan adalah 0, biaya per percakapan TIDAK BOLEH dianggap valid.
-4. KEPUTUSAN ANGGARAN (budgetDecision.decision) WAJIB MEMILIH SALAH SATU:
-   - NAIKKAN
-   - PERTAHANKAN
-   - TAHAN KENAIKAN
-   - KURANGI
-   - HENTIKAN SEMENTARA
-   Disertai alasan maksimal 2 kalimat.
-5. TEMUAN PENTING (keyFindings): Maksimal 3 temuan. Setiap temuan HANYA berisi: finding (1 kalimat), evidence (angka relevan), impact (1 kalimat sederhana).
-6. TINDAKAN PRIORITAS (priorityActions): Maksimal 3 tindakan. Setiap tindakan berisi: action (apa yang dilakukan), howToCheck (cara periksa), expectedResult (hasil yang diharapkan).
-7. TRANSPARANSI DATA & PANDUAN MATERI IKLAN:
-   - JANGAN MENGARANG INFORMASI PROPERTI, HARGA, ATAU PROMOSI.
-   - Benchmark eksternal industri properti spesifik wilayah belum diverifikasi, gunakan data internal aktual.
-   - Jika pengguna meminta rekomendasi struktur materi iklan, gunakan placeholder: [Sebutkan Lokasi Strategis], [Sebutkan Legalitas: misal SHM / PBG Ready], [Sebutkan Skema: misal KPR DP Ringan / Cash Bertahap].
-
-HASILKAN OUTPUT JSON MURNI DENGAN STRUKTUR:
-{
-  "performanceSummary": "string maksimal 3-4 baris ringkasan kinerja to-the-point",
-  "sourceDataStatus": {
-    "metaResults": "string jumlah hasil Meta atau 'Tidak tersedia'",
-    "crmProspects": "string jumlah prospek CRM atau 'Belum tersedia'",
-    "note": "string maksimal satu kalimat catatan jika ada kendala data"
-  },
-  "budgetDecision": {
-    "decision": "NAIKKAN" | "PERTAHANKAN" | "TAHAN KENAIKAN" | "KURANGI" | "HENTIKAN SEMENTARA",
-    "reason": "string alasan keputusan maksimal 2 kalimat"
-  },
-  "keyFindings": [
-    {
-      "finding": "string satu kalimat temuan",
-      "evidence": "string angka relevan",
-      "impact": "string satu kalimat dampak sederhana",
-      "isHypothesis": boolean
-    }
-  ],
-  "priorityActions": [
-    {
-      "action": "string apa yang harus dilakukan",
-      "howToCheck": "string cara memeriksanya",
-      "expectedResult": "string hasil yang diharapkan"
-    }
-  ],
-  "additionalDetails": {
-    "funnelEvaluation": {
-      "firstFailingStage": "string tahap pertama yang bermasalah",
-      "explanation": "string penjelasan singkat masalah pada tahap tersebut"
-    },
-    "facts": ["string fakta 1", "string fakta 2"],
-    "hypotheses": ["string hipotesis 1"],
-    "unknowns": ["string informasi yang belum diketahui"],
-    "creativeNotes": "string catatan materi iklan jika relevan"
-  }
-}`;
-
-        const fmtOrNA = (value: number | null | undefined, format: (v: number) => string) =>
-          value !== null && value !== undefined ? format(value) : "Tidak tersedia";
-        const userPrompt = `Analisis performa iklan Meta berikut berdasarkan data aktual yang tersedia:
-Nama Iklan: "${data.adName}"
-Kampanye: "${data.campaignName || "Kampanye Properti"}"
-Objektif Kampanye: "${data.campaignObjective || "Belum ditentukan"}"
-Status: ${data.status || "ACTIVE"}
-Periode Analisis: ${analysisPeriod.label} (${analysisPeriod.days} hari observasi, timezone ${analysisPeriod.timezone})
-Jumlah Baris Data: ${analysisAggregate?.rowCount ?? 0} baris insights harian
-
-Data Metrik Aktual:
-- Belanja Iklan: ${formatRupiah(data.metrics.spend)}
-- Penayangan (Impressions): ${data.metrics.impressions.toLocaleString("id-ID")} kali
-- Jangkauan (Reach): ${fmtOrNA(data.metrics.reach, (v) => `${v.toLocaleString("id-ID")} orang`)} (reach multi-hari tidak dijumlahkan sebagai reach unik)
-- Frekuensi: ${fmtOrNA(analysisAggregate?.frequency, (v) => `${v}x`)}
-- Klik Tautan (Link Clicks): ${data.metrics.linkClicks.toLocaleString("id-ID")} klik tautan
-- CTR Tautan: ${fmtOrNA(data.metrics.linkCtr, (v) => `${v}%`)}
-- CPC Tautan: ${fmtOrNA(data.metrics.linkCpc, (v) => `${formatRupiah(v)} / klik`)}
-- CPM: ${fmtOrNA(data.metrics.cpm, (v) => formatRupiah(v))}
-- Percakapan Messaging (Meta): ${fmtOrNA(data.metrics.messagingConversations, (v) => `${v.toLocaleString("id-ID")} percakapan`)}
-- Biaya per Percakapan Messaging: ${fmtOrNA(data.metrics.costPerMessagingConversation, (v) => formatRupiah(v))}
-- Leads (Meta): ${fmtOrNA(data.metrics.leads, (v) => `${v.toLocaleString("id-ID")} lead`)}
-- Biaya per Lead: ${fmtOrNA(data.metrics.costPerLead, (v) => formatRupiah(v))}
-- Prospek dari data yang dimasukkan/diunggah klien: ${crmLeadsCount !== null ? `${crmLeadsCount.toLocaleString("id-ID")} prospek` : "Belum tersedia"}
-- Jadwal Survei CRM: ${crmSurveysCount} survei
-- Closing Transaksi: ${crmClosingsCount} transaksi
-- Kualitas Lead / CPQL: Tidak tersedia (tidak ada sumber kualitas lead yang terverifikasi; jangan menyimpulkan kualitas lead)
-
-ATURAN INTERPRETASI WAJIB:
-- Percakapan messaging dan leads adalah jenis hasil berbeda; jangan menyamakannya.
-- Nilai "Tidak tersedia" berarti data tidak ada, bukan nol.
-- Jangan mengarang benchmark industri, target CPR, atau fase Learning.
-- Jangan menyimpulkan kualitas lead, kualitas buyer, atau performa sales.
-- Bila jumlah observasi kecil, nyatakan keterbatasan data dan hindari rekomendasi menghentikan iklan tanpa dasar yang cukup.
-
-Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan menyamakan hasil Meta dengan jumlah prospek CRM.`;
+        const systemPrompt = CTWA_SYSTEM_PROMPT;
+        const baseUserPrompt = buildCtwaUserPrompt({
+          adName: data.adName,
+          campaignName: data.campaignName || (data.locale === "en" ? "Property Campaign" : "Kampanye Properti"),
+          campaignObjective: data.campaignObjective || null,
+          status: data.status || "ACTIVE",
+          analysisScope: "ad",
+          periodDays: analysisPeriod.days,
+          periodLabel: analysisPeriod.label,
+          durationDays: analysisPeriod.days,
+          timezone: analysisPeriod.timezone,
+          rowCount: analysisAggregate?.rowCount ?? 0,
+          dataStatus: evalResult.dataStatus,
+          dataStatusReason: evalResult.dataStatusReason,
+          evaluatorAction: evalResult.action,
+          targetCpr: null,
+          targetCpql: null,
+          crmProspects: crmLeadsCount,
+          crmAttributionNote: crmSummary?.note,
+          crmContextBlock,
+          verifiedInboundMessages,
+          property: {
+            projectName: data.propertyContext?.projectName,
+            location: data.propertyContext?.location,
+            priceRange: data.propertyContext?.priceRange,
+            propertyType: data.propertyContext?.propertyType,
+          },
+          metrics: groundTruth,
+          untrustedChatBlock: wrapUntrustedChatBlock(sanitizedChat),
+          formatMoney: formatRupiah,
+        });
+        const userPrompt =
+          data.locale === "en"
+            ? `${baseUserPrompt}\n\nLANGUAGE INSTRUCTION: Write all narrative text fields (performanceSummary, budgetDecision.reason, keyFindings[].finding/evidence/impact, priorityActions[].action/howToCheck/expectedResult, additionalDetails.funnelEvaluation.firstFailingStage/explanation, facts, hypotheses, unknowns, creativeNotes, chain_of_thought) in clear, professional English. Keep enum keys (such as budgetDecision.decision and recommended_action) strictly in their required schema enum values.`
+            : baseUserPrompt;
 
         const response = await client.createChatCompletion({
           messages: [
@@ -1311,17 +1700,40 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
           );
         }
 
-        const validData = validationResult.data;
+        const validData = applyGuardrailsToModelOutput(
+          validationResult.data,
+          {
+            dataStatus: evalResult.dataStatus,
+            durationDays: analysisPeriod.days,
+            hasChatTranscript: sanitizedChat.length > 0,
+            entityStatus: evalResult.entityStatus,
+            analysisScope: "ad",
+            spend: data.metrics.spend,
+            results: data.metrics.messagingConversations ?? data.metrics.results,
+            targetCpr: null,
+            performanceStatus: evalResult.performanceStatus,
+            actualCpr: evalResult.actualCpr,
+          },
+          {
+            spend: groundTruth.spend,
+            link_ctr: groundTruth.link_ctr,
+            cpm: groundTruth.cpm,
+            link_cpc: groundTruth.link_cpc,
+            messaging_conversations: groundTruth.messaging_conversations,
+            leads: groundTruth.leads,
+            cost_per_messaging_conversation: groundTruth.cost_per_messaging_conversation,
+            cost_per_lead: groundTruth.cost_per_lead,
+            unique_reach: groundTruth.unique_reach,
+          }
+        );
         const dataSourceStatus: SourceDataStatusSection = {
           metaResults:
             data.metrics.results !== null && data.metrics.results !== undefined
               ? `${data.metrics.results.toLocaleString("id-ID")} hasil`
               : "Tidak tersedia",
-          crmProspects:
-            crmLeadsCount !== null
-              ? `${crmLeadsCount.toLocaleString("id-ID")} prospek dari CRM`
-              : "Belum tersedia",
-          note: "Pesan tidak dikumpulkan otomatis. Data CRM berasal dari input atau unggahan klien.",
+          crmProspects: crmSummary?.prospectsLine || (crmLeadsCount !== null ? `${crmLeadsCount.toLocaleString("id-ID")} prospek dari CRM` : "Belum tersedia"),
+          crmLines: crmSummary?.lines,
+          note: crmSummary ? `${crmSummary.note} Periode: ${analysisPeriod.label}.` : "Pesan tidak dikumpulkan otomatis. Data CRM berasal dari input atau unggahan klien.",
         };
 
         // Build 6 Core Metrics mathematically
@@ -1334,10 +1746,12 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
           linkCpc: data.metrics.linkCpc ?? null,
           metaConversations: data.metrics.results,
           crmLeadsCount,
+          crmMetricNote: crmSummary?.note,
           verifiedWhatsAppMessages: verifiedInboundMessages,
           hasActiveIntegration,
           costPerConversation,
           isCostPerConversationValid: isCostValid,
+          locale: data.locale,
         });
 
         const allMetricsDetailed = [
@@ -1348,7 +1762,21 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
           { label: "Semua Klik", value: `${data.metrics.allClicks.toLocaleString("id-ID")} interaksi`, explanation: "Seluruh sentuhan interaksi pada postingan iklan." },
           { label: "CTR Tautan", value: data.metrics.linkCtr !== null ? `${data.metrics.linkCtr}%` : "Tidak dapat dihitung", explanation: "Persentase penonton yang menekan tautan." },
           { label: "CPM", value: data.metrics.cpm !== null ? formatRupiah(data.metrics.cpm) : "Tidak dapat dihitung", explanation: "Biaya lelang per 1.000 tayangan iklan." },
+          { label: "Percakapan Messaging", value: data.metrics.messagingConversations != null ? `${data.metrics.messagingConversations.toLocaleString("id-ID")}` : "Tidak tersedia", explanation: "Chat yang Meta laporkan dimulai dari iklan CTWA. Angka ini tidak sama dengan jumlah catatan CRM." },
         ];
+
+        const cardCopy = composeAdCardCopy({
+          locale: data.locale === "en" ? "en" : "id",
+          paused: /paused|dijeda|archived|arsip/i.test(data.status || ""),
+          spend: data.metrics.spend,
+          conversations: data.metrics.messagingConversations ?? null,
+          costPerConversation: data.metrics.costPerMessagingConversation ?? null,
+          linkCtr: data.metrics.linkCtr ?? null,
+          hasTarget: false,
+          directProspects: crmSummary?.availability === "error" ? null : crmSummary?.attributedToAd ?? crmLeadsCount,
+          campaignOnly: crmSummary?.availability === "error" ? null : crmSummary?.campaignOnly ?? null,
+          crmFailed: crmSummary?.availability === "error",
+        });
 
         const responsePayload: AIAdAnalysisResponse = {
           isLiveAi: true,
@@ -1359,9 +1787,9 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
           adName: data.adName,
           campaignName: data.campaignName,
           campaignObjective: data.campaignObjective,
-          performanceSummary: validData.performanceSummary,
+          performanceSummary: cardCopy.summary,
           sourceDataStatus: dataSourceStatus,
-          budgetDecision: validData.budgetDecision,
+          budgetDecision: { ...validData.budgetDecision, reason: cardCopy.reason },
           keyFindings: validData.keyFindings,
           priorityActions: validData.priorityActions,
           coreMetrics,
@@ -1369,7 +1797,7 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
             ...validData.additionalDetails,
             allMetrics: allMetricsDetailed,
           },
-          executiveSummary: validData.performanceSummary,
+          executiveSummary: cardCopy.summary,
           actionDecision: {
             priority:
               validData.budgetDecision.decision === "NAIKKAN"
@@ -1383,8 +1811,11 @@ Berikan analisis singkat, padat, dan langsung pada keputusan bisnis. Jangan meny
                 : "PERTAHANKAN",
             priorityLabel: validData.budgetDecision.decision,
             headline: validData.budgetDecision.decision,
-            justification: validData.budgetDecision.reason,
+            justification: cardCopy.reason,
           },
+          recommended_action: validData.recommended_action,
+          chain_of_thought: validData.chain_of_thought,
+          context_awareness: validData.context_awareness,
         };
 
         if (reservation.reservationId && !(await finishAiAnalysis(user.id, reservation.reservationId, true))) {

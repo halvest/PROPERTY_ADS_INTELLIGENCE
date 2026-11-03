@@ -244,7 +244,7 @@ export function MetaAssetOnboarding() {
             : { text: id ? "Belum Terhubung" : "Not Connected", cls: "bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700" };
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-5 transition-colors">
+    <div className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 sm:p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-5 transition-colors">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-zinc-100 pb-4 dark:border-zinc-800">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -267,31 +267,46 @@ export function MetaAssetOnboarding() {
             type="button"
             onClick={() => void loadAssets()}
             disabled={isLoading}
-            className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer disabled:opacity-50 transition-colors"
+            className="rounded-xl border border-zinc-200/90 bg-white px-3.5 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 dark:border-zinc-700/80 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
           >
-            {id ? "Segarkan Akun" : "Refresh Accounts"}
+            <svg className={`h-3.5 w-3.5 ${isLoading ? "animate-spin text-amber-500" : "text-zinc-400"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>{id ? "Segarkan Akun" : "Refresh Accounts"}</span>
           </button>
           {connectedAccounts.length > 0 && (
             <button
               type="button"
               onClick={() => setShowConfirmDisconnect(true)}
               disabled={isDisconnecting}
-              className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-900/40 dark:bg-zinc-800 dark:text-rose-400 cursor-pointer disabled:opacity-50 transition-colors"
+              className="rounded-xl border border-rose-200 bg-white px-3.5 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-900/40 dark:bg-zinc-800 dark:text-rose-400 cursor-pointer disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
             >
-              {id ? "Putuskan Koneksi" : "Disconnect"}
+              <svg className="h-3.5 w-3.5 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              <span>{id ? "Putuskan Koneksi" : "Disconnect"}</span>
             </button>
           )}
         </div>
       </div>
 
       {isLoading ? (
-        <p role="status" className="text-xs text-zinc-400 py-2">
-          {id ? "Memuat akun iklan dari Meta…" : "Loading ad accounts from Meta…"}
-        </p>
+        <div className="py-6 flex items-center justify-center gap-2.5 text-xs text-zinc-400">
+          <svg className="h-4 w-4 animate-spin text-amber-500" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <span>{id ? "Memuat akun iklan dari Meta Marketing API…" : "Loading ad accounts from Meta Marketing API…"}</span>
+        </div>
       ) : needsReconnect ? (
-        <div className="rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 p-6 text-center space-y-3">
-          <div>
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+        <div className="rounded-2xl border border-dashed border-amber-300 dark:border-amber-800/60 bg-amber-50/30 dark:bg-amber-950/10 p-8 text-center space-y-4">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+          </div>
+          <div className="max-w-md mx-auto">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
               {tokenStatus === "permission_insufficient"
                 ? id
                   ? "Izin bacaan iklan belum diberikan"
@@ -301,44 +316,58 @@ export function MetaAssetOnboarding() {
                     ? "Koneksi Meta perlu dihubungkan ulang"
                     : "The Meta connection needs to be reconnected"
                   : id
-                    ? "Hubungkan akun Meta Anda"
-                    : "Connect your Meta account"}
+                    ? "Hubungkan Akun Meta Anda"
+                    : "Connect Your Meta Account"}
             </h3>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto mt-1 leading-relaxed">
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
               {id
-                ? "Masuk dengan akun Meta yang memiliki akses ke akun iklan, lalu setujui izin bacaan iklan (ads_read). Data hanya dibaca dan tidak diubah."
-                : "Sign in with a Meta account that can access the ad accounts and grant the ad read permission (ads_read). Data is only read, never modified."}
+                ? "Masuk dengan akun Meta yang memiliki akses ke akun iklan properti, lalu setujui izin bacaan iklan (ads_read). Data hanya dibaca dan tidak akan diubah."
+                : "Sign in with a Meta account that has access to ad accounts and grant read permission (ads_read). Data is read-only and never modified."}
             </p>
           </div>
-          <a
-            href="/api/auth/meta/authorize"
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 transition-colors"
-          >
-            {tokenStatus === "not_connected"
-              ? id
-                ? "Hubungkan Akun Meta"
-                : "Connect Meta Account"
-              : id
-                ? "Hubungkan Ulang Meta"
-                : "Reconnect Meta"}
-          </a>
+          <div>
+            <a
+              href="/api/auth/meta/authorize"
+              className="btn-solar inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
+              </svg>
+              <span>
+                {tokenStatus === "not_connected"
+                  ? id
+                    ? "Otorisasi Akun Meta"
+                    : "Authorize Meta Account"
+                  : id
+                    ? "Hubungkan Ulang Meta"
+                    : "Reconnect Meta"}
+              </span>
+            </a>
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
           <div>
-            <label htmlFor="account-search" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
-              {id ? "Pilih Akun Iklan" : "Select Ad Accounts"}
+            <label htmlFor="account-search" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
+              {id ? "Pilih Akun Iklan yang Dikelola" : "Select Managed Ad Accounts"}
             </label>
-            <input
-              id="account-search"
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={id ? "Cari nama atau ID akun…" : "Search by account name or ID…"}
-              className="mb-2 block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-            />
+            <div className="relative mb-3">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-zinc-400">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <input
+                id="account-search"
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={id ? "Cari nama akun atau Ad Account ID…" : "Search by account name or ID…"}
+                className="block w-full rounded-xl border border-zinc-200 bg-white pl-9 pr-3 py-2 text-xs text-zinc-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-zinc-700/80 dark:bg-zinc-950 dark:text-zinc-100 transition-all"
+              />
+            </div>
             {visibleAccounts.length === 0 ? (
-              <p role="status" className="text-xs text-zinc-400 italic py-2">
+              <p role="status" className="text-xs text-zinc-400 italic py-4 text-center">
                 {accountError
                   ? accountError === "rate_limited"
                     ? id ? "Meta membatasi permintaan. Tunggu sebentar lalu segarkan akun." : "Meta rate limited this request. Wait briefly, then refresh accounts."
@@ -356,32 +385,39 @@ export function MetaAssetOnboarding() {
                     : "No accounts match your search."}
               </p>
             ) : (
-              <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
+              <ul className="max-h-80 space-y-2 overflow-y-auto pr-1 no-scrollbar">
                 {visibleAccounts.map((acc) => {
                   const accId = acc.id || `act_${acc.account_id}`;
                   const already = connectedIds.has(accId) || connectedIds.has(`act_${acc.account_id}`);
                   return (
-                    <li key={accId} className="flex items-start gap-3 rounded-lg border border-zinc-200 px-3 py-2.5 dark:border-zinc-700">
+                    <li
+                      key={accId}
+                      className={`flex items-start gap-3 rounded-xl border p-3 transition-colors ${
+                        checked.has(accId)
+                          ? "border-amber-500/40 bg-amber-500/[0.04] dark:border-amber-500/30 dark:bg-amber-500/[0.06]"
+                          : "border-zinc-200/80 bg-white hover:bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800/40"
+                      }`}
+                    >
                       <input
                         type="checkbox"
                         id={`acc-${accId}`}
                         checked={checked.has(accId)}
                         onChange={() => toggle(accId)}
-                        className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-600"
+                        className="mt-0.5 h-4 w-4 shrink-0 rounded accent-amber-500 cursor-pointer"
                       />
-                      <label htmlFor={`acc-${accId}`} className="min-w-0 flex-1 cursor-pointer">
+                      <label htmlFor={`acc-${accId}`} className="min-w-0 flex-1 cursor-pointer select-none">
                         <span className="flex flex-wrap items-center gap-2">
                           <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
                             {acc.name || accId}
                           </span>
                           {already && (
                             <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800/60">
-                              {id ? "Sudah terhubung" : "Connected"}
+                              {id ? "Tersimpan" : "Saved"}
                             </span>
                           )}
                         </span>
-                        <span className="mt-0.5 block font-mono text-[10px] text-zinc-500">
-                          {accId} · {acc.currency || "—"} · {acc.timezone_name || "—"} ·{" "}
+                        <span className="mt-1 block font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                          {accId} · {acc.currency || "IDR"} · {acc.timezone_name || "Asia/Jakarta"} ·{" "}
                           {accountStatusLabel(acc.account_status, locale)}
                           {acc.business_name ? ` · ${acc.business_name}` : ""}
                         </span>
@@ -390,7 +426,7 @@ export function MetaAssetOnboarding() {
                         <button
                           type="button"
                           onClick={() => void handleRemoveAccount(accId)}
-                          className="shrink-0 rounded-md border border-rose-200 px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 cursor-pointer"
+                          className="shrink-0 rounded-lg border border-rose-200 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 cursor-pointer transition-colors"
                         >
                           {id ? "Hapus" : "Remove"}
                         </button>
@@ -403,7 +439,7 @@ export function MetaAssetOnboarding() {
           </div>
 
           <div>
-            <label htmlFor="selectPage" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+            <label htmlFor="selectPage" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
               {id
                 ? "Facebook Page (opsional — tidak wajib untuk data iklan)"
                 : "Facebook Page (optional — not required for ad reporting)"}
@@ -412,7 +448,7 @@ export function MetaAssetOnboarding() {
               id="selectPage"
               value={selectedPageId}
               onChange={(e) => setSelectedPageId(e.target.value)}
-              className="block w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 cursor-pointer"
+              className="block w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-zinc-700/80 dark:bg-zinc-950 dark:text-zinc-100 cursor-pointer transition-all"
             >
               <option value="">{id ? "-- Tanpa Page --" : "-- No Page --"}</option>
               {pages.map((p) => (
@@ -431,20 +467,24 @@ export function MetaAssetOnboarding() {
             </p>
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
             <button
               type="button"
               onClick={() => void handleSave()}
               disabled={isSaving || checked.size === 0}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 cursor-pointer transition-colors"
+              className="btn-solar inline-flex items-center gap-2 rounded-xl px-5 py-2 text-xs font-semibold disabled:opacity-50 cursor-pointer transition-all shadow-xs"
             >
-              {isSaving
-                ? id
-                  ? "Menyimpan & Menyinkronkan…"
-                  : "Saving & Syncing…"
-                : id
-                  ? `Simpan Akun (${checked.size})`
-                  : `Save Accounts (${checked.size})`}
+              {isSaving ? (
+                <>
+                  <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  <span>{id ? "Menyimpan & Menyinkronkan…" : "Saving & Syncing…"}</span>
+                </>
+              ) : (
+                id ? `Simpan Akun Terpilih (${checked.size})` : `Save Selected Accounts (${checked.size})`
+              )}
             </button>
           </div>
         </div>

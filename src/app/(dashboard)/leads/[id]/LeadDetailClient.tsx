@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { AttributionBadge, FunnelBadge, ScorePill } from "@/components/ui/Badge";
+import { AttributionBadge, FunnelBadge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/Toast";
@@ -15,6 +15,7 @@ import type { QualityLabel } from "@/lib/data/types";
 
 export function LeadDetailClient({ leadId }: { leadId: string }) {
   const { t, formatDateTime, locale } = useI18n();
+  const stageLabel = (stage: string) => t.funnel[stage as keyof typeof t.funnel] || stage;
   const { addToast } = useToast();
 
   const [lead, setLead] = useState<LeadDetailView | null>(null);
@@ -218,8 +219,6 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
     }
   };
 
-  const buyerCriteria = Object.values(lead.buyerAssessment.criteria);
-  const salesCriteria = Object.values(lead.salesAssessment.criteria);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
@@ -236,7 +235,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         </Link>
 
         {/* Lead Profile & Core Fields Card */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors space-y-4">
+        <div className="solar-header surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 transition-colors space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <div className="flex flex-wrap items-center gap-2.5">
@@ -330,7 +329,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         </div>
       </div>
 
-      <form onSubmit={handleLeadUpdate} className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+      <form onSubmit={handleLeadUpdate} className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-4">
           <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{locale === "id" ? "Perbarui Status & Kualifikasi Prospek" : "Update Lead Status & Qualification"}</h2>
           <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{locale === "id" ? "Pembaruan tersimpan ke CRM. Perubahan tahap harus menyertakan alasan yang nyata." : "Changes are saved to CRM. Funnel stage changes require a reason."}</p>
@@ -338,7 +337,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Tahap Funnel" : "Funnel Stage"}
             <select value={editStage} onChange={(event) => setEditStage(event.target.value as FunnelStage)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
-              <option value={lead.funnelStage}>{lead.funnelStage}</option>{getAllowedFunnelTransitions(lead.funnelStage).map((stage) => <option key={stage} value={stage}>{stage}</option>)}
+              <option value={lead.funnelStage}>{stageLabel(lead.funnelStage)}</option>{getAllowedFunnelTransitions(lead.funnelStage).map((stage) => <option key={stage} value={stage}>{stageLabel(stage)}</option>)}
             </select>
           </label>
           <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Label Kualitas" : "Quality Label"}
@@ -375,7 +374,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
           </label>}
         </div>
         <div className="mt-4 flex justify-end border-t border-zinc-100 pt-3 dark:border-zinc-800">
-          <button type="submit" disabled={isSavingLead} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">{isSavingLead ? (locale === "id" ? "Menyimpan…" : "Saving…") : (locale === "id" ? "Simpan Perubahan" : "Save Changes")}</button>
+          <button type="submit" disabled={isSavingLead} className="btn-solar inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold disabled:opacity-50 cursor-pointer">{isSavingLead ? (locale === "id" ? "Menyimpan…" : "Saving…") : (locale === "id" ? "Simpan Perubahan" : "Save Changes")}</button>
         </div>
       </form>
 
@@ -396,197 +395,8 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         </div>
       </div>
 
-      {/* Buyer Score & Sales Score Dimension Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Dimension 1: Buyer Score */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
-            <div>
-              <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                1. {t.leads.detail.buyerScoreHeading}
-              </h2>
-              <span className="text-[11px] text-zinc-400 font-mono">
-                {t.leads.detail.buyerScoreSubtitle} • v{lead.buyerAssessment.rubricVersion}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 text-right">
-              <div>
-                <span className="text-xl font-bold text-zinc-900 dark:text-zinc-50 font-mono">
-                  {lead.buyerAssessment.normalizedScore !== null
-                    ? `${lead.buyerAssessment.normalizedScore}`
-                    : "—"}
-                </span>
-                <span className="text-xs text-zinc-400 block font-mono">/ 100</span>
-              </div>
-              <ScorePill
-                score={lead.buyerAssessment.normalizedScore}
-                completeness={lead.buyerAssessment.completeness}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 py-3 text-center border-b border-zinc-100 dark:border-zinc-800 text-xs">
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.realPoints}</span>
-              <span className="font-semibold font-mono">{lead.buyerAssessment.rawPoints}</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.dataCompleteness}</span>
-              <span className="font-semibold font-mono">{lead.buyerAssessment.completeness}%</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.evidenceConfidence}</span>
-              <span className="font-semibold font-mono">
-                {lead.buyerAssessment.confidence !== null
-                  ? `${(lead.buyerAssessment.confidence * 100).toFixed(0)}%`
-                  : "—"}
-              </span>
-            </div>
-          </div>
-
-          {/* Criteria breakdown */}
-          <div className="mt-4 space-y-3">
-            <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              {t.leads.detail.criteriaBreakdownTitle}:
-            </p>
-
-            {buyerCriteria.map((c) => (
-              <div
-                key={c.criterion}
-                className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 text-xs dark:border-zinc-800/80 dark:bg-zinc-800/30"
-              >
-                <div className="flex items-center justify-between font-medium">
-                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                    {c.criterion.replace(/_/g, " ").toUpperCase()}
-                  </span>
-                  <span className="font-mono text-zinc-700 dark:text-zinc-300">
-                    {c.status === "scored" ? `${c.score} / ${c.maxPoints}` : c.status.toUpperCase()}
-                  </span>
-                </div>
-
-                {c.evidence.length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {c.evidence.map((ev, i) => (
-                      <p key={i} className="text-[11px] text-zinc-600 dark:text-zinc-400 pl-2 border-l-2 border-emerald-500">
-                        {ev.explanation}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {c.missingInformation.length > 0 && (
-                  <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-400 pl-2 border-l-2 border-amber-400">
-                    {c.missingInformation.join(", ")}
-                  </div>
-                )}
-
-                {c.invalidReason && (
-                  <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 pl-2 border-l-2 border-rose-500 font-semibold">
-                    {c.invalidReason}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Dimension 2: Sales Score */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
-            <div>
-              <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                2. {t.leads.detail.salesScoreHeading}
-              </h2>
-              <span className="text-[11px] text-zinc-400 font-mono">
-                {t.leads.detail.salesScoreSubtitle}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 text-right">
-              <div>
-                <span className="text-xl font-bold text-zinc-900 dark:text-zinc-50 font-mono">
-                  {lead.salesAssessment.normalizedScore !== null
-                    ? `${lead.salesAssessment.normalizedScore}`
-                    : "—"}
-                </span>
-                <span className="text-xs text-zinc-400 block font-mono">/ 100</span>
-              </div>
-              <ScorePill
-                score={lead.salesAssessment.normalizedScore}
-                completeness={lead.salesAssessment.completeness}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 py-3 text-center border-b border-zinc-100 dark:border-zinc-800 text-xs">
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.realPoints}</span>
-              <span className="font-semibold font-mono">{lead.salesAssessment.rawPoints}</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.dataCompleteness}</span>
-              <span className="font-semibold font-mono">{lead.salesAssessment.completeness}%</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.evidenceConfidence}</span>
-              <span className="font-semibold font-mono">
-                {lead.salesAssessment.confidence !== null
-                  ? `${(lead.salesAssessment.confidence * 100).toFixed(0)}%`
-                  : "—"}
-              </span>
-            </div>
-          </div>
-
-          {/* Criteria breakdown */}
-          <div className="mt-4 space-y-3">
-            <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              {t.leads.detail.criteriaBreakdownTitle}:
-            </p>
-
-            {salesCriteria.map((c) => (
-              <div
-                key={c.criterion}
-                className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 text-xs dark:border-zinc-800/80 dark:bg-zinc-800/30"
-              >
-                <div className="flex items-center justify-between font-medium">
-                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                    {c.criterion.replace(/_/g, " ").toUpperCase()}
-                  </span>
-                  <span className="font-mono text-zinc-700 dark:text-zinc-300">
-                    {c.status === "scored" ? `${c.score} / ${c.maxPoints}` : c.status.toUpperCase()}
-                  </span>
-                </div>
-
-                {c.evidence.length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {c.evidence.map((ev, i) => (
-                      <p key={i} className="text-[11px] text-zinc-600 dark:text-zinc-400 pl-2 border-l-2 border-indigo-500">
-                        {ev.explanation}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {c.missingInformation.length > 0 && (
-                  <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-400 pl-2 border-l-2 border-amber-400">
-                    {c.missingInformation.join(", ")}
-                  </div>
-                )}
-
-                {c.invalidReason && (
-                  <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 pl-2 border-l-2 border-rose-500 font-semibold">
-                    {c.invalidReason}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
       {/* Uploaded or previously recorded conversation messages */}
-      {lead.messages.length > 0 && <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
+      {lead.messages.length > 0 && <div className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
         <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-1">
           {t.leads.detail.conversationTimelineTitle}
         </h2>
@@ -608,7 +418,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
                   className={`flex flex-col max-w-xl rounded-xl p-3.5 text-xs transition-colors ${
                     isInbound
                       ? "mr-auto bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100 border border-zinc-200/80 dark:border-zinc-700/60"
-                      : "ml-auto bg-indigo-600 text-white shadow-xs"
+                      : "ml-auto bg-amber-500 text-zinc-950 font-medium shadow-xs"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-4 mb-1 text-[10px] opacity-80">
@@ -638,7 +448,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
       </div>}
 
       {/* Attribution Audit History & Corrections */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
+      <div className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
         <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-1">
           {t.leads.detail.auditTrailTitle}
         </h2>
@@ -742,7 +552,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-indigo-500 cursor-pointer disabled:opacity-50"
+              className="btn-solar inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold cursor-pointer disabled:opacity-50"
             >
               {isSubmitting && (
                 <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">

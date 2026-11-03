@@ -111,7 +111,7 @@ describe("Section 12: Property Advertiser AI Performance Analysis Acceptance Tes
     expect(reachItem?.formattedValue).toBe("Tidak tersedia");
 
     expect(qualifiedLeadsItem?.rawValue).toBeNull();
-    expect(qualifiedLeadsItem?.formattedValue).toBe("Belum dicatat di CRM");
+    expect(qualifiedLeadsItem?.formattedValue).toBe("0 prospek");
 
     expect(resultsItem?.formattedValue).toBe("Data belum tersedia");
     expect(resultsItem?.status).toBe("BELUM_TERSEDIA");
@@ -160,10 +160,10 @@ describe("Section 12: Property Advertiser AI Performance Analysis Acceptance Tes
 
   // Test 5: Benchmark tidak muncul tanpa sumber yang valid
   it("Test 5: Benchmark eksternal tidak dimunculkan tanpa sumber valid dan dinyatakan secara transparan", () => {
-    const routeContent = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"),
-      "utf-8"
-    );
+    const routeContent = [
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"), "utf-8"),
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/lib/ai/ctwa-analysis/prompt.ts"), "utf-8"),
+    ].join("\n");
 
     // Must not state arbitrary unverified benchmarks as universal truth
     expect(routeContent.includes("CTR 0.8% - 1.0%")).toBe(false);
@@ -198,38 +198,36 @@ describe("Section 12: Property Advertiser AI Performance Analysis Acceptance Tes
   });
 
   // Test 7: AI tidak membuat data properti atau promosi yang tidak tersedia
-  it("Test 7: AI tidak mengarang harga, legalitas, atau promosi fiktif dan menggunakan placeholder", () => {
-    const routeContent = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"),
-      "utf-8"
-    );
+  it("Test 7: AI tidak mengarang harga, legalitas, atau promosi fiktif", () => {
+    const routeContent = [
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"), "utf-8"),
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/lib/ai/ctwa-analysis/prompt.ts"), "utf-8"),
+    ].join("\n");
 
-    // Templates use explicit placeholders
-    expect(routeContent.includes("[Sebutkan Lokasi Strategis]")).toBe(true);
-    expect(routeContent.includes("[Sebutkan Legalitas: misal SHM / PBG Ready]")).toBe(true);
-    expect(routeContent.includes("[Sebutkan Skema: misal KPR DP Ringan / Cash Bertahap]")).toBe(true);
-
-    // Prompt bans fabricating property details
+    expect(routeContent.includes("[Sebutkan Lokasi Strategis]")).toBe(false);
+    expect(routeContent.includes("[Sebutkan Legalitas: misal SHM / PBG Ready]")).toBe(false);
+    expect(routeContent.includes("[Sebutkan Skema: misal KPR DP Ringan / Cash Bertahap]")).toBe(false);
     expect(routeContent.includes("JANGAN MENGARANG INFORMASI PROPERTI, HARGA, ATAU PROMOSI")).toBe(true);
+    expect(routeContent.includes("Jangan sarankan WhatsApp API atau webhook")).toBe(true);
   });
 
   // Test 8: Rekomendasi mempertimbangkan objektif campaign
   it("Test 8: Evaluasi dan prompt mempertimbangkan objektif campaign Meta", () => {
-    const routeContent = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"),
-      "utf-8"
-    );
+    const routeContent = [
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"), "utf-8"),
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/lib/ai/ctwa-analysis/prompt.ts"), "utf-8"),
+    ].join("\n");
 
     expect(routeContent.includes("campaignObjective")).toBe(true);
-    expect(routeContent.includes('Objektif Kampanye: "${data.campaignObjective')).toBe(true);
+    expect(routeContent.includes("Objektif Kampanye:")).toBe(true);
   });
 
   // Test 9: Nol lead tidak otomatis dianggap sebagai kerusakan funnel
   it("Test 9: Nol lead tidak otomatis divonis sebagai 'funnel rusak/jebol' melainkan kesenjangan yang perlu diuji", () => {
-    const routeContent = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"),
-      "utf-8"
-    );
+    const routeContent = [
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/app/api/ai/analyze-ad/route.ts"), "utf-8"),
+      fs.readFileSync(path.resolve(import.meta.dirname, "../../src/lib/ai/ctwa-analysis/prompt.ts"), "utf-8"),
+    ].join("\n");
 
     // Banned jargon must not exist in prompt or code
     expect(routeContent.includes("funnel jebol")).toBe(false);

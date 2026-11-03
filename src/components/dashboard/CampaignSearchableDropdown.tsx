@@ -2,6 +2,8 @@
 
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import type { CampaignDetailData } from "@/components/dashboard/CampaignDetailWorkspace";
+import { useI18n } from "@/lib/i18n/I18nProvider";
+import { translateMetaTerm } from "@/lib/ads/result-metric";
 
 export interface CampaignSearchableDropdownProps {
   campaigns: CampaignDetailData[];
@@ -16,6 +18,9 @@ export function CampaignSearchableDropdown({
   onSelectCampaign,
   className = "",
 }: CampaignSearchableDropdownProps) {
+  const { dict, locale } = useI18n();
+  const uiLocale: "id" | "en" = locale === "en" ? "en" : "id";
+  const copy = dict.adsWorkspace;
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -108,7 +113,7 @@ export function CampaignSearchableDropdown({
       return (
         <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          Aktif
+          {uiLocale === "id" ? "Aktif" : "Active"}
         </span>
       );
     }
@@ -116,13 +121,13 @@ export function CampaignSearchableDropdown({
       return (
         <span className="inline-flex items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
           <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
-          Dijeda
+          {uiLocale === "id" ? "Dijeda" : "Paused"}
         </span>
       );
     }
     return (
       <span className="inline-flex items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-        Arsip
+        {uiLocale === "id" ? "Arsip" : "Archived"}
       </span>
     );
   };
@@ -136,7 +141,7 @@ export function CampaignSearchableDropdown({
         onClick={() => setIsOpen(!isOpen)}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
-        title={selectedCampaign ? `Campaign: ${selectedCampaign.name}` : "Filter berdasarkan campaign Meta"}
+        title={selectedCampaign ? `${copy.allCampaigns}: ${selectedCampaign.name}` : copy.allCampaigns}
         className={`group flex min-h-9 w-full min-w-0 items-center justify-between gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs transition-colors cursor-pointer select-none ${
           selectedCampaignId !== "all"
             ? "border-indigo-300 bg-indigo-50/70 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200"
@@ -161,7 +166,7 @@ export function CampaignSearchableDropdown({
             />
           </svg>
           <span className="truncate">
-            {selectedCampaign ? selectedCampaign.name : "Semua Campaign"}
+            {selectedCampaign ? selectedCampaign.name : copy.allCampaigns}
           </span>
         </div>
 
@@ -177,7 +182,7 @@ export function CampaignSearchableDropdown({
                   onSelectCampaign("all");
                 }
               }}
-              title="Hapus filter campaign"
+              title={uiLocale === "id" ? "Hapus filter kampanye" : "Clear campaign filter"}
               className="rounded p-0.5 hover:bg-indigo-200/60 dark:hover:bg-indigo-900/60 text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 cursor-pointer"
             >
               <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -202,11 +207,11 @@ export function CampaignSearchableDropdown({
         <div
           role="listbox"
           aria-labelledby="campaign-dropdown-trigger"
-          className="absolute left-0 mt-1.5 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900 z-50 overflow-hidden flex flex-col"
+          className="glass-popover absolute left-0 mt-1.5 w-[min(20rem,calc(100vw-2rem))] rounded-xl z-50 overflow-hidden flex flex-col"
           style={{ maxHeight: "360px" }}
         >
           {/* Internal Search Header */}
-          <div className="p-2 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/80">
+          <div className="p-2 border-b border-zinc-200/70 dark:border-white/10 bg-white/40 dark:bg-zinc-900/40">
             <div className="relative">
               <svg
                 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400"
@@ -222,7 +227,7 @@ export function CampaignSearchableDropdown({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari nama campaign..."
+                placeholder={uiLocale === "id" ? "Cari nama kampanye..." : "Search campaign name..."}
                 className="w-full rounded-md border border-zinc-200 bg-white py-1.5 pl-8 pr-7 text-xs text-zinc-800 placeholder-zinc-400 focus:border-indigo-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
               />
               {searchQuery && (
@@ -253,7 +258,7 @@ export function CampaignSearchableDropdown({
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold">Semua Campaign</span>
+                  <span className="font-semibold">{copy.allCampaigns}</span>
                   <span className="text-[10px] text-zinc-400">({campaigns.length})</span>
                 </div>
                 {selectedCampaignId === "all" && (
@@ -294,12 +299,14 @@ export function CampaignSearchableDropdown({
                       <div className="flex items-center gap-1.5">
                         {getStatusBadge(c.status)}
                         {c.totalAdsCount !== undefined && (
-                          <span>{c.totalAdsCount} iklan</span>
+                          <span>
+                            {c.totalAdsCount} {uiLocale === "id" ? "iklan" : c.totalAdsCount === 1 ? "ad" : "ads"}
+                          </span>
                         )}
                       </div>
                       {c.objective && (
                         <span className="font-mono text-[9px] uppercase tracking-wider truncate max-w-[100px]">
-                          {c.objective}
+                          {translateMetaTerm(c.objective, uiLocale)}
                         </span>
                       )}
                     </div>
@@ -312,10 +319,10 @@ export function CampaignSearchableDropdown({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Tidak ada campaign yang cocok
+                  {uiLocale === "id" ? "Tidak ada kampanye yang cocok" : "No matching campaigns"}
                 </p>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Coba kata kunci pencarian yang lain.
+                  {uiLocale === "id" ? "Coba kata kunci pencarian yang lain." : "Try a different search keyword."}
                 </p>
               </div>
             )}

@@ -6,8 +6,15 @@
 -- run the audit queries below, remediate, then VALIDATE CONSTRAINT.
 
 -- Supporting unique keys for composite references
-ALTER TABLE public.ad_accounts
-  ADD CONSTRAINT uq_ad_accounts_id_org UNIQUE (id, organization_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'uq_ad_accounts_id_org'
+  ) THEN
+    ALTER TABLE public.ad_accounts
+      ADD CONSTRAINT uq_ad_accounts_id_org UNIQUE (id, organization_id);
+  END IF;
+END $$;
 ALTER TABLE public.campaigns
   ADD CONSTRAINT uq_campaigns_id_org UNIQUE (id, organization_id);
 ALTER TABLE public.ads

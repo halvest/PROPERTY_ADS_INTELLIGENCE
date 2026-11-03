@@ -7,6 +7,7 @@ import {
   calculateCPM,
   calculateCPQL,
 } from "@/domain/metrics/marketing";
+import { calendarDayBounds, classifyTemperature } from "@/lib/crm/crm-analysis-context";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { AttributionStatus } from "@/domain/attribution/types";
 import type {
@@ -208,29 +209,35 @@ export async function getLiveDashboardData(
   }
 
   // 4. Query Real Conversations & Leads
+  const { data: accountCampaignRows } = await supabaseClient
+    .from("campaigns")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("ad_account_id", activeAdAccount.id);
+  const accountCampaignIds = new Set((accountCampaignRows || []).map((campaign) => campaign.id));
+
   let convsQuery = supabaseClient
     .from("conversations")
     .select(`
       id,
       attribution_status,
       ad_id,
+      campaign_id,
+      quality_label,
+      channel,
+      attribution_evidence,
       started_at,
       last_message_at,
       contacts(id, name, phone_masked),
       lead_assessments(buyer_score, sales_score, status, confidence, score_completeness),
-      lead_outcomes(stage, occurred_at),
-      ads!inner(campaigns!inner(ad_account_id))
+      lead_outcomes(stage, occurred_at)
     `)
-    .eq("organization_id", organizationId);
+    .eq("organization_id", organizationId)
+    .eq("channel", "crm_upload");
 
-  // CRM conversations can be linked to ads from several selected accounts.
-  // Resolve the selected account's ad IDs and keep the funnel tenant/account
-  // scoped just like the advertising metrics.
-  convsQuery = convsQuery.eq("ads.campaigns.ad_account_id", activeAdAccount.id);
-
-  if (since && until) {
-    convsQuery = convsQuery.gte("started_at", `${since}T00:00:00Z`).lte("started_at", `${until}T23:59:59Z`);
-  }
+  const crmBounds = calendarDayBounds(since, until);
+  if (crmBounds.start) convsQuery = convsQuery.gte("started_at", crmBounds.start);
+  if (crmBounds.end) convsQuery = convsQuery.lte("started_at", crmBounds.end);
 
   const { data: rawConvs } = await convsQuery;
 
@@ -341,8 +348,7 @@ export async function getLiveDashboardData(
   let verifiedCount = 0;
   let inferredCount = 0;
   let unknownCount = 0;
-  // Lead quality is unavailable (see below); qualified count stays 0.
-  const qualifiedLeads = 0;
+  let qualifiedLeads = 0;
   const buyerScores: number[] = [];
   const salesScores: number[] = [];
 
@@ -359,6 +365,12 @@ export async function getLiveDashboardData(
 
   rawConvs?.forEach((conv) => {
     const attrStatus = (conv.attribution_status || "unknown") as AttributionStatus;
+    const temperature = classifyTemperature(conv.quality_label);
+    const belongsToAccount = Boolean(
+      (conv.campaign_id && accountCampaignIds.has(conv.campaign_id)) ||
+      (conv.ad_id && adMap.has(conv.ad_id))
+    );
+    if (!belongsToAccount) return;
     if (attrStatus === "verified") verifiedCount++;
     else if (attrStatus === "inferred") inferredCount++;
     else unknownCount++;
@@ -370,11 +382,11 @@ export async function getLiveDashboardData(
     const buyerScore = assessment?.buyer_score ?? null;
     const salesScore = assessment?.sales_score ?? null;
 
-    // Lead quality is NOT AVAILABLE from a verified source. Buyer/Sales
-    // Scores are legacy and out of product scope: they are no longer used
-    // to qualify leads or compute CPQL. qualifiedLeads therefore stays 0
-    // and CPQL is null (unavailable) until a product-approved quality
-    // definition exists.
+    if (temperature === "hot" || temperature === "warm") qualifiedLeads += 1;
+    if (conv.ad_id && (temperature === "hot" || temperature === "warm")) {
+      const adStats = adMap.get(conv.ad_id);
+      if (adStats) adStats.qualifiedLeads += 1;
+    }
     if (buyerScore !== null && Number.isFinite(buyerScore)) {
       buyerScores.push(buyerScore);
     }
@@ -392,6 +404,10 @@ export async function getLiveDashboardData(
         ? [conv.lead_outcomes]
         : [];
     const outcome = outcomes[0];
+    const evidence = conv.attribution_evidence;
+    const evidenceStage = evidence && typeof evidence === "object" && !Array.isArray(evidence) && typeof evidence.funnel_stage === "string"
+      ? evidence.funnel_stage
+      : null;
     const stageMap: Record<string, FunnelStage> = {
       survey: "survei",
       survei: "survei",
@@ -404,7 +420,7 @@ export async function getLiveDashboardData(
       dihubungi: "dihubungi",
       prospek: "prospek",
     };
-    const stage: FunnelStage = stageMap[(outcome?.stage || "baru").toLowerCase()] || "baru";
+    const stage: FunnelStage = stageMap[(evidenceStage || outcome?.stage || "baru").toLowerCase()] || "baru";
     if (funnelCounts[stage] !== undefined) {
       funnelCounts[stage]++;
     }
@@ -476,7 +492,7 @@ export async function getLiveDashboardData(
     });
   });
 
-  const totalLeads = (rawConvs?.length || 0);
+  const totalLeads = verifiedCount + inferredCount + unknownCount;
   const verifiedPercentage = totalLeads > 0 ? Math.round((verifiedCount / totalLeads) * 100) : 0;
 
   const avgBuyer =

@@ -2,51 +2,166 @@
 
 @variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
 
+/*
+ * ─── HD Creative design tokens — "Modern Solar" ───
+ * Semantic tokens below drive both themes. The Tailwind palette remap in
+ * the following @theme block re-tones the existing zinc / indigo / emerald /
+ * rose utilities used throughout the app so every page adopts the system
+ * without touching component logic:
+ *   zinc    → warm-neutral (light) / graphite (dark) surfaces & text
+ *   indigo  → solar amber accent (600/700 tuned for AA text on white)
+ *   emerald → success green, rose → danger red
+ */
 :root {
-  --background: #f7f8fa;
-  --foreground: #131722;
+  color-scheme: light;
+  --background: #fafaf8;
+  --background-secondary: #f4f4f1;
+  --foreground: #18181b;
   --surface: #ffffff;
   --surface-elevated: #ffffff;
-  --surface-subtle: #eef0f4;
-  --border: #dfe2ea;
-  --muted-foreground: #4b5567;
-  --accent: #4f46e5;
-  --accent-foreground: #ffffff;
-  --accent-subtle: #eef0fe;
-  --success: #047857;
-  --success-subtle: #ecfdf5;
-  --warning: #b45309;
+  --surface-subtle: #f4f4f1;
+  --border: #eaeaea;
+  --border-strong: #dcdcd8;
+  --muted-foreground: #71717a;
+  --accent: #eaaa20;
+  --accent-strong: #9e6304;
+  --accent-foreground: #18181b;
+  --accent-subtle: #fdf5e1;
+  --success: #16a34a;
+  --success-subtle: #f0fdf4;
+  --warning: #d97706;
   --warning-subtle: #fffbeb;
-  --danger: #b91c1c;
+  --danger: #dc2626;
   --danger-subtle: #fef2f2;
-  --glow: rgba(79, 70, 229, 0.07);
-  --glow-strong: rgba(79, 70, 229, 0.12);
-  --glow-accent: rgba(79, 70, 229, 0.25);
-  --grid-color: rgba(79, 70, 229, 0.04);
+  --glow: rgba(234, 170, 32, 0.08);
+  --glow-strong: rgba(234, 170, 32, 0.16);
+  --glow-accent: rgba(234, 170, 32, 0.22);
+  --grid-color: rgba(161, 98, 7, 0.05);
+
+  /* Glass surfaces (header, popovers, overlays only) */
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-bg-strong: rgba(255, 255, 255, 0.9);
+  --glass-border: rgba(24, 24, 27, 0.07);
+  --glass-highlight: rgba(255, 255, 255, 0.8);
+  --overlay: rgba(24, 24, 27, 0.32);
+
+  /* Solar ambient light */
+  --solar-1: rgba(245, 184, 46, 0.14);
+  --solar-2: rgba(251, 146, 60, 0.07);
+  --solar-ring: rgba(234, 170, 32, 0.35);
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgba(24, 24, 27, 0.04), 0 1px 1px rgba(24, 24, 27, 0.02);
+  --shadow-pop: 0 12px 32px -8px rgba(24, 24, 27, 0.14), 0 2px 6px rgba(24, 24, 27, 0.05);
+
+  /* Data visualization */
+  --chart-1: #e09a12;
+  --chart-1-fill: rgba(234, 170, 32, 0.22);
+  --chart-2: #8b5cf6;
+  --chart-grid: #ededeb;
+  --chart-axis: #71717a;
+  --chart-crosshair: #18181b;
+  --chart-dot-ring: #ffffff;
 }
 
 [data-theme="dark"],
 .dark {
-  --background: #08090c;
-  --foreground: #eef0f5;
-  --surface: #111318;
-  --surface-elevated: #16181f;
-  --surface-subtle: #1a1d26;
-  --border: #232835;
-  --muted-foreground: #a3aabb;
-  --accent: #818cf8;
-  --accent-foreground: #101129;
-  --accent-subtle: #1d2040;
-  --success: #34d399;
-  --success-subtle: #0c2420;
+  color-scheme: dark;
+  --background: #101114;
+  --background-secondary: #15171b;
+  --foreground: #f4f4f5;
+  --surface: #1b1e23;
+  --surface-elevated: #22262d;
+  --surface-subtle: #15171b;
+  --border: #30343b;
+  --border-strong: #3a3f47;
+  --muted-foreground: #a1a1aa;
+  --accent: #f5b82e;
+  --accent-strong: #f5b82e;
+  --accent-foreground: #18181b;
+  --accent-subtle: #2a2416;
+  --success: #4ade80;
+  --success-subtle: #12261a;
   --warning: #fbbf24;
-  --warning-subtle: #2a210c;
+  --warning-subtle: #2a2210;
   --danger: #f87171;
-  --danger-subtle: #2b1414;
-  --glow: rgba(129, 140, 248, 0.08);
-  --glow-strong: rgba(129, 140, 248, 0.14);
-  --glow-accent: rgba(129, 140, 248, 0.3);
-  --grid-color: rgba(129, 140, 248, 0.035);
+  --danger-subtle: #2b1616;
+  --glow: rgba(245, 184, 46, 0.06);
+  --glow-strong: rgba(245, 184, 46, 0.12);
+  --glow-accent: rgba(245, 184, 46, 0.16);
+  --grid-color: rgba(245, 184, 46, 0.035);
+
+  --glass-bg: rgba(27, 30, 35, 0.82);
+  --glass-bg-strong: rgba(27, 30, 35, 0.92);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 0.04);
+  --overlay: rgba(6, 7, 9, 0.6);
+
+  --solar-1: rgba(245, 184, 46, 0.07);
+  --solar-2: rgba(251, 146, 60, 0.035);
+  --solar-ring: rgba(245, 184, 46, 0.3);
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 16px 40px -8px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.35);
+
+  --chart-1: #f5b82e;
+  --chart-1-fill: rgba(245, 184, 46, 0.2);
+  --chart-2: #a78bfa;
+  --chart-grid: #282c33;
+  --chart-axis: #a1a1aa;
+  --chart-crosshair: #f4f4f5;
+  --chart-dot-ring: #1b1e23;
+}
+
+/* Tailwind palette remap (see header comment). */
+@theme {
+  --color-zinc-50: #fafaf8;
+  --color-zinc-100: #f3f3f0;
+  --color-zinc-200: #e8e8e5;
+  --color-zinc-300: #d4d4d0;
+  --color-zinc-400: #8e8e96;
+  --color-zinc-500: #71717a;
+  --color-zinc-600: #55555e;
+  --color-zinc-700: #3a3e46;
+  --color-zinc-800: #2c3037;
+  --color-zinc-900: #1b1e23;
+  --color-zinc-950: #101114;
+
+  --color-indigo-50: #fef9ec;
+  --color-indigo-100: #fcf0d0;
+  --color-indigo-200: #f9e0a1;
+  --color-indigo-300: #f6cb66;
+  --color-indigo-400: #f5b82e;
+  --color-indigo-500: #eaaa20;
+  --color-indigo-600: #9e6304;
+  --color-indigo-700: #7f4f06;
+  --color-indigo-800: #643f0a;
+  --color-indigo-900: #4a2f0b;
+  --color-indigo-950: #2b1a05;
+
+  --color-emerald-50: #f0fdf4;
+  --color-emerald-100: #dcfce7;
+  --color-emerald-200: #bbf7d0;
+  --color-emerald-300: #86efac;
+  --color-emerald-400: #4ade80;
+  --color-emerald-500: #22c55e;
+  --color-emerald-600: #16a34a;
+  --color-emerald-700: #15803d;
+  --color-emerald-800: #166534;
+  --color-emerald-900: #14532d;
+  --color-emerald-950: #052e16;
+
+  --color-rose-50: #fef2f2;
+  --color-rose-100: #fee2e2;
+  --color-rose-200: #fecaca;
+  --color-rose-300: #fca5a5;
+  --color-rose-400: #f87171;
+  --color-rose-500: #ef4444;
+  --color-rose-600: #dc2626;
+  --color-rose-700: #b91c1c;
+  --color-rose-800: #991b1b;
+  --color-rose-900: #7f1d1d;
+  --color-rose-950: #450a0a;
 }
 
 @theme inline {
@@ -66,6 +181,8 @@
   --color-warning-subtle: var(--warning-subtle);
   --color-danger: var(--danger);
   --color-danger-subtle: var(--danger-subtle);
+  --color-accent-strong: var(--accent-strong);
+  --color-line-strong: var(--border-strong);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -78,11 +195,158 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+}
+
+::selection {
+  background: rgba(234, 170, 32, 0.28);
+  color: inherit;
+}
+
+/* Consistent, visible keyboard focus in both themes */
+:where(a, button, [role="button"], [role="tab"], input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--solar-ring);
+  outline-offset: 2px;
+}
+
+/* Native form controls follow the active theme */
+:where(input, select, textarea) {
+  accent-color: var(--accent);
+}
+
+/* Quiet scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 .tnum {
   font-variant-numeric: tabular-nums;
 }
+
+/* ─── Design-system surfaces ─── */
+
+/* Glass: reserved for header, popovers, dropdowns, overlays, floating UI */
+.glass-surface {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  border-color: var(--glass-border);
+}
+
+.glass-popover {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-pop), inset 0 1px 0 var(--glass-highlight);
+}
+
+.glass-overlay {
+  background: var(--overlay);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+/* Solid card elevation used by dashboard surfaces */
+.surface-card {
+  box-shadow: var(--shadow-card);
+}
+
+/* Solar ambient light behind the dashboard content (fixed, decorative) */
+.solar-ambient {
+  position: relative;
+  isolation: isolate;
+}
+
+.solar-ambient::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 520px;
+  background:
+    radial-gradient(ellipse 55% 70% at 72% -18%, var(--solar-1), transparent 70%),
+    radial-gradient(ellipse 40% 55% at 98% -10%, var(--solar-2), transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Gentle warm highlight for page header cards */
+.solar-header {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.solar-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 50% 120% at 100% 0%, var(--solar-1), transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.solar-header::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8%;
+  right: 8%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--solar-ring), transparent);
+  pointer-events: none;
+}
+
+/* Primary solar action */
+.btn-solar {
+  background: linear-gradient(180deg, #f4bd3c 0%, #e6a41b 100%);
+  color: #18181b;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 1px 2px rgba(161, 98, 7, 0.25),
+    0 4px 14px -4px rgba(234, 170, 32, 0.45);
+  transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.btn-solar:hover:not(:disabled) {
+  filter: brightness(1.04);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 1px 2px rgba(161, 98, 7, 0.3),
+    0 6px 20px -4px rgba(234, 170, 32, 0.55);
+}
+
+.btn-solar:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.dark .btn-solar,
+[data-theme="dark"] .btn-solar {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 4px 16px -6px rgba(245, 184, 46, 0.35);
+}
+
+/* Selected navigation indicator */
+.nav-solar-active {
+  background: linear-gradient(90deg, var(--accent-subtle), transparent 140%);
+  box-shadow: inset 0 0 0 1px rgba(234, 170, 32, 0.22);
+}
+
+.nav-solar-active::before {
+  content: "";
+  position: absolute;
+  left: -0.75rem;
+  top: 50%;
+  height: 1.125rem;
+  width: 3px;
+  transform: translateY(-50%);
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--glow-accent);
+}
+
 
 /* ─── Premium atmospheric effects ─── */
 
@@ -98,8 +362,8 @@ body {
   inset: 0;
   background:
     radial-gradient(ellipse 60% 50% at 50% -12%, var(--glow-accent), transparent 60%),
-    radial-gradient(ellipse 40% 30% at 80% 20%, rgba(56, 189, 248, 0.06), transparent 50%),
-    radial-gradient(ellipse 40% 30% at 20% 30%, rgba(168, 85, 247, 0.05), transparent 50%);
+    radial-gradient(ellipse 40% 30% at 80% 20%, var(--solar-2), transparent 50%),
+    radial-gradient(ellipse 40% 30% at 20% 30%, var(--glow), transparent 50%);
   pointer-events: none;
   z-index: 0;
 }
@@ -118,7 +382,7 @@ body {
 
 /* Gradient text utility */
 .text-gradient {
-  background: linear-gradient(135deg, var(--accent), #6366f1, #a78bfa);
+  background: linear-gradient(135deg, #e6a41b, #f2b736, #f59e0b);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -135,7 +399,7 @@ body {
     110deg,
     var(--accent-subtle) 0%,
     var(--accent-subtle) 40%,
-    rgba(129, 140, 248, 0.18) 50%,
+    rgba(245, 184, 46, 0.22) 50%,
     var(--accent-subtle) 60%,
     var(--accent-subtle) 100%
   );
@@ -229,8 +493,8 @@ body {
   inset: 0;
   background:
     radial-gradient(ellipse 80% 60% at 50% 120%, var(--glow-accent), transparent 60%),
-    radial-gradient(ellipse 50% 40% at 20% -10%, rgba(168, 85, 247, 0.08), transparent 50%),
-    radial-gradient(ellipse 50% 40% at 80% -10%, rgba(56, 189, 248, 0.06), transparent 50%);
+    radial-gradient(ellipse 50% 40% at 20% -10%, var(--solar-1), transparent 50%),
+    radial-gradient(ellipse 50% 40% at 80% -10%, var(--solar-2), transparent 50%);
   pointer-events: none;
 }
 

@@ -158,7 +158,7 @@ function LoginForm() {
               </button>
             </div>
           </div>
-          <button type="submit" disabled={isLoading} className="flex min-h-12 w-full items-center justify-center rounded-xl bg-[#20263a] px-4 text-sm font-semibold text-white transition hover:bg-[#2c3450] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-indigo-500 dark:hover:bg-indigo-400">
+          <button type="submit" disabled={isLoading} className="flex min-h-12 w-full items-center justify-center rounded-xl btn-solar px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-55 cursor-pointer">
             {isLoading ? dict.common.loading : dict.auth.signInButton}
           </button>
         </form>

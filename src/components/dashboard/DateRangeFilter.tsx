@@ -94,9 +94,11 @@ export function DateRangeFilter({ currentRange, onChange, className = "", fullWi
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
         <span className={fullWidth ? "min-w-0 flex-1 truncate text-left" : ""}>{activeLabel}</span>
-        <span className={`font-mono text-[10px] text-zinc-400 bg-zinc-100 dark:bg-zinc-900 px-1 py-0.5 rounded ${fullWidth ? "hidden 2xl:inline max-w-[130px] truncate" : "hidden md:inline"}`}>
-          {activeBoundaries}
-        </span>
+        {currentRange !== "all" && activeBoundaries !== (locale === "id" ? "Semua Periode" : "All Time") && (
+          <span className={`font-mono text-[10px] text-zinc-400 bg-zinc-100 dark:bg-zinc-900 px-1 py-0.5 rounded ${fullWidth ? "hidden 2xl:inline max-w-[130px] truncate" : "hidden md:inline"}`}>
+            {activeBoundaries}
+          </span>
+        )}
         <svg className="h-3 w-3 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
@@ -153,8 +155,8 @@ export function DateRangeFilter({ currentRange, onChange, className = "", fullWi
 
       {/* Custom Range Dialog */}
       {showCustomModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center glass-overlay p-4">
+          <div className="surface-card w-full max-w-sm rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-[var(--shadow-pop)] dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
             <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3">
               <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
                 {locale === "id" ? "Pilih Periode Kustom" : "Select Custom Date Range"}
@@ -209,7 +211,7 @@ export function DateRangeFilter({ currentRange, onChange, className = "", fullWi
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-indigo-500 cursor-pointer"
+                  className="btn-solar rounded-lg px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
                 >
                   {locale === "id" ? "Terapkan" : "Apply"}
                 </button>

@@ -63,11 +63,11 @@ export function DeliveryDiagnosticsPanel({ campaignCounts, adCounts, classifiedA
   ];
 
   return (
-    <section className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900 ${className}`} aria-labelledby="delivery-diagnostics-title">
-      <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+    <section className={`p-4 sm:p-5 ${className}`} aria-labelledby="delivery-diagnostics-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 id="delivery-diagnostics-title" className="text-base font-semibold tracking-tight text-slate-900 dark:text-zinc-100 sm:text-lg">
-            {locale === "id" ? "Status Pengiriman & Kesehatan Akun" : "Delivery Status & Account Health"}
+          <h2 id="delivery-diagnostics-title" className="text-sm font-semibold tracking-tight text-slate-900 dark:text-zinc-100">
+            {locale === "id" ? "Status Penayangan & Kesehatan Akun" : "Delivery Status & Account Health"}
           </h2>
           <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-zinc-400">
             {locale === "id" ? "Pemantauan keaktifan kampanye, penayangan materi iklan, dan kelengkapan atribusi data" : "Monitor campaign activity, ad delivery, and data attribution coverage"}
@@ -91,7 +91,7 @@ export function DeliveryDiagnosticsPanel({ campaignCounts, adCounts, classifiedA
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 border-t border-slate-100 bg-slate-50/60 p-4 dark:border-zinc-800 dark:bg-zinc-950/40 sm:grid-cols-3 sm:p-5">
+      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
         {metrics.map((metric) => (
           <article key={metric.title} className="min-w-0 rounded-xl border border-slate-200/80 bg-white px-4 py-3.5 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-[11px] font-semibold text-slate-500 dark:text-zinc-400">{metric.title}</p>

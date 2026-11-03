@@ -3,10 +3,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { KPICard } from "@/components/ui/KPICard";
-import { DateRangeFilter } from "@/components/dashboard/DateRangeFilter";
 import { OnboardingStatusBar } from "@/components/dashboard/OnboardingStatusBar";
-import { FunnelBadge, ScorePill } from "@/components/ui/Badge";
-import { CRMLeadsUploadModal } from "@/components/crm/CRMLeadsUploadModal";
+import { FunnelBadge } from "@/components/ui/Badge";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useToast } from "@/components/ui/Toast";
 import type { FunnelStage } from "@/domain/funnel/stages";
@@ -16,24 +14,29 @@ export default function DashboardPage() {
   const { t, formatCurrency, formatNumber, locale } = useI18n();
   const { addToast } = useToast();
 
-  const [dateRange, setDateRange] = useState("all");
-  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [dateRange, setDateRange] = useState("30d");
+  const [showCustomRange, setShowCustomRange] = useState(false);
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [dashboardData, setDashboardData] = useState<LiveDashboardResponse | null>(null);
 
-  // Demo mode is decided by the server (DATA_MODE); the client only reflects
-  // the isDemoMode flag returned in the dashboard response.
+  const periodPills = [
+    { id: "today", label: t.adsWorkspace.today },
+    { id: "7d", label: t.adsWorkspace.days7 },
+    { id: "14d", label: t.adsWorkspace.days14 },
+    { id: "30d", label: t.adsWorkspace.days30 },
+  ];
+
   const refreshDashboard = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/dashboard/summary?dateRange=${dateRange}`);
+      const res = await fetch(`/api/dashboard/summary?dateRange=${encodeURIComponent(dateRange)}`);
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
           setDashboardData(json.data);
-          setIsDemoMode(Boolean(json.data.isDemoMode));
         }
       }
     } catch {
@@ -48,12 +51,11 @@ export default function DashboardPage() {
     async function load() {
       setIsLoading(true);
       try {
-        const res = await fetch(`/api/dashboard/summary?dateRange=${dateRange}`);
+        const res = await fetch(`/api/dashboard/summary?dateRange=${encodeURIComponent(dateRange)}`);
         if (res.ok) {
           const json = await res.json();
           if (isMounted && json.success && json.data) {
             setDashboardData(json.data);
-            setIsDemoMode(Boolean(json.data.isDemoMode));
           }
         }
       } catch {
@@ -76,7 +78,7 @@ export default function DashboardPage() {
       const res = await fetch("/api/marketing/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allowDemoFallback: false }),
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (res.ok && data.status === "success") {
@@ -139,7 +141,8 @@ export default function DashboardPage() {
   return (
     <div className={`space-y-6 max-w-7xl mx-auto pb-12 transition-opacity ${isLoading ? "opacity-80" : "opacity-100"}`}>
       {/* 1. Header & Context Actions Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 border-b border-zinc-200 dark:border-zinc-800 pb-5">
+      <div className="solar-header surface-card flex flex-col gap-4 rounded-2xl border border-zinc-200/90 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -157,39 +160,46 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* Global Filter & Primary Action Controls */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Action 1: Upload CRM Leads Spreadsheet */}
-          <button
-            type="button"
-            onClick={() => setIsUploadModalOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 transition-colors cursor-pointer"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            <span>{locale === "id" ? "Unggah Prospek CRM" : "Upload CRM Leads"}</span>
-          </button>
-
-          {/* Action 2: Quick Template Download */}
-          <a
-            href="/api/leads/template?format=xlsx"
-            download="template_crm_leads_hdcreative.xlsx"
-            className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
-            title={locale === "id" ? "Unduh template Excel resmi" : "Download official Excel template"}
-          >
-            <svg className="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <span className="hidden sm:inline">{locale === "id" ? "Template .xlsx" : "Template .xlsx"}</span>
-          </a>
-
-          {/* Action 3: Date Range Filter */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 hidden sm:inline">
-              {t.common.period}:
-            </span>
-            <DateRangeFilter currentRange={dateRange} onChange={setDateRange} />
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="inline-flex min-w-0 max-w-full overflow-x-auto flex-nowrap gap-0.5 rounded-xl border border-zinc-200/80 bg-zinc-100/80 p-1 dark:border-zinc-800 dark:bg-zinc-950/60">
+            {periodPills.map((pill) => {
+              const isActive = dateRange === pill.id;
+              return (
+                <button
+                  key={pill.id}
+                  type="button"
+                  onClick={() => {
+                    setDateRange(pill.id);
+                    setShowCustomRange(false);
+                  }}
+                  aria-pressed={isActive}
+                  className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
+                    isActive
+                      ? "bg-white text-zinc-900 shadow-xs ring-1 ring-zinc-200/80 dark:bg-zinc-800 dark:text-zinc-50 dark:ring-zinc-600"
+                      : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  }`}
+                >
+                  {pill.label}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              aria-pressed={dateRange.includes(":") || showCustomRange}
+              onClick={() => {
+                const existing = dateRange.split(":");
+                setCustomStart(existing.length === 2 ? existing[0] : "");
+                setCustomEnd(existing.length === 2 ? existing[1] : "");
+                setShowCustomRange((open) => !open);
+              }}
+              className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
+                dateRange.includes(":") || showCustomRange
+                  ? "bg-white text-zinc-900 shadow-xs ring-1 ring-zinc-200/80 dark:bg-zinc-800 dark:text-zinc-50 dark:ring-zinc-600"
+                  : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              {t.adsWorkspace.custom}
+            </button>
           </div>
 
           {/* Action 4: Sync Meta Button */}
@@ -197,7 +207,7 @@ export default function DashboardPage() {
             type="button"
             onClick={handleTriggerSync}
             disabled={isSyncing}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 shadow-2xs hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer disabled:opacity-50 transition-colors"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3 text-xs font-semibold text-zinc-700 shadow-2xs hover:bg-zinc-50 hover:border-zinc-300 dark:border-zinc-700/80 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 cursor-pointer disabled:opacity-50 transition-colors"
           >
             <svg
               className={`h-3.5 w-3.5 text-zinc-500 ${isSyncing ? "animate-spin" : ""}`}
@@ -210,13 +220,40 @@ export default function DashboardPage() {
             <span>{isSyncing ? (locale === "id" ? "Sinkron..." : "Syncing...") : (locale === "id" ? "Sinkronkan" : "Sync Now")}</span>
           </button>
         </div>
+        </div>
+        {showCustomRange && (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!customStart || !customEnd || customStart > customEnd) return;
+              setDateRange(`${customStart}:${customEnd}`);
+              setShowCustomRange(false);
+            }}
+            className="flex flex-col gap-3 border-t border-zinc-100 pt-3 dark:border-zinc-800 sm:flex-row sm:items-end"
+          >
+            <label className="space-y-1">
+              <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{locale === "id" ? "Mulai" : "Start"}</span>
+              <input type="date" required value={customStart} max={customEnd || undefined} onChange={(event) => setCustomStart(event.target.value)} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200" />
+            </label>
+            <label className="space-y-1">
+              <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{locale === "id" ? "Sampai" : "End"}</span>
+              <input type="date" required value={customEnd} min={customStart || undefined} onChange={(event) => setCustomEnd(event.target.value)} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200" />
+            </label>
+            <button type="submit" disabled={!customStart || !customEnd || customStart > customEnd} className="btn-solar rounded-lg px-3.5 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+              {locale === "id" ? "Terapkan" : "Apply"}
+            </button>
+            {customStart && customEnd && customStart > customEnd && (
+              <span role="alert" className="text-[11px] text-rose-600">{locale === "id" ? "Tanggal mulai harus sebelum tanggal akhir." : "Start date must be on or before end date."}</span>
+            )}
+          </form>
+        )}
       </div>
 
       {/* 2. Onboarding Status Bar */}
       <OnboardingStatusBar />
 
-      {/* 3. Live vs Demo Environment Banner */}
-      {!isDemoMode && state === "not_connected" ? (
+      {/* 3. Connection state */}
+      {!isLoading && state === "not_connected" ? (
         <div className="rounded-2xl border border-indigo-500/20 bg-indigo-50/50 dark:border-indigo-500/30 dark:bg-indigo-950/20 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-bold text-sm">
@@ -228,19 +265,12 @@ export default function DashboardPage() {
               </h2>
               <p className="mt-0.5 text-xs text-indigo-800 dark:text-indigo-300 leading-relaxed">
                 {locale === "id"
-                  ? "Akun Meta live belum terhubung pada organisasi ini. Anda dapat mengaktifkan 'Mode Demo' untuk meninjau data simulasi eksekutif lengkap, atau menghubungkan akun iklan di Pengaturan."
-                  : "Live Meta account is not yet connected for this organization. You can enable Demo Mode to view simulated executive data, or connect your ad account in Settings."}
+                  ? "Akun Meta belum terhubung pada organisasi ini. Hubungkan akun iklan di Pengaturan untuk memuat data aktual."
+                  : "Meta is not connected for this organization. Connect an ad account in Settings to load actual data."}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setIsDemoMode(true)}
-              className="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 transition-colors cursor-pointer"
-            >
-              {locale === "id" ? "Aktifkan Mode Simulasi Demo" : "Enable Demo Simulation"}
-            </button>
             <Link
               href="/settings"
               className="rounded-xl border border-indigo-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-zinc-900 dark:text-indigo-300 dark:hover:bg-zinc-800 transition-colors"
@@ -249,118 +279,50 @@ export default function DashboardPage() {
             </Link>
           </div>
         </div>
-      ) : isDemoMode ? (
-        <div className="rounded-2xl border border-amber-300/80 bg-amber-50/70 dark:border-amber-800/60 dark:bg-amber-950/30 p-3.5 px-4 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-sm">⚠️</span>
-            <div>
-              <span className="font-bold uppercase tracking-wider text-[11px] bg-amber-200/60 dark:bg-amber-900/50 px-2 py-0.5 rounded-md mr-2 text-amber-900 dark:text-amber-200">
-                {locale === "id" ? "Mode Simulasi Demo" : "Demo Simulation"}
-              </span>
-              <span>
-                {locale === "id"
-                  ? "Menampilkan portofolio simulasi iklan properti BSD dan data kualifikasi prospek."
-                  : "Displaying simulated property advertising portfolio and prospect qualification metrics."}
-              </span>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsDemoMode(false)}
-            className="rounded-lg bg-amber-600 px-3 py-1 text-xs font-semibold text-white shadow-2xs hover:bg-amber-500 transition-colors shrink-0 cursor-pointer"
-          >
-            {locale === "id" ? "Beralih ke Live Data" : "Switch to Live Data"}
-          </button>
-        </div>
       ) : null}
 
-      {/* 4. Executive Hero Verdict Card */}
-      {summary && (
-        <div className="relative overflow-hidden rounded-2xl border border-zinc-200 bg-white p-5 sm:p-6 shadow-sm dark:border-zinc-800 dark:bg-[#0c0e14]">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-mono">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  {locale === "id" ? "Status Portofolio: Sehat & Terkendali" : "Portfolio Status: Healthy & Controlled"}
-                </span>
-                <span className="text-xs text-zinc-400">
-                  • {summary.totalLeads} {locale === "id" ? "Total Prospek Masuk" : "Total Inbound Leads"}
-                </span>
-              </div>
-
-              <h2 className="mt-2.5 text-lg sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                {locale === "id"
-                  ? "Efektivitas Belanja Iklan Menghasilkan Lead Berkualitas Tinggi"
-                  : "Ad Spend Effectiveness Generating High-Quality Buyer Prospects"}
-              </h2>
-              <p className="mt-1 text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 max-w-3xl leading-relaxed">
-                {locale === "id"
-                  ? `${summary.qualifiedLeads} dari ${summary.totalLeads} prospek terverifikasi memiliki daya beli cocok (Buyer Score ≥ 70) dengan konfirmasi survei lokasi. Biaya per lead potensial (CPQL) tercatat ${summary.cpql !== null ? formatCurrency(summary.cpql) : "—"}.`
-                  : `${summary.qualifiedLeads} of ${summary.totalLeads} leads are qualified with confirmed purchase intent (Buyer Score ≥ 70) and scheduled surveys. Cost per qualified lead is ${summary.cpql !== null ? formatCurrency(summary.cpql) : "—"}.`}
-              </p>
-            </div>
-
-            {/* Quick Metrics Capsule */}
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-3 shrink-0 pt-2 md:pt-0">
-              <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/60 p-3 px-4 dark:border-zinc-800/80 dark:bg-zinc-900/60">
-                <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 block">
-                  {locale === "id" ? "Total Belanja" : "Total Spend"}
-                </span>
-                <span className="mt-0.5 text-base sm:text-lg font-bold font-mono text-zinc-900 dark:text-zinc-50">
-                  {formatCurrency(summary.totalSpend)}
-                </span>
-              </div>
-
-              <div className="rounded-xl border border-indigo-500/30 bg-indigo-50/40 p-3 px-4 dark:border-indigo-500/20 dark:bg-indigo-950/20">
-                <span className="text-[11px] font-medium text-indigo-700 dark:text-indigo-300 block">
-                  {locale === "id" ? "CPQL Efektif" : "Effective CPQL"}
-                </span>
-                <span className="mt-0.5 text-base sm:text-lg font-bold font-mono text-indigo-600 dark:text-indigo-400">
-                  {summary.cpql !== null ? formatCurrency(summary.cpql) : "—"}
-                </span>
-              </div>
-            </div>
+      {/* Loading Skeleton during Initial Dashboard Load */}
+      {isLoading && !dashboardData && (
+        <div className="space-y-6 animate-pulse" aria-label="Loading dashboard data">
+          <div className="h-28 rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900" />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-32 rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900" />
+            ))}
+          </div>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            <div className="h-64 rounded-2xl border border-zinc-200/90 bg-white p-5 lg:col-span-7 dark:border-zinc-800 dark:bg-zinc-900" />
+            <div className="h-64 rounded-2xl border border-zinc-200/90 bg-white p-5 lg:col-span-5 dark:border-zinc-800 dark:bg-zinc-900" />
           </div>
         </div>
       )}
 
-      {/* 5. Primary KPI Cards Grid (4 Key Dimensions) */}
       {summary && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <KPICard
             title={t.dashboard.totalSpend}
             value={formatCurrency(summary.totalSpend)}
-            subtitle={`${formatNumber(summary.totalImpressions)} ${locale === "id" ? "impresi" : "impressions"} • ${formatNumber(summary.totalClicks)} ${locale === "id" ? "klik" : "clicks"}`}
-            formulaLabel="Total Spend"
+            subtitle={`${formatNumber(summary.totalImpressions)} ${locale === "id" ? "impresi" : "impressions"} · ${formatNumber(summary.totalClicks)} ${locale === "id" ? "klik" : "clicks"}`}
           />
-
           <KPICard
-            title={t.dashboard.cpqlTitle}
-            value={summary.cpql !== null ? formatCurrency(summary.cpql) : "—"}
+            title={locale === "id" ? "Prospek CRM" : "CRM prospects"}
+            value={formatNumber(summary.totalLeads)}
+            subtitle={locale === "id" ? "Pada akun dan periode ini" : "In this account and period"}
+          />
+          <KPICard
+            title={locale === "id" ? "Qualified Leads" : "Qualified leads"}
+            value={formatNumber(summary.qualifiedLeads)}
+            subtitle={locale === "id" ? "Hot + Warm. Cold tidak dihitung." : "Hot + Warm. Cold is excluded."}
+          />
+          <KPICard
+            title="CQPL"
+            value={summary.cpql !== null ? formatCurrency(summary.cpql) : (locale === "id" ? "Tidak dapat dihitung" : "Cannot calculate")}
             subtitle={
-              summary.qualifiedLeads > 0
-                ? `${summary.qualifiedLeads} ${locale === "id" ? "lead lolos kualifikasi beli" : "leads meet qualification criteria"}`
-                : locale === "id" ? "Belum ada lead berkualifikasi pada periode ini" : "No qualified leads in this period"
+              summary.cpql !== null && summary.totalSpend === 0
+                ? (locale === "id" ? "Spend pada periode ini nol." : "Spend in this period is zero.")
+                : (locale === "id" ? "Spend akun dibagi qualified lead." : "Account spend divided by qualified leads.")
             }
-            formulaLabel="Spend / Qualified"
             highlight
-          />
-
-          <KPICard
-            title={t.dashboard.buyerScoreTitle}
-            value={summary.avgBuyerScore !== null ? `${summary.avgBuyerScore} / 100` : "—"}
-            sampleSize={summary.buyerScoreSampleSize}
-            subtitle={locale === "id" ? "Kesiapan & daya beli calon pembeli" : "Buyer readiness & purchasing capacity"}
-            formulaLabel="Avg Buyer Score"
-          />
-
-          <KPICard
-            title={t.dashboard.salesScoreTitle}
-            value={summary.avgSalesScore !== null ? `${summary.avgSalesScore} / 100` : "—"}
-            sampleSize={summary.salesScoreSampleSize}
-            subtitle={locale === "id" ? "Kecepatan respons & relevansi konsultasi sales" : "Sales response speed & query relevance"}
-            formulaLabel="Avg Sales Score"
           />
         </div>
       )}
@@ -369,7 +331,7 @@ export default function DashboardPage() {
       {summary && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Left Column (7 Cols): Property Sales Pipeline */}
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 sm:p-6 shadow-sm dark:border-zinc-800 dark:bg-[#0c0e14] lg:col-span-7 flex flex-col justify-between">
+          <div className="rounded-2xl surface-card border border-zinc-200/90 bg-white p-5 sm:p-6 dark:border-zinc-800 dark:bg-zinc-900 surface-card lg:col-span-7 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800/80">
                 <div>
@@ -423,24 +385,17 @@ export default function DashboardPage() {
             </div>
 
             {/* Bottom Pipeline Note & Upload Button */}
-            <div className="mt-5 pt-3.5 border-t border-zinc-100 dark:border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-zinc-500 dark:text-zinc-400">
+            <div className="mt-5 pt-3.5 border-t border-zinc-100 dark:border-zinc-800/80 text-xs text-zinc-500 dark:text-zinc-400">
               <span>
                 {locale === "id"
-                  ? "Tahap funnel diperbarui otomatis via audit pesan dan impor CRM Spreadsheet."
-                  : "Funnel stages updated automatically via conversation audit and CRM Spreadsheet import."}
+                  ? "Tahap mengikuti catatan CRM. Pesan tidak mengubah tahap secara otomatis."
+                  : "Stages follow the CRM record. Messages do not move a stage automatically."}
               </span>
-              <button
-                type="button"
-                onClick={() => setIsUploadModalOpen(true)}
-                className="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline shrink-0 cursor-pointer"
-              >
-                + {locale === "id" ? "Update Tahap via Excel" : "Update via Excel"}
-              </button>
             </div>
           </div>
 
           {/* Right Column (5 Cols): Attribution Health & Integrations */}
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 sm:p-6 shadow-sm dark:border-zinc-800 dark:bg-[#0c0e14] lg:col-span-5 flex flex-col justify-between">
+          <div className="rounded-2xl surface-card border border-zinc-200/90 bg-white p-5 sm:p-6 dark:border-zinc-800 dark:bg-zinc-900 surface-card lg:col-span-5 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800/80">
                 <div>
@@ -451,8 +406,8 @@ export default function DashboardPage() {
                     {t.dashboard.attributionSubtitle}
                   </p>
                 </div>
-                <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-mono">
-                  {verifiedPercent}% Verified
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold font-mono border ${verifiedPercent > 0 ? "bg-emerald-500/10 text-emerald-700 border-emerald-500/20 dark:text-emerald-400" : "bg-zinc-100 text-zinc-600 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700"}`}>
+                  {verifiedPercent}% {locale === "id" ? "langsung" : "direct"}
                 </span>
               </div>
 
@@ -529,9 +484,6 @@ export default function DashboardPage() {
                 <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-600 dark:text-emerald-400">
                   Spreadsheet CRM
                 </span>
-                <span className="rounded-md bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-zinc-500 dark:text-zinc-400">
-                  WhatsApp (Soon)
-                </span>
               </div>
             </div>
           </div>
@@ -540,7 +492,7 @@ export default function DashboardPage() {
 
       {/* 7. Bottom Section: Top Performing Ads Leaderboard Table */}
       {summary && (
-        <div className="rounded-2xl border border-zinc-200 bg-white p-5 sm:p-6 shadow-sm dark:border-zinc-800 dark:bg-[#0c0e14] transition-colors">
+        <div className="rounded-2xl surface-card border border-zinc-200/90 bg-white p-5 sm:p-6 dark:border-zinc-800 dark:bg-zinc-900 surface-card transition-colors">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-zinc-100 dark:border-zinc-800/80">
             <div>
               <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-50">
@@ -562,7 +514,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="overflow-x-auto mt-2">
-            <table className="w-full text-left text-xs">
+            <table className="w-full min-w-[720px] text-left text-xs">
               <thead className="border-b border-zinc-100 text-zinc-500 dark:border-zinc-800/80 dark:text-zinc-400">
                 <tr>
                   <th className="py-3 pr-4 font-semibold">{t.dashboard.topAdsColumns.adName}</th>
@@ -571,14 +523,13 @@ export default function DashboardPage() {
                   <th className="px-3 py-3 font-semibold">{t.dashboard.topAdsColumns.attributedLeads}</th>
                   <th className="px-3 py-3 font-semibold">{t.dashboard.topAdsColumns.qualifiedLeads}</th>
                   <th className="px-3 py-3 font-semibold font-mono">{t.dashboard.topAdsColumns.cpql}</th>
-                  <th className="px-3 py-3 font-semibold">{t.dashboard.topAdsColumns.buyerScore}</th>
                   <th className="px-3 py-3 font-semibold text-right">{locale === "id" ? "Aksi" : "Action"}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/70 text-zinc-800 dark:text-zinc-200">
                 {leaderboard.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-zinc-400 italic">
+                    <td colSpan={7} className="py-8 text-center text-zinc-400 italic">
                       {locale === "id" ? "Belum ada iklan dengan data pembelanjaan pada periode ini." : "No ad spend records for this period."}
                     </td>
                   </tr>
@@ -610,16 +561,8 @@ export default function DashboardPage() {
                       <td className="px-3 py-3.5 font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
                         {ad.qualifiedLeadsCount}
                       </td>
-                      <td className="px-3 py-3.5 font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      <td className="px-3 py-3.5 font-mono font-semibold text-zinc-800 dark:text-zinc-100" title={ad.cpql === null ? (locale === "id" ? "Tidak dapat dihitung" : "Cannot calculate") : undefined}>
                         {ad.cpql !== null ? formatCurrency(ad.cpql) : "—"}
-                      </td>
-                      <td className="px-3 py-3.5">
-                        <div className="flex items-center gap-1.5">
-                          <ScorePill score={ad.avgBuyerScore} />
-                          <span className="text-[10px] text-zinc-400 font-mono">
-                            (n={ad.buyerScoreSampleSize})
-                          </span>
-                        </div>
                       </td>
                       <td className="px-3 py-3.5 text-right">
                         <Link
@@ -641,14 +584,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 8. CRM Leads Upload Modal Component */}
-      <CRMLeadsUploadModal
-        isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
-        onSuccess={() => {
-          refreshDashboard();
-        }}
-      />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { BrandLogo } from "@/components/ui/BrandLogo";
+import { useSidebar } from "./SidebarContext";
 
 export interface NavItem {
   name: string;
@@ -20,16 +21,25 @@ export function Sidebar({
   onClose?: () => void;
 }) {
   const pathname = usePathname();
-  const { dict } = useI18n();
+  const { dict, locale } = useI18n();
+  const {
+    isCollapsed,
+    toggleCollapse,
+    mobileMenuOpen,
+    closeMobileMenu,
+  } = useSidebar();
+
+  const isDrawerOpen = isOpen !== undefined ? isOpen : mobileMenuOpen;
+  const handleClose = onClose || closeMobileMenu;
 
   // Handle ESC key for mobile drawer
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && isOpen && onClose) {
-        onClose();
+      if (e.key === "Escape" && isDrawerOpen && handleClose) {
+        handleClose();
       }
     }
-    if (isOpen) {
+    if (isDrawerOpen) {
       document.body.style.overflow = "hidden";
       window.addEventListener("keydown", handleKeyDown);
     }
@@ -37,14 +47,14 @@ export function Sidebar({
       document.body.style.overflow = "unset";
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, onClose]);
+  }, [isDrawerOpen, handleClose]);
 
   const navigation: NavItem[] = [
     {
       name: dict.common.overview,
       href: "/dashboard",
       icon: (props) => (
-        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" {...props}>
+        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.6" stroke="currentColor" {...props}>
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -57,7 +67,7 @@ export function Sidebar({
       name: dict.common.ads,
       href: "/ads",
       icon: (props) => (
-        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" {...props}>
+        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.6" stroke="currentColor" {...props}>
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -70,7 +80,7 @@ export function Sidebar({
       name: dict.common.leads,
       href: "/leads",
       icon: (props) => (
-        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" {...props}>
+        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.6" stroke="currentColor" {...props}>
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -81,13 +91,26 @@ export function Sidebar({
     },
     {
       name: dict.common.reviews,
-      href: "/reviews",
+      href: "/studio",
       icon: (props) => (
-        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" {...props}>
+        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.6" stroke="currentColor" {...props}>
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
-            d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z"
+            d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"
+          />
+        </svg>
+      ),
+    },
+    {
+      name: dict.common.enhancer || "Image Enhancer",
+      href: "/enhancer",
+      icon: (props) => (
+        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.6" stroke="currentColor" {...props}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"
           />
         </svg>
       ),
@@ -96,7 +119,7 @@ export function Sidebar({
       name: dict.common.settings,
       href: "/settings",
       icon: (props) => (
-        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" {...props}>
+        <svg fill="none" viewBox="0 0 24 24" strokeWidth="1.6" stroke="currentColor" {...props}>
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -108,38 +131,230 @@ export function Sidebar({
     },
   ];
 
-  const content = (
-    <div className="flex h-full flex-col justify-between border-r border-zinc-200/80 bg-white p-3 sm:p-4 dark:border-zinc-800/80 dark:bg-[#090a0c]">
-      <div className="space-y-4">
-        {/* Navigation Section */}
-        <div className="px-2">
-          <p className="text-[10px] font-semibold tracking-wider text-zinc-400 uppercase dark:text-zinc-500">
-            {dict.common.overview}
-          </p>
-        </div>
+  /* -------------------------------------------------------------------------- */
+  /* 1. Desktop Sidebar Content                                                 */
+  /* -------------------------------------------------------------------------- */
+  const desktopContent = (
+    <div
+      className={`flex h-full flex-col justify-between border-r border-zinc-200/80 bg-zinc-50/95 py-3.5 transition-all duration-300 dark:border-zinc-800/70 dark:bg-zinc-950/95 ${
+        isCollapsed ? "px-2" : "px-3"
+      }`}
+    >
+      <div className="space-y-3">
+        {/* Section Header with Top Minimize/Expand Toggle directly on the Sidebar */}
+        {isCollapsed ? (
+          <div className="flex items-center justify-center pb-1">
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              className="group relative flex h-9 w-9 items-center justify-center rounded-xl text-zinc-500 hover:bg-zinc-200/60 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 transition-colors cursor-pointer"
+              aria-label={locale === "id" ? "Perluas menu (Ctrl+B)" : "Expand sidebar (Ctrl+B)"}
+            >
+              <svg className="h-4 w-4 transition-transform group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+              </svg>
+              <div
+                role="tooltip"
+                className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-3.5 hidden lg:group-hover:flex items-center rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-1 text-xs font-semibold text-zinc-900 shadow-lg backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-50 whitespace-nowrap z-50"
+              >
+                <span>{locale === "id" ? "Perluas menu" : "Expand sidebar"}</span>
+                <kbd className="ml-1.5 rounded border border-zinc-200 bg-zinc-100 px-1 py-0.2 text-[10px] font-mono text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400">
+                  Ctrl+B
+                </kbd>
+                <div className="absolute -left-1 top-1/2 -translate-y-1/2 border-4 border-transparent border-r-white dark:border-r-zinc-900" />
+              </div>
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between px-2 pt-0.5 pb-1">
+            <p className="text-[10px] font-semibold tracking-[0.08em] text-zinc-500 uppercase dark:text-zinc-500">
+              {dict.common.overview}
+            </p>
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+              aria-label={locale === "id" ? "Ciutkan menu (Ctrl+B)" : "Collapse sidebar (Ctrl+B)"}
+              title={locale === "id" ? "Ciutkan menu (Ctrl+B)" : "Collapse sidebar (Ctrl+B)"}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+              </svg>
+            </button>
+          </div>
+        )}
 
+        {/* Navigation Items */}
         <nav className="space-y-1">
           {navigation.map((item) => {
             const isActive =
               pathname === item.href ||
+              (item.href === "/studio" && pathname.startsWith("/reviews")) ||
+              (item.href !== "/dashboard" && pathname.startsWith(item.href));
+
+            return (
+              <div key={item.href} className="relative group">
+                <Link
+                  href={item.href}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`relative flex min-h-10 items-center rounded-xl transition-all ${
+                    isCollapsed
+                      ? "h-10 w-10 mx-auto justify-center p-0"
+                      : "justify-start px-2.5 py-2 text-[13px]"
+                  } font-medium ${
+                    isActive
+                      ? "nav-solar-active font-semibold text-zinc-900 dark:text-zinc-50"
+                      : "text-zinc-600 hover:bg-zinc-900/[0.04] hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-white/[0.05] dark:hover:text-zinc-100"
+                  }`}
+                >
+                  <item.icon
+                    className={`h-[18px] w-[18px] shrink-0 transition-colors ${
+                      isActive
+                        ? "text-indigo-600 dark:text-indigo-400"
+                        : "text-zinc-400 group-hover:text-zinc-600 dark:text-zinc-500 dark:group-hover:text-zinc-300"
+                    }`}
+                  />
+                  {!isCollapsed && (
+                    <span className="ml-3 truncate">{item.name}</span>
+                  )}
+                </Link>
+
+                {/* Floating Tooltip in Collapsed Mode */}
+                {isCollapsed && (
+                  <div
+                    role="tooltip"
+                    className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-3.5 hidden lg:group-hover:flex items-center rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-1 text-xs font-semibold text-zinc-900 shadow-lg backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-50 whitespace-nowrap z-50 transition-opacity animate-in fade-in-0 zoom-in-95 duration-150"
+                  >
+                    <span>{item.name}</span>
+                    <div className="absolute -left-1 top-1/2 -translate-y-1/2 border-4 border-transparent border-r-white dark:border-r-zinc-900" />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* Bottom Desktop Collapse/Expand Trigger */}
+      <div className="pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60">
+        <button
+          type="button"
+          onClick={toggleCollapse}
+          className={`group relative flex items-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-200/60 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-100 cursor-pointer ${
+            isCollapsed
+              ? "h-10 w-10 mx-auto justify-center"
+              : "w-full justify-between px-2.5 py-2 text-xs font-medium"
+          }`}
+          aria-label={
+            isCollapsed
+              ? locale === "id"
+                ? "Perluas menu (Ctrl+B)"
+                : "Expand sidebar (Ctrl+B)"
+              : locale === "id"
+              ? "Ciutkan menu (Ctrl+B)"
+              : "Collapse sidebar (Ctrl+B)"
+          }
+        >
+          {isCollapsed ? (
+            <>
+              {/* Expand Icon: Right Arrow */}
+              <svg className="h-4 w-4 transition-transform group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+              </svg>
+              {/* Tooltip */}
+              <div
+                role="tooltip"
+                className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-3.5 hidden lg:group-hover:flex items-center rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-1 text-xs font-semibold text-zinc-900 shadow-lg backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-900/95 dark:text-zinc-50 whitespace-nowrap z-50"
+              >
+                <span>{locale === "id" ? "Perluas menu" : "Expand sidebar"}</span>
+                <kbd className="ml-1.5 rounded border border-zinc-200 bg-zinc-100 px-1 py-0.2 text-[10px] font-mono text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400">
+                  Ctrl+B
+                </kbd>
+                <div className="absolute -left-1 top-1/2 -translate-y-1/2 border-4 border-transparent border-r-white dark:border-r-zinc-900" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2.5">
+                {/* Collapse Icon: Left Arrow */}
+                <svg className="h-4 w-4 text-zinc-500 group-hover:text-zinc-800 dark:group-hover:text-zinc-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+                </svg>
+                <span>{locale === "id" ? "Ciutkan menu" : "Collapse sidebar"}</span>
+              </div>
+              <kbd className="inline-block rounded border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-mono text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400">
+                Ctrl+B
+              </kbd>
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+
+  /* -------------------------------------------------------------------------- */
+  /* 2. Mobile Drawer Content (Always full-width with brand & close button)      */
+  /* -------------------------------------------------------------------------- */
+  const mobileDrawerContent = (
+    <div className="flex h-full flex-col justify-between bg-zinc-50 p-4 dark:bg-zinc-950">
+      <div className="space-y-4">
+        {/* Drawer Header: Logo + Close Button */}
+        <div className="flex items-center justify-between border-b border-zinc-200/80 pb-3 dark:border-zinc-800/80">
+          <Link href="/dashboard" onClick={handleClose} className="flex items-center gap-2.5">
+            <BrandLogo size="sm" priority />
+            <div className="flex flex-col">
+              <span className="font-semibold text-sm leading-tight text-zinc-900 dark:text-zinc-100">
+                {dict.common.appName}
+              </span>
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                {dict.common.tagline}
+              </span>
+            </div>
+          </Link>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200/80 bg-white text-zinc-500 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+            aria-label={dict.common.close}
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Section Title */}
+        <div className="px-1">
+          <p className="text-[10px] font-semibold tracking-[0.08em] text-zinc-500 uppercase dark:text-zinc-500">
+            {dict.common.overview}
+          </p>
+        </div>
+
+        {/* Navigation list */}
+        <nav className="space-y-1">
+          {navigation.map((item) => {
+            const isActive =
+              pathname === item.href ||
+              (item.href === "/studio" && pathname.startsWith("/reviews")) ||
               (item.href !== "/dashboard" && pathname.startsWith(item.href));
 
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={onClose}
-                className={`group flex items-center justify-between rounded-lg px-2.5 py-2 text-xs font-medium transition-all ${
+                onClick={handleClose}
+                aria-current={isActive ? "page" : undefined}
+                className={`group flex min-h-10 items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                   isActive
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 font-semibold shadow-2xs"
-                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100"
+                    ? "nav-solar-active font-semibold text-zinc-900 dark:text-zinc-50"
+                    : "text-zinc-600 hover:bg-zinc-200/50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
                 }`}
               >
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-3">
                   <item.icon
-                    className={`h-4 w-4 shrink-0 transition-colors ${
+                    className={`h-5 w-5 shrink-0 ${
                       isActive
-                        ? "text-white dark:text-zinc-900"
+                        ? "text-indigo-600 dark:text-indigo-400"
                         : "text-zinc-400 group-hover:text-zinc-600 dark:text-zinc-500 dark:group-hover:text-zinc-300"
                     }`}
                   />
@@ -151,40 +366,42 @@ export function Sidebar({
         </nav>
       </div>
 
-      {/* Footer Info in Sidebar */}
-      <div className="rounded-lg border border-zinc-200/80 bg-zinc-50/70 p-3 text-xs dark:border-zinc-800 dark:bg-zinc-900/40">
-        <div className="flex items-center gap-2">
-          <BrandLogo size="xs" />
-          <span className="font-semibold text-zinc-900 dark:text-zinc-200 text-[11px]">
-            {dict.common.appName}
-          </span>
-        </div>
-        <p className="mt-1 text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-          {dict.common.tagline}
-        </p>
+      {/* Drawer Footer note */}
+      <div className="border-t border-zinc-200/70 pt-3 text-center text-[11px] text-zinc-400 dark:border-zinc-800">
+        HD Creative © {new Date().getFullYear()}
       </div>
     </div>
   );
 
   return (
     <>
-      {/* Desktop sidebar */}
-      <aside className="hidden lg:fixed lg:inset-y-0 lg:top-14 lg:z-30 lg:flex lg:w-60 lg:flex-col">
-        {content}
+      {/* Desktop sidebar with dynamic width and smooth CSS transition */}
+      <aside
+        className={`hidden lg:fixed lg:inset-y-0 lg:top-14 lg:z-30 lg:flex lg:flex-col transition-[width] duration-300 ease-in-out ${
+          isCollapsed ? "lg:w-[68px]" : "lg:w-60"
+        }`}
+        aria-label="Sidebar navigation"
+      >
+        {desktopContent}
       </aside>
 
       {/* Mobile drawer backdrop */}
-      {isOpen && (
+      {isDrawerOpen && (
         <div
-          className="fixed inset-0 z-50 bg-zinc-950/60 backdrop-blur-xs lg:hidden transition-opacity"
-          onClick={onClose}
+          className="glass-overlay fixed inset-0 z-50 lg:hidden transition-opacity backdrop-blur-xs"
+          onClick={handleClose}
+          aria-hidden="true"
         />
       )}
 
-      {/* Mobile drawer panel */}
-      {isOpen && (
-        <div className="fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-2xl lg:hidden dark:bg-[#090a0c] transition-transform">
-          {content}
+      {/* Mobile drawer slide-in panel */}
+      {isDrawerOpen && (
+        <div
+          className="fixed inset-y-0 left-0 z-50 w-72 bg-zinc-50 shadow-2xl lg:hidden dark:bg-zinc-950 transition-transform animate-in slide-in-from-left duration-200"
+          role="dialog"
+          aria-modal="true"
+        >
+          {mobileDrawerContent}
         </div>
       )}
     </>

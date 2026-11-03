@@ -7,7 +7,7 @@ const SECURITY_ICONS = [
   <svg key="aes" className="h-5 w-5 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
   </svg>,
-  // HMAC SHA-256 Webhook Verification
+  // Client-provided CRM data
   <svg key="hmac" className="h-5 w-5 text-indigo-500" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-2.171 7.27a8.966 8.966 0 01-4.079-1.042L3.75 18l1.02-4.999A8.967 8.967 0 013 9c0-4.97 4.03-9 9-9s9 4.03 9 9-4.03 9-9 9c-1.396 0-2.716-.318-3.896-.884z" />
   </svg>,
@@ -26,10 +26,10 @@ export function WorkflowSection({ landing }: { landing: Landing }) {
   return (
     <section id="cara-kerja" className="border-b border-line/60 bg-subtle/30 py-16 sm:py-20 lg:py-24" aria-labelledby="workflow-title">
       <div className="mx-auto grid w-full max-w-7xl gap-4 px-4 sm:px-6 lg:grid-cols-[0.82fr_1.18fr] lg:gap-5 lg:px-8">
-        <div className="flex min-h-[340px] flex-col justify-between rounded-3xl bg-[#171a2b] p-6 text-white sm:min-h-[380px] sm:p-8 lg:p-9">
+        <div className="flex min-h-[340px] flex-col justify-between rounded-3xl bg-zinc-900 border border-zinc-800 p-6 text-white sm:min-h-[380px] sm:p-8 lg:p-9">
           <div>
             <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">
-              <span className="h-px w-6 bg-indigo-300" aria-hidden="true" />
+              <span className="h-px w-6 bg-amber-400" aria-hidden="true" />
               {w.eyebrow}
             </p>
             <h2 id="workflow-title" className="mt-5 max-w-lg text-balance text-3xl font-semibold leading-tight tracking-[-0.035em] sm:text-4xl lg:text-[2.65rem]">

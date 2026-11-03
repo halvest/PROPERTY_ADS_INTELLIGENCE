@@ -18,21 +18,10 @@ describe("executeMarketingSync (Idempotent Sync Service)", () => {
     process.env = originalEnv;
   });
 
-  it("executes successful sync in demo fallback mode when credentials are unset", async () => {
-    const result = await executeMarketingSync({
-      organizationId: demoOrgId,
-      allowDemoFallback: true,
+  it("does not simulate a successful sync when credentials are unset", async () => {
+    await expect(executeMarketingSync({ organizationId: demoOrgId })).rejects.toMatchObject({
+      code: "MISSING_CONFIGURATION",
     });
-
-    expect(result.status).toBe("success");
-    expect(result.mode).toBe("demo");
-    expect(result.adAccountsSynced).toBe(1);
-    expect(result.campaignsSynced).toBe(3);
-    expect(result.adsSynced).toBe(4);
-    expect(result.insightsSynced).toBe(4);
-    expect(result.recordsProcessed).toBe(12); // 1 account + 3 cmp + 4 ads + 4 insights
-    expect(result.recordsRejected).toBe(0);
-    expect(result.syncedAt).toBeDefined();
   });
 
   it("ensures idempotency when running sync repeatedly with identical data", async () => {
@@ -40,11 +29,13 @@ describe("executeMarketingSync (Idempotent Sync Service)", () => {
 
     const run1 = await executeMarketingSync({
       organizationId: demoOrgId,
+      targetAdAccountId: "act_0812999001",
       client,
     });
 
     const run2 = await executeMarketingSync({
       organizationId: demoOrgId,
+      targetAdAccountId: "act_0812999001",
       client,
     });
 
@@ -60,28 +51,25 @@ describe("executeMarketingSync (Idempotent Sync Service)", () => {
     await expect(
       executeMarketingSync({
         organizationId: "",
-        allowDemoFallback: true,
       })
     ).rejects.toThrow(MarketingApiError);
   });
 
-  it("throws MISSING_CONFIGURATION when credentials are unset and allowDemoFallback is false", async () => {
+  it("throws MISSING_CONFIGURATION when credentials are unset", async () => {
     await expect(
       executeMarketingSync({
         organizationId: demoOrgId,
-        allowDemoFallback: false,
       })
     ).rejects.toThrowError(MarketingApiError);
 
     try {
       await executeMarketingSync({
         organizationId: demoOrgId,
-        allowDemoFallback: false,
       });
     } catch (err) {
       const error = err as MarketingApiError;
       expect(error.code).toBe("MISSING_CONFIGURATION");
-      expect(error.message).toContain("META_ACCESS_TOKEN");
+      expect(error.message).toContain("belum menghubungkan Meta");
     }
   });
 
@@ -102,6 +90,7 @@ describe("executeMarketingSync (Idempotent Sync Service)", () => {
     await expect(
       executeMarketingSync({
         organizationId: demoOrgId,
+        targetAdAccountId: "act_0812999001",
         client: failingClient as unknown as MetaMarketingApiClient,
       })
     ).rejects.toThrowError(MarketingApiError);

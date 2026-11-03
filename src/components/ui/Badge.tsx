@@ -5,20 +5,6 @@ import type { AttributionStatus } from "@/domain/attribution/types";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 
-export function DemoBadge({ className = "" }: { className?: string }) {
-  const { dict } = useI18n();
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-400/10 dark:text-amber-400 dark:ring-amber-400/30 ${className}`}
-      title={dict.common.demoBadgeTooltip}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-      <span>{dict.common.demoMode}</span>
-    </span>
-  );
-}
-
 export function AttributionBadge({ status }: { status: AttributionStatus }) {
   const { dict } = useI18n();
 

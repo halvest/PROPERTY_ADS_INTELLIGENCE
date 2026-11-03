@@ -5,6 +5,7 @@ import type {
   MetaCampaignResponse,
   MetaAdResponse,
   MetaInsightResponse,
+  MetaAccountInsightResponse,
 } from "./types";
 import type { MetaMarketingApiClient } from "./client";
 
@@ -176,7 +177,7 @@ export const MOCK_META_PAGES = [
  */
 export class MockMetaMarketingApiClient implements Pick<
   MetaMarketingApiClient,
-  "getAdAccounts" | "getAdAccount" | "getCampaigns" | "getAds" | "getAdInsights" | "getFacebookPages" | "getInstagramAccount"
+  "getAdAccounts" | "getAdAccount" | "getCampaigns" | "getAds" | "getAdInsights" | "getAccountInsights" | "getFacebookPages" | "getInstagramAccount"
 > {
   async getFacebookPages() {
     return [...MOCK_META_PAGES];
@@ -201,6 +202,11 @@ export class MockMetaMarketingApiClient implements Pick<
 
   async getAds(): Promise<MetaAdResponse[]> {
     return [...MOCK_META_ADS];
+  }
+
+  async getAccountInsights(): Promise<MetaAccountInsightResponse[]> {
+    // Do not synthesize account reach by adding ad-level demo metrics.
+    return [];
   }
 
   async getAdInsights(options: {

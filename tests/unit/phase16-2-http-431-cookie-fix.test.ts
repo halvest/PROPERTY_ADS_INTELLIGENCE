@@ -76,8 +76,7 @@ describe("Phase 16.2 — Fix HTTP 431 & Cookie Bloat Prevention", () => {
       expect(clearsStale).toBe(true);
     });
 
-    it("preserves demo_mode and allows access to protected dashboard", async () => {
-      // Demo access requires server-side DATA_MODE=demo; cookie alone is not enough.
+    it("does not allow demo_mode or DATA_MODE to bypass dashboard authentication", async () => {
       process.env.DATA_MODE = "demo";
       const req = new NextRequest("http://localhost:3000/dashboard", {
         headers: {
@@ -86,11 +85,11 @@ describe("Phase 16.2 — Fix HTTP 431 & Cookie Bloat Prevention", () => {
       });
 
       const res = await proxy(req);
-      // Demo mode should not redirect to login
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/login");
     });
 
-    it("rejects demo_mode cookie when server is not in DATA_MODE=demo", async () => {
+    it("rejects demo_mode cookie when DATA_MODE is unset", async () => {
       delete process.env.DATA_MODE;
       const req = new NextRequest("http://localhost:3000/dashboard", {
         headers: { cookie: "demo_mode=true" },

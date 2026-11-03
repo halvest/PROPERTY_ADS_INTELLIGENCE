@@ -50,18 +50,28 @@ export function parseDateRange(
   }
 
   if (dateRange === "7d") {
-    const start = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000); // 7 days inclusive: [today-6, today]
-    return { since: formatDateInTimezone(start, timezone), until: todayStr };
+    // Meta Ads Manager's last_7d excludes today: H-7 through H-1.
+    const end = new Date(`${todayStr}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() - 1);
+    const start = new Date(end);
+    start.setUTCDate(start.getUTCDate() - 6);
+    return { since: start.toISOString().slice(0, 10), until: end.toISOString().slice(0, 10) };
   }
 
   if (dateRange === "14d") {
-    const start = new Date(now.getTime() - 13 * 24 * 60 * 60 * 1000);
-    return { since: formatDateInTimezone(start, timezone), until: todayStr };
+    const end = new Date(`${todayStr}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() - 1);
+    const start = new Date(end);
+    start.setUTCDate(start.getUTCDate() - 13);
+    return { since: start.toISOString().slice(0, 10), until: end.toISOString().slice(0, 10) };
   }
 
   if (dateRange === "30d") {
-    const start = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
-    return { since: formatDateInTimezone(start, timezone), until: todayStr };
+    const end = new Date(`${todayStr}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() - 1);
+    const start = new Date(end);
+    start.setUTCDate(start.getUTCDate() - 29);
+    return { since: start.toISOString().slice(0, 10), until: end.toISOString().slice(0, 10) };
   }
 
   if (dateRange === "this_month") {

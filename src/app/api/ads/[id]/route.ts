@@ -23,7 +23,6 @@ export async function GET(
     }
 
     const supabase = await createClient();
-    const isProduction = process.env.NODE_ENV === "production";
 
     // 1. Resolve Tenant / Session
     const {
@@ -45,17 +44,17 @@ export async function GET(
     }
 
     if (!organizationId) {
-      if (isProduction) {
-        return NextResponse.json(
-          { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
-          { status: 401 }
-        );
-      }
-      organizationId = "d2a99e97-b4cd-4e9f-b084-e36214277225";
+      return NextResponse.json(
+        { success: false, error: "Sesi tidak terautentikasi atau organisasi tidak ditemukan", code: "UNAUTHORIZED" },
+        { status: 401 }
+      );
     }
 
-    // 2. Delegate to server service (strict tenant filtering & bypasses unauthenticated client RLS in dev)
-    const result = await getAdDetailById(organizationId, id);
+    // 2. Delegate to server service (strict tenant filtering & bypasses unauthenticated client RLS in dev).
+    // The dashboard period travels with the request so detail metrics cover
+    // the identical scope the user is looking at.
+    const dateRange = request.nextUrl.searchParams.get("dateRange") || undefined;
+    const result = await getAdDetailById(organizationId, id, { dateRange });
 
     if (!result.success) {
       const statusCode = result.code === "FORBIDDEN" ? 403 : result.code === "NOT_FOUND" ? 404 : 500;

@@ -1,11 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
+import { finishAiAnalysis, validateIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
 import { z } from "zod";
 import { isMetaModelApiConfigured, getMetaConfig } from "@/lib/ai/meta/config";
 import { MetaModelApiClient } from "@/lib/ai/meta/client";
 import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
 import { parseDateRange, getEquivalentPreviousPeriod } from "@/lib/ads/date-utils";
+import { ACTION_TO_VERDICT_STATUS, CtwaModelOutputSchema } from "@/lib/ai/ctwa-analysis/schema";
+import { applyGuardrailsToModelOutput, enforceRecommendedAction } from "@/lib/ai/ctwa-analysis/guardrails";
+import {
+  aggregateAccountStatus,
+  buildContextAwareness,
+  classifyPeriodConfidence,
+  deliveryStatusLabelId,
+  effectiveDeliveryStatus,
+  normalizeEntityStatus,
+  scopeNarrativeRules,
+  spentBeyondDoubleTarget,
+  type AnalysisScope,
+  type EntityDeliveryStatus,
+} from "@/lib/ai/ctwa-analysis/dynamic-context";
+import { PAGE_ANALYST_SYSTEM_PROMPT } from "@/lib/ai/ctwa-analysis/prompt";
 import { classifyResult } from "@/lib/ads/service";
+import {
+  aggregateAdInsights,
+  buildZeroFilledDailyTrends,
+  leadsFromRow,
+  messagingFromRow,
+  selectPrimaryResult,
+  type AdInsightRowLike,
+} from "@/lib/ads/aggregation";
+import { buildAccountIntelligence, type AccountIntelligenceReport } from "@/lib/ai/account-intelligence/engine";
+import { buildCrmAnalysisContext, calendarDayBounds, cqplForScope, formatCrmContextForPrompt, type CrmAnalysisContext } from "@/lib/crm/crm-analysis-context";
 import {
   evaluateAdsPerformance,
   DataSufficiencyStatus,
@@ -18,8 +44,9 @@ export const AnalyzePerformanceRequestSchema = z.object({
   scope: z.enum(["account", "campaign", "ad"]).default("account"),
   period: z
     .enum(["1d", "3d", "7d", "14d", "30d", "custom", "daily", "weekly", "monthly"])
-    .default("7d"),
+    .default("30d"),
   targetId: z.string().optional(),
+  adAccountId: z.string().optional(),
   dateRange: z.string().optional(),
   customSince: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   customUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -49,6 +76,13 @@ export interface PerformanceAnalysisOutput {
     date_range: { since: string; until: string };
     duration_days: number;
     uncertainty_notes: string[];
+    entity_status: EntityDeliveryStatus;
+  };
+  context_awareness: {
+    analyzed_scope: "Account" | "Campaign" | "Ad";
+    entity_status: "Active" | "Paused" | "Unknown";
+    period_confidence: "High" | "Medium" | "Low";
+    period_days: number;
   };
   metrics: Array<{
     key: "spend" | "results" | "cpr" | "ctr";
@@ -84,7 +118,11 @@ export interface PerformanceAnalysisOutput {
     period: string;
     scope: string;
     target_cpr: number | null;
+    period_days: number;
+    entity_status: string;
   };
+  account_intelligence?: AccountIntelligenceReport;
+  crm_context?: CrmAnalysisContext;
 }
 
 const ModelResponseSchema = z.object({
@@ -101,23 +139,27 @@ const ModelResponseSchema = z.object({
     .array(
       z.object({
         key: z.enum(["spend", "results", "cpr", "ctr"]),
-        label: z.string(),
-        value: z.number(),
-        display: z.string(),
-        delta_pct: z.number().nullable(),
-        delta_note: z.string().nullable(),
-        vs_target: z.enum(["better", "on_target", "worse", "no_target"]),
+        label: z.string().optional(),
+        value: z.number().optional(),
+        display: z.string().optional(),
+        delta_pct: z.number().nullable().optional(),
+        delta_note: z.string().nullable().optional(),
+        vs_target: z.enum(["better", "on_target", "worse", "no_target"]).optional(),
         trend_7d: z.array(z.number()).nullable().optional(),
       })
     )
-    .length(4),
-  extra_metrics: z.array(
-    z.object({
-      label: z.string(),
-      display: z.string(),
-      note: z.string().optional(),
-    })
-  ),
+    .optional()
+    .default([]),
+  extra_metrics: z
+    .array(
+      z.object({
+        label: z.string(),
+        display: z.string(),
+        note: z.string().optional(),
+      })
+    )
+    .optional()
+    .default([]),
   watchouts: z
     .array(
       z.object({
@@ -126,7 +168,8 @@ const ModelResponseSchema = z.object({
         insight: z.string(),
       })
     )
-    .max(3),
+    .max(5)
+    .default([]),
   actions: z
     .array(
       z.object({
@@ -137,24 +180,57 @@ const ModelResponseSchema = z.object({
         stop_loss: z.string(),
       })
     )
-    .max(3),
+    .max(5)
+    .default([]),
+  context_awareness: z
+    .object({
+      analyzed_scope: z.enum(["Account", "Campaign", "Ad"]),
+      entity_status: z.enum(["Active", "Paused", "Unknown"]),
+      period_confidence: z.enum(["High", "Medium", "Low"]),
+      period_days: z.number(),
+    })
+    .optional(),
 });
 
-function formatRp(amount: number | null | undefined, loc: "id" | "en" = "id"): string {
-  if (amount === null || amount === undefined || Number.isNaN(amount)) return "—";
-  return `Rp${Math.round(amount).toLocaleString(loc === "en" ? "en-US" : "id-ID")}`;
+/** Fixes spacing and English percent decimals without discarding the model narrative. */
+export function normalizeIndonesianLlmCopy(text: string): string {
+  return text
+    .replace(/Rp\s+(?=\d)/g, "Rp")
+    .replace(/(\d+)\.(\d{1,2})(?=%)/g, "$1,$2");
 }
 
-function formatPct(value: number | null | undefined, loc: "id" | "en" = "id"): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  const str = value.toFixed(2);
-  return loc === "id" ? `${str.replace(".", ",")}%` : `${str}%`;
+function normalizeNarrativeTree<T>(value: T): T {
+  if (typeof value === "string") return normalizeIndonesianLlmCopy(value) as T;
+  if (Array.isArray(value)) return value.map((item) => normalizeNarrativeTree(item)) as T;
+  if (value && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) next[key] = normalizeNarrativeTree(child);
+    return next as T;
+  }
+  return value;
 }
 
-function formatFreq(value: number | null | undefined, loc: "id" | "en" = "id"): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  const str = value.toFixed(2);
-  return loc === "id" ? `${str.replace(".", ",")}x` : `${str}x`;
+function formatRp(amount: number | null | undefined, _loc: "id" | "en" = "id"): string {
+  void _loc;
+  if (amount === null || amount === undefined || !Number.isFinite(amount)) return "Tidak tersedia";
+  return `Rp ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Math.round(amount))}`;
+}
+
+function formatPct(value: number | null | undefined, _loc: "id" | "en" = "id"): string {
+  void _loc;
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Tidak tersedia";
+  return `${new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`;
+}
+
+function formatFreq(value: number | null | undefined, _loc: "id" | "en" = "id"): string {
+  void _loc;
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) return "Tidak tersedia";
+  return `${new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}x`;
+}
+
+function forceIndonesianOutputLocale(_requestedLocale: "id" | "en"): "id" | "en" {
+  void _requestedLocale;
+  return "id";
 }
 
 function parseModelJson(raw: string): unknown {
@@ -162,7 +238,18 @@ function parseModelJson(raw: string): unknown {
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   }
-  return JSON.parse(cleaned);
+  const parsed = JSON.parse(cleaned);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const record = parsed as Record<string, unknown>;
+    if ("verdict" in record) return record;
+    if ("data" in record && record.data && typeof record.data === "object" && "verdict" in (record.data as Record<string, unknown>)) {
+      return record.data;
+    }
+    if ("analysis" in record && record.analysis && typeof record.analysis === "object" && "verdict" in (record.analysis as Record<string, unknown>)) {
+      return record.analysis;
+    }
+  }
+  return parsed;
 }
 
 export function cleanEntityName(raw?: string | null): string {
@@ -221,14 +308,13 @@ function buildDeterministicAnalysis(params: {
   timezone: string;
   spend: number;
   results: number;
-  resultLabel: string;
   costPerResult: number | null;
   linkClicks: number;
   linkCtr: number | null;
   linkCpc: number | null;
   cpm: number | null;
   impressions: number;
-  reach: number;
+  reach: number | null;
   frequency: number | null;
   allClicks: number;
   allCtr: number | null;
@@ -245,12 +331,14 @@ function buildDeterministicAnalysis(params: {
     ctr: number[];
   };
   locale?: "id" | "en";
+  entityStatus?: EntityDeliveryStatus;
+  resultLabel?: string;
+  linkCtrForDiagnosis?: number | null;
 }): PerformanceAnalysisOutput {
   const {
     periodLabel,
     spend,
     results,
-    resultLabel,
     costPerResult,
     linkCtr,
     linkCpc,
@@ -272,8 +360,12 @@ function buildDeterministicAnalysis(params: {
     timezone,
     dateRange,
     locale = "id",
+    entityStatus = "UNKNOWN",
+    resultLabel = "Hasil Konversi",
+    linkCtrForDiagnosis = linkCtr,
   } = params;
 
+  // This analyst currently ships Indonesian-only copy and number formatting.
   const loc = locale;
 
   // Run deterministic Senior Meta Ads Intelligence Evaluator engine
@@ -286,12 +378,15 @@ function buildDeterministicAnalysis(params: {
     targetCpr,
     linkClicks: params.linkClicks,
     impressions,
-    reach,
+    reach: reach ?? undefined,
     frequency,
     prevSpend,
     prevResults,
     prevCpr,
     locale: loc,
+    entityStatus,
+    analysisScope: scope,
+    linkCtr: linkCtrForDiagnosis,
   });
 
   // Evaluator metadata payload for frontend display
@@ -307,6 +402,7 @@ function buildDeterministicAnalysis(params: {
     date_range: dateRange,
     duration_days: durationDays,
     uncertainty_notes: evalResult.uncertaintyNotes,
+    entity_status: evalResult.entityStatus,
   };
 
   // Map action to verdict status
@@ -319,34 +415,45 @@ function buildDeterministicAnalysis(params: {
     evalResult.action === "kurangi"
   ) {
     verdictStatus = "optimize";
-  } else if (
-    evalResult.performanceStatus === "memenuhi_target" &&
-    evalResult.dataStatus === "cukup" &&
-    results >= 30 &&
-    (frequency === null || frequency < 2.5)
-  ) {
+  } else if (evalResult.action === "reaktivasi") {
+    verdictStatus = "maintain";
+  } else if (evalResult.scaleEligible) {
     verdictStatus = "scale";
   } else {
     verdictStatus = "maintain";
   }
 
-  const confidenceLevel: "high" | "medium" | "low" =
-    evalResult.dataStatus === "cukup" ? "high" : evalResult.dataStatus === "terbatas" ? "medium" : "low";
+  if (durationDays <= 3 && (verdictStatus === "stop" || verdictStatus === "scale")) {
+    verdictStatus = "maintain";
+  }
 
-  // Four Core Metrics using deterministic comparison and safe CPR
-  const localizedResultLabel =
-    loc === "id"
-      ? (resultLabel || "Hasil")
-      : (resultLabel && resultLabel !== "Hasil" ? resultLabel : "Results");
+  const periodConfidence = classifyPeriodConfidence(durationDays);
+  const doubleBurn = spentBeyondDoubleTarget(spend, targetCpr, results);
+  const confidenceLevel: "high" | "medium" | "low" =
+    durationDays <= 3
+      ? doubleBurn
+        ? "medium"
+        : "low"
+      : periodConfidence === "high" && evalResult.dataStatus === "cukup"
+        ? "high"
+        : evalResult.dataStatus === "tidak_valid"
+          ? "low"
+          : "medium";
+
+  const contextAwareness = buildContextAwareness({
+    scope,
+    entityStatus: evalResult.entityStatus,
+    durationDays,
+  });
 
   // Safe CTR comparison
   let ctrDeltaPct: number | null = null;
-  let ctrDeltaNote: string | null = loc === "id" ? "Data pembanding belum cukup" : "Insufficient baseline data";
+  let ctrDeltaNote: string | null = "Belum ada data di periode pembanding";
   if (linkCtr !== null && prevLinkCtr !== null && prevLinkCtr > 0) {
     ctrDeltaPct = Number((((linkCtr - prevLinkCtr) / prevLinkCtr) * 100).toFixed(1));
     ctrDeltaNote = `${ctrDeltaPct >= 0 ? "+" : ""}${formatPct(ctrDeltaPct, loc)}`;
   } else if (prevLinkCtr === 0) {
-    ctrDeltaNote = loc === "id" ? "Pembanding 0" : "Baseline 0";
+    ctrDeltaNote = "Belum ada data di periode pembanding";
   }
 
   const cprVsTarget = !targetCpr
@@ -359,19 +466,12 @@ function buildDeterministicAnalysis(params: {
     ? "on_target"
     : "worse";
 
-  const ctrVsTarget =
-    linkCtr === null
-      ? "no_target"
-      : linkCtr >= 1.0
-      ? "better"
-      : linkCtr >= 0.6
-      ? "on_target"
-      : "worse";
+  const ctrVsTarget = "no_target" as const;
 
   const metrics: PerformanceAnalysisOutput["metrics"] = [
     {
       key: "spend",
-      label: loc === "id" ? "Belanja" : "Spend",
+      label: "Total Belanja",
       value: spend,
       display: formatRp(spend, loc),
       delta_pct: evalResult.comparisons.spend.percentageDelta,
@@ -381,17 +481,17 @@ function buildDeterministicAnalysis(params: {
     },
     {
       key: "results",
-      label: localizedResultLabel,
+      label: resultLabel,
       value: results,
-      display: results.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
+      display: results.toLocaleString("id-ID"),
       delta_pct: evalResult.comparisons.results.percentageDelta,
       delta_note: evalResult.comparisons.results.displayDelta,
-      vs_target: results > 0 ? "better" : "worse",
+      vs_target: "no_target",
       trend_7d: trends.results.length > 0 ? trends.results : null,
     },
     {
       key: "cpr",
-      label: loc === "id" ? "Biaya/Hasil (CPR)" : "Cost/Result (CPR)",
+      label: "Biaya per Hasil (CPR)",
       value: evalResult.actualCpr ?? 0,
       display: evalResult.actualCpr !== null ? formatRp(evalResult.actualCpr, loc) : (loc === "id" ? "Tidak tersedia" : "Unavailable"),
       delta_pct: evalResult.comparisons.cpr.percentageDelta,
@@ -401,7 +501,7 @@ function buildDeterministicAnalysis(params: {
     },
     {
       key: "ctr",
-      label: loc === "id" ? "CTR Link" : "Link CTR",
+      label: "CTR Tautan",
       value: linkCtr ?? 0,
       display: formatPct(linkCtr, loc),
       delta_pct: ctrDeltaPct,
@@ -414,39 +514,47 @@ function buildDeterministicAnalysis(params: {
   // Extra Metrics for Accordion
   const extra_metrics: PerformanceAnalysisOutput["extra_metrics"] = [
     {
-      label: loc === "id" ? "Frekuensi" : "Frequency",
+      label: "Frekuensi",
       display: formatFreq(frequency, loc),
-      note: loc === "id" ? "Rasio tayangan terhadap jangkauan unik" : "Impression frequency over reach",
+      note: "Rata-rata tayangan per orang",
     },
     {
       label: loc === "id" ? "CPC Tautan" : "Link CPC",
       display: formatRp(linkCpc, loc),
-      note: loc === "id" ? "Biaya rata-rata per klik tautan" : "Average cost per link click",
+      note: "Biaya rata-rata per klik tautan",
     },
     {
       label: "CPM",
       display: formatRp(cpm, loc),
-      note: loc === "id" ? "Biaya per 1.000 penayangan" : "Cost per 1,000 impressions",
+      note: "Biaya per 1.000 tayangan",
     },
     {
-      label: loc === "id" ? "Jangkauan (Reach)" : "Reach",
-      display: reach.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
-      note: loc === "id" ? "Akumulasi pengguna terjangkau" : "Accumulated reach",
+      label: "Jangkauan Unik",
+      display: reach !== null ? reach.toLocaleString("id-ID") : "Tidak tersedia",
+      note: "Tidak dijumlahkan lintas hari",
     },
     {
-      label: loc === "id" ? "Tayangan (Impresi)" : "Impressions",
-      display: impressions.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
-      note: loc === "id" ? "Total frekuensi tampilan materi" : "Total impressions served",
+      label: "Total Tayangan",
+      display: impressions.toLocaleString("id-ID"),
+      note: "Jumlah iklan ditampilkan",
     },
     {
-      label: loc === "id" ? "Semua Klik" : "All Clicks",
-      display: allClicks.toLocaleString(loc === "en" ? "en-US" : "id-ID"),
+      label: "Semua Klik (Interaksi)",
+      display: allClicks.toLocaleString("id-ID"),
       note: `CTR ${formatPct(allCtr, loc)} · CPC ${formatRp(allCpc, loc)}`,
     },
   ];
 
   // Watchouts: Incorporate uncertaintyNotes or performance warnings
   const watchouts: PerformanceAnalysisOutput["watchouts"] = [];
+
+  if (durationDays > 60) {
+    watchouts.push({
+      severity: "warn",
+      title: `Rentang Evaluasi Sangat Panjang (${durationDays} Hari)`,
+      insight: "Data ini menggabungkan performa historis jangka panjang. Untuk keputusan optimasi anggaran harian atau menghentikan iklan yang sedang aktif, gunakan filter 7 atau 14 Hari Terakhir.",
+    });
+  }
 
   evalResult.uncertaintyNotes.forEach((note) => {
     watchouts.push({
@@ -456,13 +564,21 @@ function buildDeterministicAnalysis(params: {
     });
   });
 
-  if (linkCtr !== null && linkCtr < 0.6) {
+  for (const diagnostic of [...evalResult.causalDiagnostics].reverse()) {
+    watchouts.unshift({
+      severity: "warn",
+      title: diagnostic.title,
+      insight: diagnostic.insight,
+    });
+  }
+
+  if (linkCtr !== null && linkCtr < 0.6 && !evalResult.causalDiagnostics.some((item) => item.code === "creative_hook")) {
     watchouts.push({
       severity: "warn",
       title: loc === "id" ? `CTR ${formatPct(linkCtr, loc)} — di bawah standar` : `CTR ${formatPct(linkCtr, loc)} — below benchmark`,
       insight: loc === "id"
-        ? "Hook 3 detik pertama perlu penyegaran visual atau variasi sudut pandang."
-        : "First 3-second hook needs visual refresh or new creative angle.",
+        ? "CTR tautan berada di bawah 0,6%. Bandingkan dengan iklan sejenis. Penyebab belum dapat dipastikan tanpa data creative, audience, dan placement."
+        : "Link CTR is below 0.6%. Compare it with similar ads. The cause is not established without creative, audience, and placement data.",
     });
   }
 
@@ -476,11 +592,36 @@ function buildDeterministicAnalysis(params: {
     });
   }
 
-  if (watchouts.length === 0) {
+  const pausedDelivery = evalResult.entityStatus === "PAUSED" || evalResult.entityStatus === "ARCHIVED";
+  if (pausedDelivery && impressions === 0) {
+    watchouts.unshift({
+      severity: "warn",
+      title: "Penayangan Sedang Dijeda",
+      insight: "Tidak ada tayangan maupun pembelanjaan anggaran pada periode ini karena status objek sedang dijeda.",
+    });
+  } else if (pausedDelivery && impressions > 0) {
+    watchouts.unshift({
+      severity: "ok",
+      title: "Data Historis Pasca-Jeda",
+      insight: "Metrik yang ditampilkan berasal dari riwayat tayangan sebelum objek dijeda.",
+    });
+  } else if (impressions === 0) {
+    watchouts.unshift({
+      severity: "warn",
+      title: "Belum Ada Distribusi Tayangan",
+      insight: "Objek berstatus aktif tetapi belum mencatat impresi pada periode ini. Periksa batas anggaran, jadwal tayang, atau kesegaran sinkronisasi Meta.",
+    });
+  } else if (spend === 0) {
+    watchouts.unshift({
+      severity: "warn",
+      title: "Belum Ada Pembelanjaan",
+      insight: "Belum ada pembelanjaan tercatat pada periode ini.",
+    });
+  } else if (watchouts.length === 0) {
     watchouts.push({
       severity: "ok",
-      title: loc === "id" ? "Metrik penayangan stabil" : "Delivery metrics stable",
-      insight: loc === "id" ? "Tidak ditemukan red flag teknis penayangan pada periode ini." : "No technical delivery red flags detected in this period.",
+      title: "Distribusi Tayangan Stabil",
+      insight: "Tidak ditemukan kendala teknis pada pengiriman iklan di periode ini.",
     });
   }
 
@@ -499,18 +640,22 @@ function buildDeterministicAnalysis(params: {
     extra_metrics,
     watchouts: watchouts.slice(0, 3),
     actions: evalResult.nextActions.slice(0, 3),
+    context_awareness: contextAwareness,
     meta: {
-      source: "Meta Marketing API",
+      source: "Meta Ads Insights (Snapshot Tersinkron)",
       generated_at: new Date().toISOString(),
       engine: "rules",
       period: periodLabel,
       scope,
       target_cpr: targetCpr,
+      period_days: durationDays,
+      entity_status: deliveryStatusLabelId(evalResult.entityStatus),
     },
   };
 }
 
 export async function POST(req: NextRequest) {
+  let quotaReservation: { userId: string; reservationId: string } | null = null;
   try {
     const rl = checkRateLimit(rateLimitKey(req, "ai-analyze-performance"), 20, 60_000);
     if (!rl.allowed) {
@@ -527,14 +672,11 @@ export async function POST(req: NextRequest) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
     if (authError || !user) {
-      if (isProduction) {
-        return NextResponse.json(
-          { success: false, error: "Autentikasi diperlukan", code: "UNAUTHORIZED" },
-          { status: 401 }
-        );
-      }
+      return NextResponse.json(
+        { success: false, error: "Autentikasi diperlukan", code: "UNAUTHORIZED" },
+        { status: 401 }
+      );
     }
 
     const { data: profile } = user
@@ -545,8 +687,7 @@ export async function POST(req: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || (isProduction ? null : "d2a99e97-b4cd-4e9f-b084-e36214277225");
+    const organizationId = profile?.organization_id || null;
 
     if (!organizationId) {
       return NextResponse.json(
@@ -580,7 +721,37 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { scope, period, targetId, dateRange, customSince, customUntil, targetCpr, locale } = parseResult.data;
+    const { scope, period, targetId, adAccountId, dateRange, customSince, customUntil, targetCpr } = parseResult.data;
+    const locale = forceIndonesianOutputLocale(parseResult.data.locale);
+
+
+    // 3b. Resolve the validated ad-account context. Metrics must never mix
+    // accounts: when an account is specified it must belong to this tenant,
+    // and its campaigns bound every scope (including whole-account analysis).
+    let accountCampaignIds: string[] | null = null;
+    let accountName: string | null = adAccount?.account_name || null;
+    if (adAccountId) {
+      const norm = (v: string) => (v.startsWith("act_") ? v : `act_${v}`);
+      const { data: accRow } = await db
+        .from("ad_accounts")
+        .select("id, provider_account_id, account_name, connection_status")
+        .eq("organization_id", organizationId)
+        .eq("provider_account_id", norm(adAccountId))
+        .maybeSingle();
+      if (!accRow) {
+        return NextResponse.json(
+          { success: false, error: "Akun iklan tidak termasuk milik organisasi ini.", code: "FORBIDDEN" },
+          { status: 403 }
+        );
+      }
+      accountName = accRow.account_name || accountName;
+      const { data: accCampaigns } = await db
+        .from("campaigns")
+        .select("id, status")
+        .eq("organization_id", organizationId)
+        .eq("ad_account_id", accRow.id);
+      accountCampaignIds = (accCampaigns || []).map((c) => c.id);
+    }
 
     // 4. Resolve Effective Date Range for Chosen Period (Section B specifications)
     let since: string | undefined;
@@ -590,7 +761,7 @@ export async function POST(req: NextRequest) {
       since = customSince;
       until = customUntil;
     } else {
-      let effectiveRangeKey = "7d";
+      let effectiveRangeKey = dateRange || "30d";
       if (period === "1d" || period === "daily") {
         effectiveRangeKey = "1d";
       } else if (period === "3d") {
@@ -626,6 +797,10 @@ export async function POST(req: NextRequest) {
     let targetName = cleanEntityName(adAccount?.account_name) || "Seluruh Akun";
     let targetAdIds: string[] = [];
     let targetObjective: string | null = null;
+    let entityStatus: EntityDeliveryStatus = "UNKNOWN";
+    const analysisScope: AnalysisScope = scope;
+    let crmScopeCampaignId: string | null = scope === "campaign" ? targetId || null : null;
+    let crmScopeAdId: string | null = scope === "ad" ? targetId || null : null;
 
     if (scope === "campaign") {
       if (!targetId) {
@@ -637,12 +812,12 @@ export async function POST(req: NextRequest) {
 
       const { data: campaign } = await db
         .from("campaigns")
-        .select("id, name, objective")
+        .select("id, name, objective, status")
         .eq("organization_id", organizationId)
         .eq("id", targetId)
         .maybeSingle();
 
-      if (!campaign) {
+      if (!campaign || (accountCampaignIds && !accountCampaignIds.includes(campaign.id))) {
         return NextResponse.json(
           { success: false, error: "Campaign tidak ditemukan atau tidak memiliki hak akses" },
           { status: 404 }
@@ -651,6 +826,7 @@ export async function POST(req: NextRequest) {
 
       targetName = cleanEntityName(campaign.name);
       targetObjective = campaign.objective;
+      entityStatus = normalizeEntityStatus(campaign.status);
 
       const { data: adsInCmp } = await db
         .from("ads")
@@ -669,12 +845,15 @@ export async function POST(req: NextRequest) {
 
       const { data: adRow } = await db
         .from("ads")
-        .select("id, name, campaign_id, campaigns(name, objective)")
+        .select("id, name, status, campaign_id, campaigns(name, objective, status)")
         .eq("organization_id", organizationId)
         .eq("id", targetId)
         .maybeSingle();
 
-      if (!adRow) {
+      if (
+        !adRow ||
+        (accountCampaignIds && !accountCampaignIds.includes(adRow.campaign_id))
+      ) {
         return NextResponse.json(
           { success: false, error: "Iklan tidak ditemukan atau tidak memiliki hak akses" },
           { status: 404 }
@@ -683,47 +862,72 @@ export async function POST(req: NextRequest) {
 
       targetName = cleanEntityName(adRow.name);
       targetAdIds = [adRow.id];
-      const cmp = adRow.campaigns as { name?: string; objective?: string } | null;
+      crmScopeCampaignId = adRow.campaign_id;
+      const cmp = adRow.campaigns as { name?: string; objective?: string; status?: string } | null;
       targetObjective = cmp?.objective || null;
+      entityStatus = effectiveDeliveryStatus(adRow.status, cmp?.status);
     } else {
-      // Entire Account
-      const { data: allAds } = await db
+      // Entire Account (restricted to the validated account's campaigns)
+      let allAdsQuery = db
         .from("ads")
         .select("id")
         .eq("organization_id", organizationId);
+      if (accountCampaignIds) {
+        allAdsQuery = accountCampaignIds.length
+          ? allAdsQuery.in("campaign_id", accountCampaignIds)
+          : allAdsQuery.eq("campaign_id", "00000000-0000-0000-0000-000000000000");
+      }
+      const { data: allAds } = await allAdsQuery;
       targetAdIds = (allAds || []).map((a) => a.id);
+      if (accountName) targetName = cleanEntityName(accountName) || targetName;
+      if (accountCampaignIds) {
+        const { data: scopedCampaigns } = await db
+          .from("campaigns")
+          .select("status")
+          .eq("organization_id", organizationId)
+          .in("id", accountCampaignIds.length ? accountCampaignIds : ["00000000-0000-0000-0000-000000000000"]);
+        entityStatus = aggregateAccountStatus((scopedCampaigns || []).map((c) => c.status));
+      } else {
+        const { data: orgCampaigns } = await db
+          .from("campaigns")
+          .select("status")
+          .eq("organization_id", organizationId);
+        entityStatus = aggregateAccountStatus((orgCampaigns || []).map((c) => c.status));
+      }
     }
 
     // 6. Fetch Insights from Database
     let currentInsights: Array<{
+      ad_id?: string | null;
       spend: number | null;
       impressions: number | null;
       clicks: number | null;
       reach: number | null;
       link_clicks: number | null;
       conversions: number | null;
+      action_breakdown?: unknown;
+      conversion_action_type?: string | null;
       date_start: string | null;
     }> = [];
+    let insightTruncated = false;
 
     // Only query if entire account OR we have matching ads for the entity
-    if (scope === "account" || targetAdIds.length > 0) {
-      let currentInsightsQuery = db
-        .from("ad_insights")
-        .select("spend, impressions, clicks, reach, link_clicks, conversions, date_start")
-        .eq("organization_id", organizationId);
-
-      if (since) currentInsightsQuery = currentInsightsQuery.gte("date_start", since);
-      if (until) currentInsightsQuery = currentInsightsQuery.lte("date_stop", until);
-      if (targetAdIds.length > 0) currentInsightsQuery = currentInsightsQuery.in("ad_id", targetAdIds);
-
-      const { data: insData, error: insError } = await currentInsightsQuery;
-      if (insError) {
+    const accountHasNoCampaigns = scope === "account" && accountCampaignIds !== null && accountCampaignIds.length === 0;
+    if (!accountHasNoCampaigns && (scope === "account" || targetAdIds.length > 0)) {
+      const loaded = await loadInsightPages(db, {
+        organizationId,
+        adIds: targetAdIds,
+        since,
+        until,
+      });
+      if (loaded.error) {
         return NextResponse.json(
           { success: false, error: "Gagal membaca insight iklan dari basis data" },
           { status: 500 }
         );
       }
-      if (insData) currentInsights = insData;
+      currentInsights = loaded.rows;
+      insightTruncated = loaded.truncated;
     }
 
     // Previous Insights
@@ -737,120 +941,72 @@ export async function POST(req: NextRequest) {
     }> = [];
 
     if (prevSince && prevUntil && (scope === "account" || targetAdIds.length > 0)) {
-      let prevInsightsQuery = db
-        .from("ad_insights")
-        .select("spend, impressions, clicks, reach, link_clicks, conversions")
-        .eq("organization_id", organizationId)
-        .gte("date_start", prevSince)
-        .lte("date_stop", prevUntil);
-
-      if (targetAdIds.length > 0) {
-        prevInsightsQuery = prevInsightsQuery.in("ad_id", targetAdIds);
+      const loadedPrevious = await loadInsightPages(db, {
+        organizationId,
+        adIds: targetAdIds,
+        since: prevSince,
+        until: prevUntil,
+      });
+      if (!loadedPrevious.error) {
+        prevInsights = loadedPrevious.rows.map((row) => ({
+          spend: Number(row.spend) || 0,
+          impressions: Number(row.impressions) || 0,
+          clicks: Number(row.clicks) || 0,
+          reach: Number(row.reach) || 0,
+          link_clicks: Number(row.link_clicks) || 0,
+          conversions: Number(row.conversions) || 0,
+        }));
       }
-
-      const { data: pData } = await prevInsightsQuery;
-      if (pData) prevInsights = pData;
     }
 
-    // 7. Aggregate Current Metrics & Daily Trends
-    let currSpend = 0;
-    let currImpressions = 0;
-    let currClicks = 0;
-    let currReach = 0;
-    let currLinkClicks = 0;
-    let currResults = 0;
+    // 7. Aggregate Current Metrics & Daily Trends.
+    // Totals come from the SHARED aggregation (AI-02) so this endpoint can
+    // never disagree with the dashboard; the daily map only feeds trends.
+    const currAgg = aggregateAdInsights(currentInsights || []);
+    const currSpend = currAgg.spend;
+    const currImpressions = currAgg.impressions;
+    const currClicks = currAgg.allClicks;
+    const currReach = currAgg.reach;
+    const currLinkClicks = currAgg.linkClicks ?? 0;
+    const primaryResult = selectPrimaryResult(currAgg, targetObjective);
+    const currResults = primaryResult.count ?? currAgg.results ?? 0;
+    const decisionCpr = primaryResult.kind === "legacy" ? currAgg.costPerResult : primaryResult.cost;
 
-    const dailyMap = new Map<string, { spend: number; results: number; clicks: number; impressions: number }>();
+    const currLinkCtr = currAgg.linkCtr;
+    const currLinkCpc = currAgg.linkCpc;
+    const currAllCtr = currAgg.allCtr;
+    const currAllCpc = currAgg.allCpc;
+    const currCpm = currAgg.cpm;
+    const currCpr = decisionCpr;
+    const currFrequency = currAgg.frequency;
 
-    (currentInsights || []).forEach((row) => {
-      const s = Number(row.spend) || 0;
-      const imp = Number(row.impressions) || 0;
-      const clk = Number(row.clicks) || 0;
-      const r = Number(row.reach) || 0;
-      const lk = Number(row.link_clicks) || 0;
-      const conv = Number(row.conversions) || 0;
-
-      currSpend += s;
-      currImpressions += imp;
-      currClicks += clk;
-      currReach += r;
-      currLinkClicks += lk;
-      currResults += conv;
-
-      const d = String(row.date_start || "").slice(0, 10);
-      if (d) {
-        const existing = dailyMap.get(d) || { spend: 0, results: 0, clicks: 0, impressions: 0 };
-        existing.spend += s;
-        existing.results += conv;
-        existing.clicks += lk;
-        existing.impressions += imp;
-        dailyMap.set(d, existing);
-      }
-    });
-
-    currSpend = Math.round(currSpend * 100) / 100;
-    const currLinkCtr = currImpressions > 0 ? Number(((currLinkClicks / currImpressions) * 100).toFixed(2)) : null;
-    const currLinkCpc = currLinkClicks > 0 ? Number((currSpend / currLinkClicks).toFixed(2)) : null;
-    const currAllCtr = currImpressions > 0 ? Number(((currClicks / currImpressions) * 100).toFixed(2)) : null;
-    const currAllCpc = currClicks > 0 ? Number((currSpend / currClicks).toFixed(2)) : null;
-    const currCpm = currImpressions > 0 ? Number(((currSpend / currImpressions) * 1000).toFixed(2)) : null;
-    const currCpr = currResults > 0 ? Number((currSpend / currResults).toFixed(2)) : null;
-    // Frequency valid only for single-day reach; summed multi-day reach is not unique.
-    const reachDayCount = new Set(
-      (currentInsights || []).map((r) => String(r.date_start || "").slice(0, 10)).filter(Boolean)
-    ).size;
-    const currFrequency =
-      reachDayCount <= 1 && currReach > 0
-        ? Number((currImpressions / currReach).toFixed(2))
-        : null;
-
-    // Daily Sparkline Trend Arrays
-    const sortedDays = Array.from(dailyMap.keys()).sort();
-    const trendSpend: number[] = [];
-    const trendResults: number[] = [];
-    const trendCpr: number[] = [];
-    const trendCtr: number[] = [];
-
-    sortedDays.forEach((day) => {
-      const item = dailyMap.get(day)!;
-      trendSpend.push(Math.round(item.spend));
-      trendResults.push(item.results);
-      trendCpr.push(item.results > 0 ? Math.round(item.spend / item.results) : 0);
-      trendCtr.push(item.impressions > 0 ? Number(((item.clicks / item.impressions) * 100).toFixed(2)) : 0);
-    });
+    const resultOfDay = (row: AdInsightRowLike) => {
+      if (primaryResult.kind === "messaging") return messagingFromRow(row) ?? 0;
+      if (primaryResult.kind === "leads") return leadsFromRow(row) ?? 0;
+      return Number(row.conversions) || 0;
+    };
+    const filledTrends = since && until
+      ? buildZeroFilledDailyTrends(currentInsights, since, until, resultOfDay)
+      : { spend: [] as number[], results: [] as number[], cpr: [] as number[], ctr: [] as number[] };
+    const trendSpend = filledTrends.spend;
+    const trendResults = filledTrends.results;
+    const trendCpr = filledTrends.cpr;
+    const trendCtr = filledTrends.ctr;
 
     const classification = classifyResult(currResults, [], targetObjective);
 
-    // 8. Aggregate Previous Metrics
-    let prevSpend = 0;
-    let prevResults = 0;
-    let prevImpressions = 0;
-    let prevLinkClicks = 0;
+    // 8. Aggregate Previous Metrics (same shared aggregation)
+    const prevAgg = aggregateAdInsights(prevInsights || []);
+    const prevSpend = prevAgg.spend;
+    const prevResults = prevAgg.results ?? 0;
+    const prevImpressions = prevAgg.impressions;
+    const prevLinkClicks = prevAgg.linkClicks ?? 0;
 
-    (prevInsights || []).forEach((row) => {
-      prevSpend += Number(row.spend) || 0;
-      prevResults += Number(row.conversions) || 0;
-      prevImpressions += Number(row.impressions) || 0;
-      prevLinkClicks += Number(row.link_clicks) || 0;
-    });
-
-    const prevCpr = prevResults > 0 ? Number((prevSpend / prevResults).toFixed(2)) : null;
+    const prevCpr = prevAgg.costPerResult;
     const prevLinkCtr = prevImpressions > 0 ? Number(((prevLinkClicks / prevImpressions) * 100).toFixed(2)) : null;
     const periodName =
-      locale === "en"
-        ? period === "1d" || period === "daily"
-          ? "1 Day (Monitoring)"
-          : period === "3d"
-          ? "3 Days (Early Diagnostic)"
-          : period === "7d" || period === "weekly"
-          ? "7 Days (Routine)"
-          : period === "14d"
-          ? "14 Days (In-Depth)"
-          : period === "30d" || period === "monthly"
-          ? "30 Days (Business)"
-          : "Custom Range"
-        : period === "1d" || period === "daily"
-        ? "1 Hari (Monitoring)"
+      period === "1d" || period === "daily"
+        ? "1 Hari (Pemantauan)"
         : period === "3d"
         ? "3 Hari (Diagnostik Awal)"
         : period === "7d" || period === "weekly"
@@ -873,8 +1029,8 @@ export async function POST(req: NextRequest) {
       timezone,
       spend: currSpend,
       results: currResults,
-      resultLabel: classification.resultLabel,
       costPerResult: currCpr,
+      resultLabel: primaryResult.label,
       linkClicks: currLinkClicks,
       linkCtr: currLinkCtr,
       linkCpc: currLinkCpc,
@@ -897,14 +1053,150 @@ export async function POST(req: NextRequest) {
         ctr: trendCtr,
       },
       locale,
+      entityStatus,
     };
 
     // Calculate deterministic analysis first as ground truth
     const deterministicOutput = buildDeterministicAnalysis(deterministicParams);
+    const crmBounds = calendarDayBounds(since, until);
+    let crmRowsQuery = db
+      .from("conversations")
+      .select("id, ad_id, campaign_id, attribution_status, quality_label, channel, attribution_evidence")
+      .eq("organization_id", organizationId)
+      .eq("channel", "crm_upload")
+      .limit(2000);
+    if (crmBounds.start) crmRowsQuery = crmRowsQuery.gte("started_at", crmBounds.start);
+    if (crmBounds.end) crmRowsQuery = crmRowsQuery.lte("started_at", crmBounds.end);
+    const crmRowsResult = await crmRowsQuery;
+    let providerAdSetId: string | null = null;
+    if (scope === "ad" && crmScopeAdId) {
+      const { data: adSetInsight } = await db
+        .from("ad_insights")
+        .select("adset_id")
+        .eq("organization_id", organizationId)
+        .eq("ad_id", crmScopeAdId)
+        .limit(1)
+        .maybeSingle();
+      providerAdSetId = adSetInsight?.adset_id || null;
+    }
+    const crmContext = buildCrmAnalysisContext(
+      crmRowsResult.error
+        ? null
+        : (crmRowsResult.data || []).map((row) => {
+            const evidence = row.attribution_evidence;
+            const evidenceObject = evidence && typeof evidence === "object" && !Array.isArray(evidence) ? evidence : null;
+            return {
+              id: row.id,
+              ad_id: row.ad_id,
+              campaign_id: row.campaign_id,
+              attribution_status: row.attribution_status,
+              quality_label: row.quality_label,
+              channel: row.channel,
+              attribution_evidence: {
+                funnel_stage: evidenceObject && typeof evidenceObject.funnel_stage === "string" ? evidenceObject.funnel_stage : null,
+                provider_adset_id: evidenceObject && typeof evidenceObject.provider_adset_id === "string" ? evidenceObject.provider_adset_id : null,
+              },
+            };
+          }),
+      {
+        failed: Boolean(crmRowsResult.error),
+        truncated: !crmRowsResult.error && (crmRowsResult.data || []).length >= 2000,
+        organizationId,
+        since,
+        until,
+        scope: scope === "ad" ? "ad" : scope === "campaign" ? "campaign" : "workspace",
+        campaignId: crmScopeCampaignId,
+        adId: crmScopeAdId,
+        providerAdSetId,
+        spend: currSpend,
+      }
+    );
+    deterministicOutput.crm_context = crmContext;
+    deterministicOutput.extra_metrics.push(
+      {
+        label: "Prospek CRM",
+        display: crmContext.availability === "error" ? "Tidak tersedia" : `${crmContext.workspaceRecords.value ?? 0}`,
+        note: `Workspace pada periode. Cakupan ${crmContext.scope}: ${crmContext.totalRecords.value ?? "tidak tersedia"}.`,
+      },
+      {
+        label: "Atribusi CRM",
+        display: crmContext.availability === "error"
+          ? "Tidak tersedia"
+          : `${crmContext.attribution.directAd.value ?? 0} langsung · ${crmContext.attribution.campaign.value ?? 0} kampanye`,
+        note: "Catatan yang tertaut ke iklan adalah tindak lanjut chat iklan itu. Catatan tanpa iklan tetap di tingkat kampanye bila kampanye punya lebih dari satu iklan.",
+      },
+      {
+        label: "Qualified Leads",
+        display: crmContext.qualifiedLeads.value === null ? "Data tidak tersedia" : String(crmContext.qualifiedLeads.value),
+        note: "Hot + Warm pada cakupan ini. Cold tidak dihitung.",
+      },
+      {
+        label: "CQPL",
+        display: cqplForScope(crmContext).status === "available" && cqplForScope(crmContext).value !== null
+          ? formatRp(cqplForScope(crmContext).value, locale)
+          : cqplForScope(crmContext).message,
+        note: cqplForScope(crmContext).message || "Spend dibagi qualified lead pada cakupan dan periode yang sama.",
+      }
+    );
 
-    // 9. Try Live Gemini Inference (if configured) with fallback
+    if (currAgg.messagingConversations !== null) {
+      deterministicOutput.extra_metrics.push({
+        label: "Percakapan Pesan",
+        display: currAgg.messagingConversations.toLocaleString("id-ID"),
+        note: `Chat yang Meta laporkan dari iklan CTWA. Biaya per percakapan: ${formatRp(currAgg.costPerMessagingConversation, locale)}. Angka ini tidak sama dengan catatan CRM.`,
+      });
+    }
+
+    if (scope === "account") {
+      const roster = await loadAccountRoster(db, organizationId, accountCampaignIds);
+      deterministicOutput.account_intelligence = buildAccountIntelligence({
+        accountId: adAccountId || null,
+        accountName: targetName,
+        currency: adAccount?.currency || "IDR",
+        timezone,
+        periodStart: since || "",
+        periodEnd: until || "",
+        durationDays,
+        accountCampaignTargetCpr: targetCpr ?? null,
+        campaigns: roster.campaigns,
+        ads: roster.ads,
+        insights: currentInsights.flatMap((row) => row.ad_id ? [{ ...row, ad_id: row.ad_id }] : []),
+        previous: prevInsights.length > 0 ? { spend: prevSpend, results: prevResults } : null,
+        insightTruncated,
+      });
+    }
+
+    // 9. Try live Meta Model inference (if configured) with deterministic fallback.
+    // Deterministic policy: rule-based output (engine:"rules") never reserves
+    // or consumes AI quota. Quota is only reserved when a live AI call will
+    // actually be attempted.
     const isConfigured = isMetaModelApiConfigured();
     const config = getMetaConfig({ requireApiKey: false });
+
+    if (!isConfigured) {
+      return NextResponse.json({ success: true, data: deterministicOutput });
+    }
+
+    const idempotencyKey = validateIdempotencyKey(req.headers.get("Idempotency-Key"));
+    if (!idempotencyKey) {
+      return NextResponse.json({ success: false, error: "Header Idempotency-Key wajib berupa UUID yang valid agar retry aman.", code: "IDEMPOTENCY_KEY_REQUIRED" }, { status: 400 });
+    }
+    const reservation = await reserveAiAnalysis(user.id, idempotencyKey);
+    if (!reservation.ok) {
+      if (reservation.unavailable) {
+        return NextResponse.json({ success: false, error: "Kuota analisis sementara tidak tersedia. Coba lagi sebentar.", code: "QUOTA_UNAVAILABLE" }, { status: 503 });
+      }
+      const limitReached = reservation.status === "limit_reached";
+      return NextResponse.json({
+        success: false,
+        error: limitReached ? "Kuota analisis AI untuk periode ini telah habis." : "Permintaan analisis ini sedang diproses atau sudah selesai.",
+        code: limitReached ? "AI_QUOTA_EXHAUSTED" : "AI_ANALYSIS_DUPLICATE",
+        resetAt: reservation.resetAt,
+      }, { status: limitReached ? 429 : 409 });
+    }
+    if (reservation.reservationId) {
+      quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
+    }
 
     if (isConfigured) {
       try {
@@ -915,53 +1207,34 @@ export async function POST(req: NextRequest) {
           timeoutMs: 15000,
         });
 
-        const systemPrompt = `Kamu adalah Senior Meta Ads Strategist untuk bisnis properti di Indonesia (10+ tahun pengalaman, biasa handle budget ratusan juta/bulan).
-Tugasmu: menghasilkan output analisis iklan yang SINGKAT, TAJAM, dan MUDAH DISCAN dalam 10 detik.
-
-${locale === "en" ? "LANGUAGE REQUIREMENT: Respond in clear, professional English for performance marketers." : "BAHASA: Bahasa Indonesia profesional untuk performance marketer."}
-
-PRINSIP WAJIB & INTEGRITAS DATA:
-1. Verdict dulu, detail belakangan.
-2. Gaya bahasa advertiser/performance marketer profesional (istilah: CPR, CTR, CPM, scaling, fatigue, hook, stop-loss).
-3. Kalimat pendek, aktif, to the point. Maksimal 20 kata per kalimat. Hindari jargon kaku ("denominator", "mengindikasikan", "adapun").
-4. Format angka: Rp6.811 (tanpa spasi), 0,68% (koma desimal Indonesia jika ID, titik jika EN), 1,04x.
-5. JANGAN PERNAH menyimpulkan iklan "boncos" atau menyarankan mematikan iklan jika status data adalah "terbatas" atau durasi <= 1 hari.
-6. HANYA rekomendasikan uji hook baru jika CTR link < 0.8% DAN CPR di atas target, atau frekuensi >= 2.5. Jika CPR sudah bagus, JANGAN sarankan perbaiki CTR.
-7. Status Learning: Selalu tampilkan "Status Learning tidak tersedia" (jangan asumsikan dari umur kampanye).
-8. JANGAN membuat kesimpulan atau rekomendasi berdasarkan CRM, kualitas lead penjualan, survei, atau closing karena bukan dari sumber data Meta Ads.
-9. Format output WAJIB JSON persis sesuai schema berikut:
-{
-  "verdict": {
-    "status": "scale|maintain|optimize|stop",
-    "headline": "string, maks 12 kata",
-    "subtext": "string, maks 20 kata (berisi 2 angka paling penting)",
-    "confidence": { "level": "high|medium|low", "reason": "string singkat" }
-  },
-  "metrics": [
-    { "key": "spend|results|cpr|ctr", "label": "string", "value": number, "display": "string", "delta_pct": number|null, "delta_note": "string|null", "vs_target": "better|on_target|worse|no_target", "trend_7d": [number]|null }
-  ],
-  "extra_metrics": [ { "label": "...", "display": "..." } ],
-  "watchouts": [ { "severity": "ok|warn|critical", "title": "maks 6 kata", "insight": "1 kalimat" } ],
-  "actions": [ { "priority": "high|medium|low", "title": "maks 8 kata diawali kata kerja", "why": "1 kalimat berangka", "do": "1 kalimat spesifik", "stop_loss": "1 kalimat" } ]
-}`;
+        const systemPrompt = PAGE_ANALYST_SYSTEM_PROMPT;
 
         const userPrompt = `Data Kampanye Properti:
-- Objek: ${targetName} (${scope})
+- Objek: ${targetName} (scope=${analysisScope})
+- Status penayangan: ${deliveryStatusLabelId(entityStatus)} (${entityStatus})
+- period_days: ${durationDays}
+- Aturan cakupan: ${scopeNarrativeRules(analysisScope)}
 - Periode: ${periodLabel} (${durationDays} hari, Timezone: ${timezone})
 - Target CPR: ${targetCpr ? formatRp(targetCpr, locale) : "Belum diatur"}
 - Belanja: ${formatRp(currSpend, locale)}
-- Hasil Valid: ${currResults} ${classification.resultLabel}
-- CPR Aktual: ${currCpr !== null ? formatRp(currCpr, locale) : "Tidak tersedia"}
+- Acuan keputusan (jangan campur jenis hasil): ${primaryResult.label} = ${currResults}. Jenis: ${primaryResult.kind}.
+- Hasil Meta Tercatat: ${currResults} ${classification.resultLabel}
+- CPR Aktual pada acuan di atas: ${currCpr !== null ? formatRp(currCpr, locale) : "Tidak tersedia"}
 - CTR Link: ${formatPct(currLinkCtr, locale)}
 - Frekuensi: ${formatFreq(currFrequency, locale)}
-- Jangkauan: ${currReach.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
+- Jangkauan: ${currReach !== null ? currReach.toLocaleString(locale === "en" ? "en-US" : "id-ID") : "Tidak tersedia (reach multi-hari tidak dijumlahkan sebagai reach unik)"}
+- Percakapan Messaging: ${currAgg.messagingConversations !== null ? currAgg.messagingConversations : "Tidak tersedia"} (biaya per percakapan: ${currAgg.costPerMessagingConversation !== null ? formatRp(currAgg.costPerMessagingConversation, locale) : "Tidak tersedia"})
+- Hasil keputusan CTWA adalah percakapan pesan. Jangan memakai prospek formulir atau lead pixel sebagai hasil iklan.
+- Qualified Lead = Hot + Warm pada catatan CTWA yang tertaut. Cold bukan qualified lead. Jumlah percakapan Meta dan jumlah catatan CRM tidak disamakan.
+${formatCrmContextForPrompt(crmContext)}
 - Data Pembanding: Belanja ${formatRp(prevSpend, locale)}, Hasil ${prevResults}, CPR ${formatRp(prevCpr, locale)}
 - Status Evaluasi Sistem:
   * Status Data: ${deterministicOutput.evaluator.data_status} (${deterministicOutput.evaluator.data_status_reason})
   * Status Performa: ${deterministicOutput.evaluator.performance_status}
   * Tindakan Disarankan: ${deterministicOutput.evaluator.action}
-  * Status Learning: ${deterministicOutput.evaluator.learning_status}
-  * Status Tracking: ${deterministicOutput.evaluator.tracking_status}`;
+  * Fase Learning: ${deterministicOutput.evaluator.learning_status}
+  * Sumber Konversi: ${deterministicOutput.evaluator.tracking_status}
+${accountRosterPrompt(deterministicOutput.account_intelligence)}`;
 
         const response = await client.createChatCompletion({
           messages: [
@@ -970,7 +1243,7 @@ PRINSIP WAJIB & INTEGRITAS DATA:
           ],
           response_format: { type: "json_object" },
           temperature: 0.1,
-          max_tokens: 1500,
+          max_tokens: 4000,
         });
 
         const rawContent = response.choices?.[0]?.message?.content;
@@ -979,34 +1252,124 @@ PRINSIP WAJIB & INTEGRITAS DATA:
           const validated = ModelResponseSchema.safeParse(parsedJson);
 
           if (validated.success) {
-            const data = validated.data;
+            const data = normalizeNarrativeTree(validated.data);
+            const proposedAction =
+              data.verdict.status === "stop"
+                ? "STOP"
+                : data.verdict.status === "scale"
+                  ? "SCALE"
+                  : data.verdict.status === "optimize"
+                    ? "OPTIMIZE"
+                    : "MAINTAIN";
+            const guardInput = {
+              dataStatus: deterministicOutput.evaluator.data_status,
+              durationDays,
+              hasChatTranscript: false,
+              entityStatus,
+              analysisScope,
+              spend: currSpend,
+              results: currResults,
+              targetCpr: targetCpr ?? null,
+              performanceStatus: deterministicOutput.evaluator.performance_status,
+              actualCpr: currCpr,
+            };
+            const enforcedAction = enforceRecommendedAction(proposedAction, guardInput);
+            data.verdict.status = ACTION_TO_VERDICT_STATUS[enforcedAction.action];
+            if (durationDays <= 3 && data.verdict.confidence.level === "high") {
+              data.verdict.confidence.level = spentBeyondDoubleTarget(currSpend, targetCpr ?? null, currResults)
+                ? "medium"
+                : "low";
+            }
+            const ctwaParsed = CtwaModelOutputSchema.safeParse(parsedJson);
+            if (ctwaParsed.success) {
+              const guarded = applyGuardrailsToModelOutput(
+                ctwaParsed.data,
+                guardInput,
+                {
+                  spend: currSpend,
+                  link_ctr: currLinkCtr,
+                  cpm: currCpm,
+                  link_cpc: currAgg.linkCpc,
+                  messaging_conversations: currAgg.messagingConversations,
+                  leads: currAgg.leads,
+                  cost_per_messaging_conversation: currAgg.costPerMessagingConversation,
+                  cost_per_lead: currAgg.costPerLead,
+                  unique_reach: currReach,
+                }
+              );
+              data.verdict.status = ACTION_TO_VERDICT_STATUS[guarded.recommended_action];
+            }
+            const generatedText = [
+              data.verdict.headline,
+              data.verdict.subtext,
+              data.verdict.confidence.reason,
+              ...data.watchouts.flatMap((item) => [item.title, item.insight]),
+              ...data.actions.flatMap((item) => [item.title, item.why, item.do, item.stop_loss]),
+            ].join(" ");
+            const missingFrequency = currFrequency === null || currFrequency <= 0;
+            const missingReach = currReach === null;
+            // Only flag if LLM explicitly hallucinated a quantitative figure for frequency or reach when they are missing
+            const mentionsUnavailableFrequency =
+              missingFrequency &&
+              /(?:frequency|frekuensi)\s*(?:sebesar|mencapai|sebanyak|sekitar)?\s*[\d.,]+x?/i.test(generatedText);
+            const mentionsUnavailableReach =
+              missingReach &&
+              /(?:reach|jangkauan)\s*(?:sebesar|mencapai|sebanyak|sekitar)?\s*[\d.,]+/i.test(generatedText);
+            // Detect full English sentences rather than isolated words in Indonesian ad/property names
+            const containsEnglishSentence =
+              /\b(we recommend to|you should|in order to|as a result of|based on the data|the campaign is|this ad has|scale the budget)\b/i.test(generatedText);
+            // Only consider completely idle if there is literally zero delivery data (spend=0 AND impressions=0)
+            const isZeroData = currImpressions === 0 && currSpend === 0;
+            const useDeterministicNarrative =
+              isZeroData || containsEnglishSentence || mentionsUnavailableFrequency || mentionsUnavailableReach;
+            const deterministicWarning = deterministicOutput.watchouts.find((item) => item.title.startsWith("Rentang Evaluasi Sangat Panjang"));
             const fullOutput: PerformanceAnalysisOutput = {
-              verdict: data.verdict,
+              verdict: useDeterministicNarrative ? deterministicOutput.verdict : data.verdict,
               evaluator: deterministicOutput.evaluator,
-              metrics: data.metrics.map((m) => {
-                let trend: number[] | null = null;
-                if (m.key === "spend" && trendSpend.length > 0) trend = trendSpend;
-                else if (m.key === "results" && trendResults.length > 0) trend = trendResults;
-                else if (m.key === "cpr" && trendCpr.length > 0) trend = trendCpr;
-                else if (m.key === "ctr" && trendCtr.length > 0) trend = trendCtr;
-                return {
-                  ...m,
-                  trend_7d: trend,
-                };
-              }),
-              extra_metrics: data.extra_metrics,
-              watchouts: data.watchouts.slice(0, 3),
-              actions: data.actions.slice(0, 3),
+              // Labels, values and formatted metrics always come from the
+              // deterministic source of truth, even when narrative uses LLM.
+              metrics: deterministicOutput.metrics,
+              extra_metrics: deterministicOutput.extra_metrics,
+              watchouts: deterministicWarning
+                ? [deterministicWarning, ...data.watchouts.filter((item) => !item.title.startsWith("Rentang Evaluasi Sangat Panjang")).slice(0, 2)]
+                : (useDeterministicNarrative ? deterministicOutput.watchouts : data.watchouts.slice(0, 3)),
+              actions: useDeterministicNarrative
+                ? deterministicOutput.actions
+                : data.actions.slice(0, 3),
+              context_awareness: deterministicOutput.context_awareness,
               meta: {
-                source: "Meta Marketing API",
+                source: "Meta Ads Insights (Snapshot Tersinkron)",
                 generated_at: new Date().toISOString(),
-                engine: "llm",
+                engine: useDeterministicNarrative ? "rules" : "llm", // engine: "llm" for live AI narrative
                 period: periodLabel,
                 scope,
                 target_cpr: targetCpr ?? null,
+                period_days: durationDays,
+                entity_status: deliveryStatusLabelId(entityStatus),
               },
+              account_intelligence: deterministicOutput.account_intelligence,
+              crm_context: deterministicOutput.crm_context,
             };
 
+            // Quota accounting fairness: if narrative was discarded to deterministic fallback,
+            // release the reserved slot rather than deducting the user's AI quota.
+            if (useDeterministicNarrative) {
+              if (reservation.reservationId) {
+                await finishAiAnalysis(user.id, reservation.reservationId, false, "deterministic_narrative_fallback");
+              }
+            } else {
+              if (reservation.reservationId && !(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+                return NextResponse.json(
+                  {
+                    success: false,
+                    error: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi. Segarkan penggunaan sebelum mencoba lagi.",
+                    code: "QUOTA_COMMIT_FAILED",
+                  },
+                  { status: 503 }
+                );
+              }
+            }
+            quotaReservation = null;
             return NextResponse.json({ success: true, data: fullOutput });
           }
         }
@@ -1015,13 +1378,144 @@ PRINSIP WAJIB & INTEGRITAS DATA:
       }
     }
 
-    // 10. Deterministic Fallback Strategist Engine
+    // 10. Deterministic fallback (provider error/invalid output): explicitly
+    // marked engine:"rules" in its payload. It must NOT consume AI quota, so
+    // the reservation is released instead of completed as a success.
+    if (quotaReservation) {
+      await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, "deterministic_output_no_quota");
+      quotaReservation = null;
+    }
     return NextResponse.json({ success: true, data: deterministicOutput });
   } catch (error) {
+    if (quotaReservation) {
+      await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, "analysis_failed");
+    }
     const errorMsg = error instanceof Error ? error.message : "Kesalahan server internal";
     return NextResponse.json(
       { success: false, error: `Gagal memproses analisis: ${errorMsg}` },
       { status: 500 }
     );
   }
+}
+
+function accountRosterPrompt(report: AccountIntelligenceReport | undefined): string {
+  if (!report) return "";
+  const campaigns = report.campaign_rankings.slice(0, 12).map((item) =>
+    `${item.name} | id=${item.providerId} | configured=${item.configuredStatus} | effective=${item.effectiveStatus} | spend=${item.spend} | results=${item.results ?? "null"} | cpr=${item.cpr ?? "null"} | category=${item.category} | action=${item.action} | target=${item.target.status}`
+  );
+  const ads = report.ad_rankings.slice(0, 12).map((item) =>
+    `${item.name} | id=${item.providerId} | campaign=${item.campaignName} | configured=${item.configuredStatus} | effective=${item.effectiveStatus} | spend=${item.spend} | results=${item.results ?? "null"} | cpr=${item.cpr ?? "null"} | category=${item.category} | action=${item.action}`
+  );
+  return [
+    "ROSTER PERIODE (hanya objek dengan aktivitas pada rentang tanggal ini; jangan menyebut atau merekomendasikan objek yang tidak ada di daftar):",
+    `Inventaris: ${report.analysis_metadata.analyzed_campaign_count} campaign, ${report.analysis_metadata.analyzed_ad_count} iklan. Masuk ranking: ${report.analysis_metadata.campaigns_with_delivery} campaign, ${report.analysis_metadata.ads_with_delivery} iklan. Dikecualikan karena tidak ada aktivitas periode: ${report.analysis_metadata.excluded_campaign_count} campaign, ${report.analysis_metadata.excluded_ad_count} iklan.`,
+    `Belanja akun (level iklan, sekali): ${report.account_summary.total_spend}. CPR akun: ${report.account_summary.blended_cpr ?? "null"}. Kode hasil: ${report.analysis_metadata.result_comparability}. Kode CPR: ${report.analysis_metadata.account_cpr_code}.`,
+    "Dilarang menyebut iklan ACTIVE jika effective status-nya PAUSED. Dilarang menulis sesuai target jika target TARGET_NOT_CONFIGURED. Dilarang MONITOR atau SCALE untuk objek yang effective status-nya bukan ACTIVE.",
+    "Hipotesis bukan fakta. Jangan menyebut isi creative, audience, atau placement sebagai penyebab. Qualified lead memakai blok CRM: Hot + Warm. Cold tidak dihitung. Prospek campaign-only bukan hasil satu iklan.",
+    `Ringkasan deterministik: ${report.intelligence.executive_summary}`,
+    `Keyakinan keputusan: ${report.intelligence.confidence.decision}. ${report.intelligence.confidence.explanation}`,
+    ...report.intelligence.key_findings.map((item) => `${item.certainty}: ${item.title}. ${item.diagnosis}`),
+    ...report.intelligence.data_gaps.map((item) => `DATA_GAP ${item.field}: ${item.impact_on_analysis}`),
+    ...campaigns,
+    ...ads,
+  ].join("\n");
+}
+
+async function loadInsightPages(
+  db: Awaited<ReturnType<typeof createClient>>,
+  input: { organizationId: string; adIds: string[]; since?: string; until?: string }
+) {
+  const chunks: Array<string[] | null> = input.adIds.length
+    ? Array.from({ length: Math.ceil(input.adIds.length / 80) }, (_, index) => input.adIds.slice(index * 80, index * 80 + 80))
+    : [null];
+  let columns = "ad_id, spend, impressions, clicks, reach, link_clicks, conversions, action_breakdown, conversion_action_type, date_start";
+  const rows: Array<{
+    ad_id?: string | null;
+    spend: number | null;
+    impressions: number | null;
+    clicks: number | null;
+    reach: number | null;
+    link_clicks: number | null;
+    conversions: number | null;
+    action_breakdown?: unknown;
+    conversion_action_type?: string | null;
+    date_start: string | null;
+  }> = [];
+  let truncated = false;
+
+  for (const ids of chunks) {
+    let offset = 0;
+    for (let page = 0; page < 15; page += 1) {
+      const run = (selected: string) => {
+        let query = db.from("ad_insights").select(selected).eq("organization_id", input.organizationId);
+        if (input.since) query = query.gte("date_start", input.since);
+        if (input.until) query = query.lte("date_stop", input.until);
+        if (ids) query = query.in("ad_id", ids);
+        return query.range(offset, offset + 999);
+      };
+      let result = await run(columns);
+      if (result.error && columns.includes("action_breakdown")) {
+        columns = "ad_id, spend, impressions, clicks, reach, link_clicks, conversions, date_start";
+        result = await run(columns);
+      }
+      if (result.error) return { rows, truncated, error: result.error };
+      const batch = (result.data || []) as unknown as typeof rows;
+      rows.push(...batch);
+      if (batch.length < 1000) break;
+      offset += 1000;
+      if (page === 14) truncated = true;
+    }
+  }
+  return { rows, truncated, error: null };
+}
+
+async function loadAccountRoster(
+  db: Awaited<ReturnType<typeof createClient>>,
+  organizationId: string,
+  campaignIds: string[] | null
+) {
+  const campaigns: Array<{ id: string; providerId: string; name: string; status: string | null; objective: string | null }> = [];
+  const pullCampaigns = async (ids?: string[]) => {
+    let query = db.from("campaigns").select("id, name, status, objective, provider_campaign_id").eq("organization_id", organizationId);
+    if (ids) query = query.in("id", ids);
+    const { data } = await query;
+    for (const row of data || []) {
+      campaigns.push({
+        id: row.id,
+        providerId: row.provider_campaign_id,
+        name: row.name,
+        status: row.status,
+        objective: row.objective,
+      });
+    }
+  };
+  if (campaignIds && campaignIds.length > 0) {
+    for (let index = 0; index < campaignIds.length; index += 100) {
+      await pullCampaigns(campaignIds.slice(index, index + 100));
+    }
+  } else if (!campaignIds) {
+    await pullCampaigns();
+  }
+
+  const ads: Array<{ id: string; providerId: string; name: string; status: string | null; campaignId: string }> = [];
+  const ids = campaigns.map((campaign) => campaign.id);
+  for (let index = 0; index < ids.length; index += 100) {
+    const chunk = ids.slice(index, index + 100);
+    if (!chunk.length) continue;
+    const { data } = await db
+      .from("ads")
+      .select("id, name, status, provider_ad_id, campaign_id")
+      .eq("organization_id", organizationId)
+      .in("campaign_id", chunk);
+    for (const row of data || []) {
+      ads.push({
+        id: row.id,
+        providerId: row.provider_ad_id,
+        name: row.name,
+        status: row.status,
+        campaignId: row.campaign_id,
+      });
+    }
+  }
+  return { campaigns, ads };
 }

@@ -58,8 +58,8 @@ export function ProblemSection({ landing }: { landing: Landing }) {
             <p className="mt-5 rounded-xl bg-subtle/70 px-4 py-3 text-sm leading-6 text-foreground/80">{p.problemSummary}</p>
           </article>
 
-          <article className="relative overflow-hidden rounded-2xl bg-[#171a2b] p-5 text-white sm:p-7">
-            <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-indigo-500/10 blur-3xl" aria-hidden="true" />
+          <article className="relative overflow-hidden rounded-2xl bg-zinc-900 border border-zinc-800 p-5 text-white sm:p-7">
+            <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-amber-500/10 blur-3xl" aria-hidden="true" />
             <div className="relative">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-200">{p.solutionLabel}</p>
@@ -70,7 +70,7 @@ export function ProblemSection({ landing }: { landing: Landing }) {
               <ol className="mt-5 divide-y divide-white/10">
                 {p.unseenItems.map((item, index) => (
                   <li key={item.title} className="flex gap-4 py-4 first:pt-0 last:pb-0">
-                    <span className="tnum grid h-6 w-6 shrink-0 place-items-center rounded-full bg-indigo-300/10 text-[11px] font-semibold text-indigo-200">0{index + 1}</span>
+                    <span className="tnum grid h-6 w-6 shrink-0 place-items-center rounded-full bg-amber-400/10 text-[11px] font-semibold text-indigo-200">0{index + 1}</span>
                     <div>
                       <h4 className="text-sm font-semibold text-white">{item.title}</h4>
                       <p className="mt-1 text-sm leading-6 text-slate-300">{item.detail}</p>

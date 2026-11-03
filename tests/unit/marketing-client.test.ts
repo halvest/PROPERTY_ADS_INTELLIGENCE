@@ -42,7 +42,7 @@ describe("MetaMarketingApiClient", () => {
 
     const campaigns = await client.getCampaigns();
 
-    expect(capturedUrl).toContain("https://graph.facebook.com/v21.0/act_123456789/campaigns");
+    expect(capturedUrl).toContain("https://graph.facebook.com/v26.0/act_123456789/campaigns");
     expect(capturedHeaders["Authorization"]).toBe(`Bearer ${dummyToken}`);
     expect(capturedHeaders["Accept"]).toBe("application/json");
     expect(campaigns).toHaveLength(1);
@@ -63,7 +63,7 @@ describe("MetaMarketingApiClient", () => {
             data: [{ id: "ad_1", name: "Ad 1", status: "ACTIVE", campaign_id: "cmp_1" }],
             paging: {
               cursors: { after: "cursor_page_2" },
-              next: "https://graph.facebook.com/v21.0/act_123456789/ads?after=cursor_page_2",
+              next: "https://graph.facebook.com/v26.0/act_123456789/ads?after=cursor_page_2",
             },
           }),
         };

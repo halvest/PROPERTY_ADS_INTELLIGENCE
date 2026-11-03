@@ -3,6 +3,17 @@ import crypto from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getLiveDashboardData } from "@/lib/data/live-dashboard-service";
 
+function mockQuery(data: unknown[], error: unknown = null) {
+  const result = { data, error };
+  const query: Record<string, unknown> = {};
+  for (const method of ["select", "eq", "gte", "lte", "in", "order", "limit"]) {
+    query[method] = vi.fn(() => query);
+  }
+  query.then = (resolve: (value: typeof result) => unknown, reject?: (reason: unknown) => unknown) =>
+    Promise.resolve(result).then(resolve, reject);
+  return query;
+}
+
 describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication", () => {
   const secretKey = "test_meta_app_secret_for_signing_state_token_12345";
   const orgId = "11111111-2222-3333-4444-555555555555";
@@ -200,9 +211,7 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
           }
           if (table === "ad_insights" || table === "conversations") {
             return {
-              select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-              }),
+              select: vi.fn(() => mockQuery([])),
             };
           }
           return {
@@ -343,16 +352,12 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
           }
           if (table === "ad_insights") {
             return {
-              select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockResolvedValue({ data: mockInsights, error: null }),
-              }),
+              select: vi.fn(() => mockQuery(mockInsights)),
             };
           }
           if (table === "conversations") {
             return {
-              select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockResolvedValue({ data: mockConvs, error: null }),
-              }),
+              select: vi.fn(() => mockQuery(mockConvs)),
             };
           }
           return {
@@ -382,10 +387,13 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
       // CPM: (2500000 / 75000) * 1000 = 33333.33
       expect(response.summary?.cpm).toBeCloseTo(33333.33, 1);
 
-      // Leads: 1 conversation, 1 qualified (buyer score 85 >= 70)
+      // Leads: 1 conversation recorded. Lead quality is NOT AVAILABLE:
+      // Buyer Score is legacy/out-of-scope (Phase 2 product decision), so a
+      // stored buyer_score of 85 no longer qualifies the lead and CPQL is
+      // never computed from it.
       expect(response.summary?.totalLeads).toBe(1);
-      expect(response.summary?.qualifiedLeads).toBe(1);
-      expect(response.summary?.cpql).toBe(2500000); // 2500000 / 1
+      expect(response.summary?.qualifiedLeads).toBe(0);
+      expect(response.summary?.cpql).toBeNull();
 
       expect(response.leaderboard.length).toBe(2);
       expect(response.leads.length).toBe(1);

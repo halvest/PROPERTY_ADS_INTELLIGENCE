@@ -2,16 +2,20 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { AttributionBadge, FunnelBadge, ScorePill } from "@/components/ui/Badge";
+import { AttributionBadge, FunnelBadge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import type { AttributionStatus } from "@/domain/attribution/types";
 import type { LeadDetailView } from "@/lib/data/types";
+import type { FunnelStage } from "@/domain/funnel/stages";
+import { getAllowedFunnelTransitions } from "@/domain/funnel/stages";
+import type { QualityLabel } from "@/lib/data/types";
 
 export function LeadDetailClient({ leadId }: { leadId: string }) {
   const { t, formatDateTime, locale } = useI18n();
+  const stageLabel = (stage: string) => t.funnel[stage as keyof typeof t.funnel] || stage;
   const { addToast } = useToast();
 
   const [lead, setLead] = useState<LeadDetailView | null>(null);
@@ -24,6 +28,16 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
   const [correctionReason, setCorrectionReason] = useState("");
   const [correctionError, setCorrectionError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingLead, setIsSavingLead] = useState(false);
+  const [editStage, setEditStage] = useState<FunnelStage>("baru");
+  const [editQuality, setEditQuality] = useState<QualityLabel | "">("");
+  const [editDomisili, setEditDomisili] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [editReason, setEditReason] = useState("");
+  const [editSourceMode, setEditSourceMode] = useState<"linked" | "manual" | "organic">("organic");
+  const [editSourceSelection, setEditSourceSelection] = useState("");
+  const [editSourceName, setEditSourceName] = useState("");
+  const [sourceOptions, setSourceOptions] = useState<{ ads: Array<{ adId: string; campaignId: string; adName: string; campaignName: string }>; campaigns: Array<{ id: string; name: string }> }>({ ads: [], campaigns: [] });
 
   useEffect(() => {
     let isCancelled = false;
@@ -34,8 +48,28 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         if (res.ok) {
           const json = await res.json();
           if (!isCancelled && json.success && json.data) {
-            setLead(json.data);
-            setNewStatus(json.data.attributionStatus);
+            const data = json.data as LeadDetailView;
+            setLead(data);
+            setNewStatus(data.attributionStatus);
+            setEditStage(data.funnelStage);
+            setEditQuality(data.qualityLabel || "");
+            setEditDomisili(data.domisili || "");
+            setEditNotes(data.notes || "");
+            setEditReason("");
+            setEditSourceName(data.adName || data.campaignName || "");
+            if (data.adId) {
+              setEditSourceMode("linked");
+              setEditSourceSelection(`ad:${data.adId}`);
+            } else if (data.campaignId) {
+              setEditSourceMode("linked");
+              setEditSourceSelection(`campaign:${data.campaignId}`);
+            } else if (data.adName || data.campaignName) {
+              setEditSourceMode("manual");
+              setEditSourceSelection("manual");
+            } else {
+              setEditSourceMode("organic");
+              setEditSourceSelection("organic");
+            }
           }
         }
       } catch {
@@ -52,6 +86,53 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
       isCancelled = true;
     };
   }, [leadId, refreshKey]);
+
+  useEffect(() => {
+    void fetch("/api/leads/sources").then((response) => response.json()).then((json) => {
+      if (json.success && json.data) setSourceOptions(json.data);
+    }).catch(() => undefined);
+  }, []);
+
+  const handleLeadUpdate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!lead) return;
+    if (editStage !== lead.funnelStage && !editReason.trim()) {
+      addToast("error", locale === "id" ? "Alasan Wajib Diisi" : "Reason Required", locale === "id" ? "Jelaskan alasan perubahan tahap funnel." : "Provide a reason for the funnel change.");
+      return;
+    }
+    if (editSourceMode === "linked" && !editSourceSelection) {
+      addToast("error", locale === "id" ? "Sumber Belum Dipilih" : "Source Required", locale === "id" ? "Pilih iklan atau kampanye, atau pilih sumber manual/organik." : "Choose an ad or campaign, or select manual/organic source.");
+      return;
+    }
+    const selectedAd = editSourceSelection.startsWith("ad:") ? sourceOptions.ads.find((item) => `ad:${item.adId}` === editSourceSelection) : null;
+    const selectedCampaignId = editSourceSelection.startsWith("campaign:") ? editSourceSelection.slice("campaign:".length) : selectedAd?.campaignId || null;
+    setIsSavingLead(true);
+    try {
+      const response = await fetch(`/api/leads/${lead.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "lead_update",
+          newStage: editStage !== lead.funnelStage ? editStage : undefined,
+          reason: editReason.trim(),
+          qualityLabel: editQuality || null,
+          domisili: editDomisili.trim(),
+          notes: editNotes.trim(),
+          adId: editSourceMode === "linked" ? selectedAd?.adId || null : null,
+          campaignId: editSourceMode === "linked" ? selectedCampaignId : null,
+          sourceName: editSourceMode === "manual" ? editSourceName.trim() : editSourceMode === "linked" ? selectedAd?.adName || sourceOptions.campaigns.find((item) => item.id === selectedCampaignId)?.name || "" : "",
+        }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "Gagal menyimpan data prospek.");
+      addToast("success", locale === "id" ? "Prospek Diperbarui" : "Lead Updated", locale === "id" ? "Status dan kualifikasi berhasil disimpan." : "Lead details saved.");
+      setRefreshKey((key) => key + 1);
+    } catch (error) {
+      addToast("error", locale === "id" ? "Gagal Menyimpan" : "Save Failed", error instanceof Error ? error.message : "Network error");
+    } finally {
+      setIsSavingLead(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -138,8 +219,6 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
     }
   };
 
-  const buyerCriteria = Object.values(lead.buyerAssessment.criteria);
-  const salesCriteria = Object.values(lead.salesAssessment.criteria);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
@@ -156,7 +235,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         </Link>
 
         {/* Lead Profile & Core Fields Card */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors space-y-4">
+        <div className="solar-header surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 transition-colors space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <div className="flex flex-wrap items-center gap-2.5">
@@ -250,6 +329,55 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
         </div>
       </div>
 
+      <form onSubmit={handleLeadUpdate} className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="mb-4">
+          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{locale === "id" ? "Perbarui Status & Kualifikasi Prospek" : "Update Lead Status & Qualification"}</h2>
+          <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{locale === "id" ? "Pembaruan tersimpan ke CRM. Perubahan tahap harus menyertakan alasan yang nyata." : "Changes are saved to CRM. Funnel stage changes require a reason."}</p>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Tahap Funnel" : "Funnel Stage"}
+            <select value={editStage} onChange={(event) => setEditStage(event.target.value as FunnelStage)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+              <option value={lead.funnelStage}>{stageLabel(lead.funnelStage)}</option>{getAllowedFunnelTransitions(lead.funnelStage).map((stage) => <option key={stage} value={stage}>{stageLabel(stage)}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Label Kualitas" : "Quality Label"}
+            <select value={editQuality} onChange={(event) => setEditQuality(event.target.value as QualityLabel | "")} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+              <option value="">{locale === "id" ? "Belum Dinilai" : "Not Assessed"}</option><option value="Hot">Hot</option><option value="Warm">Warm</option><option value="Cold">Cold</option>
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Domisili" : "Domicile"}
+            <input value={editDomisili} onChange={(event) => setEditDomisili(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+          </label>
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">{locale === "id" ? "Jenis Sumber" : "Source Type"}
+            <select value={editSourceMode} onChange={(event) => { const value = event.target.value as "linked" | "manual" | "organic"; setEditSourceMode(value); setEditSourceSelection(value === "organic" ? "organic" : value === "manual" ? "manual" : ""); }} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+              <option value="linked">{locale === "id" ? "Iklan/Kampanye Meta" : "Meta Ad/Campaign"}</option><option value="manual">{locale === "id" ? "Sumber Manual" : "Manual Source"}</option><option value="organic">{locale === "id" ? "Organik/Tidak Diketahui" : "Organic/Unknown"}</option>
+            </select>
+          </label>
+          {editSourceMode === "linked" ? (
+            <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2">{locale === "id" ? "Kampanye / Iklan" : "Campaign / Ad"}
+              <select value={editSourceSelection} onChange={(event) => setEditSourceSelection(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                <option value="">{locale === "id" ? "Pilih kampanye atau iklan" : "Choose a campaign or ad"}</option>
+                {sourceOptions.campaigns.map((campaign) => <option key={`campaign:${campaign.id}`} value={`campaign:${campaign.id}`}>{campaign.name}</option>)}
+                {sourceOptions.ads.map((ad) => <option key={`ad:${ad.adId}`} value={`ad:${ad.adId}`}>{ad.campaignName} / {ad.adName}</option>)}
+              </select>
+            </label>
+          ) : editSourceMode === "manual" ? (
+            <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2">{locale === "id" ? "Nama sumber" : "Source Name"}
+              <input value={editSourceName} onChange={(event) => setEditSourceName(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+            </label>
+          ) : null}
+          <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2 lg:col-span-3">{locale === "id" ? "Catatan Sales" : "Sales Notes"}
+            <textarea rows={3} value={editNotes} onChange={(event) => setEditNotes(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+          </label>
+          {editStage !== lead.funnelStage && <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 sm:col-span-2 lg:col-span-3">{locale === "id" ? "Alasan / bukti perubahan tahap (wajib)" : "Reason / evidence for stage change (required)"}
+            <input required value={editReason} onChange={(event) => setEditReason(event.target.value)} placeholder={locale === "id" ? "Contoh: Klien meminta jadwal survei Sabtu" : "Example: Client requested a Saturday site visit"} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
+          </label>}
+        </div>
+        <div className="mt-4 flex justify-end border-t border-zinc-100 pt-3 dark:border-zinc-800">
+          <button type="submit" disabled={isSavingLead} className="btn-solar inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold disabled:opacity-50 cursor-pointer">{isSavingLead ? (locale === "id" ? "Menyimpan…" : "Saving…") : (locale === "id" ? "Simpan Perubahan" : "Save Changes")}</button>
+        </div>
+      </form>
+
       {/* Roadmap Notice: Tahap 1 vs Tahap 2 */}
       <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 p-4 text-xs text-sky-900 dark:text-sky-300 flex items-start gap-3">
         <span className="text-base shrink-0 mt-0.5">🚀</span>
@@ -261,203 +389,14 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
           </p>
           <p className="leading-relaxed text-sky-800 dark:text-sky-300 text-[11px]">
             {locale === "id"
-              ? "Saat ini tim sales memperbarui tahap funnel, label Hot/Warm/Cold, dan catatan singkat secara manual. Setelah integrasi percakapan WhatsApp terhubung (Tahap 2), AI akan otomatis menganalisis konteks chat untuk memberikan label kualitas objektif, alasan indikator percakapan, ringkasan kebutuhan (budget, tipe properti, lokasi), dan rekomendasi tindak lanjut."
-              : "Currently sales reps manually update funnel stages, Hot/Warm/Cold labels, and short notes. Once WhatsApp conversation integration connects in Phase 2, AI will automatically analyze chat contexts to provide objective quality badges, conversation indicators, requirement summaries, and follow-up recommendations."}
+              ? "Informasi prospek dan tindak lanjut berasal dari input atau file yang diberikan klien. AI hanya dapat menilai bukti yang tercatat; informasi yang tidak tersedia tidak akan ditebak."
+              : "Prospect and follow-up details come from client input or uploaded files. AI can only assess recorded evidence and does not guess missing information."}
           </p>
         </div>
       </div>
 
-      {/* Buyer Score & Sales Score Dimension Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Dimension 1: Buyer Score */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
-            <div>
-              <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                1. {t.leads.detail.buyerScoreHeading}
-              </h2>
-              <span className="text-[11px] text-zinc-400 font-mono">
-                {t.leads.detail.buyerScoreSubtitle} • v{lead.buyerAssessment.rubricVersion}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 text-right">
-              <div>
-                <span className="text-xl font-bold text-zinc-900 dark:text-zinc-50 font-mono">
-                  {lead.buyerAssessment.normalizedScore !== null
-                    ? `${lead.buyerAssessment.normalizedScore}`
-                    : "—"}
-                </span>
-                <span className="text-xs text-zinc-400 block font-mono">/ 100</span>
-              </div>
-              <ScorePill
-                score={lead.buyerAssessment.normalizedScore}
-                completeness={lead.buyerAssessment.completeness}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 py-3 text-center border-b border-zinc-100 dark:border-zinc-800 text-xs">
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.realPoints}</span>
-              <span className="font-semibold font-mono">{lead.buyerAssessment.rawPoints}</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.dataCompleteness}</span>
-              <span className="font-semibold font-mono">{lead.buyerAssessment.completeness}%</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.evidenceConfidence}</span>
-              <span className="font-semibold font-mono">
-                {lead.buyerAssessment.confidence !== null
-                  ? `${(lead.buyerAssessment.confidence * 100).toFixed(0)}%`
-                  : "—"}
-              </span>
-            </div>
-          </div>
-
-          {/* Criteria breakdown */}
-          <div className="mt-4 space-y-3">
-            <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              {t.leads.detail.criteriaBreakdownTitle}:
-            </p>
-
-            {buyerCriteria.map((c) => (
-              <div
-                key={c.criterion}
-                className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 text-xs dark:border-zinc-800/80 dark:bg-zinc-800/30"
-              >
-                <div className="flex items-center justify-between font-medium">
-                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                    {c.criterion.replace(/_/g, " ").toUpperCase()}
-                  </span>
-                  <span className="font-mono text-zinc-700 dark:text-zinc-300">
-                    {c.status === "scored" ? `${c.score} / ${c.maxPoints}` : c.status.toUpperCase()}
-                  </span>
-                </div>
-
-                {c.evidence.length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {c.evidence.map((ev, i) => (
-                      <p key={i} className="text-[11px] text-zinc-600 dark:text-zinc-400 pl-2 border-l-2 border-emerald-500">
-                        {ev.explanation}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {c.missingInformation.length > 0 && (
-                  <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-400 pl-2 border-l-2 border-amber-400">
-                    {c.missingInformation.join(", ")}
-                  </div>
-                )}
-
-                {c.invalidReason && (
-                  <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 pl-2 border-l-2 border-rose-500 font-semibold">
-                    {c.invalidReason}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Dimension 2: Sales Score */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
-            <div>
-              <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                2. {t.leads.detail.salesScoreHeading}
-              </h2>
-              <span className="text-[11px] text-zinc-400 font-mono">
-                {t.leads.detail.salesScoreSubtitle}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 text-right">
-              <div>
-                <span className="text-xl font-bold text-zinc-900 dark:text-zinc-50 font-mono">
-                  {lead.salesAssessment.normalizedScore !== null
-                    ? `${lead.salesAssessment.normalizedScore}`
-                    : "—"}
-                </span>
-                <span className="text-xs text-zinc-400 block font-mono">/ 100</span>
-              </div>
-              <ScorePill
-                score={lead.salesAssessment.normalizedScore}
-                completeness={lead.salesAssessment.completeness}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 py-3 text-center border-b border-zinc-100 dark:border-zinc-800 text-xs">
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.realPoints}</span>
-              <span className="font-semibold font-mono">{lead.salesAssessment.rawPoints}</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.dataCompleteness}</span>
-              <span className="font-semibold font-mono">{lead.salesAssessment.completeness}%</span>
-            </div>
-            <div>
-              <span className="text-zinc-400 block text-[10px]">{t.leads.detail.evidenceConfidence}</span>
-              <span className="font-semibold font-mono">
-                {lead.salesAssessment.confidence !== null
-                  ? `${(lead.salesAssessment.confidence * 100).toFixed(0)}%`
-                  : "—"}
-              </span>
-            </div>
-          </div>
-
-          {/* Criteria breakdown */}
-          <div className="mt-4 space-y-3">
-            <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              {t.leads.detail.criteriaBreakdownTitle}:
-            </p>
-
-            {salesCriteria.map((c) => (
-              <div
-                key={c.criterion}
-                className="rounded-lg border border-zinc-100 bg-zinc-50/50 p-2.5 text-xs dark:border-zinc-800/80 dark:bg-zinc-800/30"
-              >
-                <div className="flex items-center justify-between font-medium">
-                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                    {c.criterion.replace(/_/g, " ").toUpperCase()}
-                  </span>
-                  <span className="font-mono text-zinc-700 dark:text-zinc-300">
-                    {c.status === "scored" ? `${c.score} / ${c.maxPoints}` : c.status.toUpperCase()}
-                  </span>
-                </div>
-
-                {c.evidence.length > 0 && (
-                  <div className="mt-1.5 space-y-1">
-                    {c.evidence.map((ev, i) => (
-                      <p key={i} className="text-[11px] text-zinc-600 dark:text-zinc-400 pl-2 border-l-2 border-indigo-500">
-                        {ev.explanation}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {c.missingInformation.length > 0 && (
-                  <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-400 pl-2 border-l-2 border-amber-400">
-                    {c.missingInformation.join(", ")}
-                  </div>
-                )}
-
-                {c.invalidReason && (
-                  <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400 pl-2 border-l-2 border-rose-500 font-semibold">
-                    {c.invalidReason}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* WhatsApp Message Timeline */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
+      {/* Uploaded or previously recorded conversation messages */}
+      {lead.messages.length > 0 && <div className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
         <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-1">
           {t.leads.detail.conversationTimelineTitle}
         </h2>
@@ -479,7 +418,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
                   className={`flex flex-col max-w-xl rounded-xl p-3.5 text-xs transition-colors ${
                     isInbound
                       ? "mr-auto bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100 border border-zinc-200/80 dark:border-zinc-700/60"
-                      : "ml-auto bg-indigo-600 text-white shadow-xs"
+                      : "ml-auto bg-amber-500 text-zinc-950 font-medium shadow-xs"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-4 mb-1 text-[10px] opacity-80">
@@ -506,10 +445,10 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
             })}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Attribution Audit History & Corrections */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
+      <div className="surface-card rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 transition-colors">
         <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-1">
           {t.leads.detail.auditTrailTitle}
         </h2>
@@ -613,7 +552,7 @@ export function LeadDetailClient({ leadId }: { leadId: string }) {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-indigo-500 cursor-pointer disabled:opacity-50"
+              className="btn-solar inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold cursor-pointer disabled:opacity-50"
             >
               {isSubmitting && (
                 <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">

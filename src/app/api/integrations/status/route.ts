@@ -19,9 +19,7 @@ export async function GET() {
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
-
-    if (isProduction && (authError || !user)) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -39,7 +37,7 @@ export async function GET() {
       : { data: null };
 
     const orgId = profile?.organization_id || null;
-    if (!orgId && isProduction) {
+    if (!orgId) {
       return NextResponse.json(
         { success: false, error: "Organisasi tidak ditemukan", code: "FORBIDDEN" },
         { status: 403 }

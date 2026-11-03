@@ -31,7 +31,7 @@ export function LanguageToggle({ className = "" }: { className?: string }) {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="flex h-8 items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 transition-colors"
+        className="flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium border border-zinc-200/80 bg-white/70 text-zinc-600 hover:bg-white hover:text-zinc-900 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400 dark:hover:bg-white/[0.08] dark:hover:text-zinc-100 transition-colors cursor-pointer"
         aria-label={`${dict.common.language}: ${locale.toUpperCase()}`}
         aria-expanded={isOpen}
       >
@@ -52,7 +52,7 @@ export function LanguageToggle({ className = "" }: { className?: string }) {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 z-50 mt-1.5 w-44 origin-top-right rounded-lg border border-zinc-200 bg-white p-1 shadow-md ring-1 ring-black/5 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="glass-popover absolute right-0 z-50 mt-2 w-44 origin-top-right rounded-xl p-1 focus:outline-none">
           {languages.map((lang) => {
             const isSelected = locale === lang.code;
             return (
@@ -65,15 +65,15 @@ export function LanguageToggle({ className = "" }: { className?: string }) {
                   // Re-render server components (metadata, JSON-LD, server copy) in the new locale.
                   router.refresh();
                 }}
-                className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-xs transition-colors cursor-pointer ${
                   isSelected
-                    ? "bg-zinc-100 font-semibold text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                    : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-200"
+                    ? "bg-indigo-500/10 font-semibold text-zinc-900 dark:bg-indigo-400/10 dark:text-zinc-100"
+                    : "text-zinc-600 hover:bg-zinc-900/[0.05] hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
                 }`}
               >
                 <span>{lang.label}</span>
                 {isSelected && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-zinc-900 dark:bg-zinc-100" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 dark:bg-indigo-400" />
                 )}
               </button>
             );

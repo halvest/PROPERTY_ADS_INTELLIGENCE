@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getAdsIntelligenceData } from "@/lib/ads/service";
-import { DEV_ORGANIZATION_ID } from "@/lib/auth/tenant";
 
 /**
  * GET /api/ads
@@ -11,7 +10,6 @@ import { DEV_ORGANIZATION_ID } from "@/lib/auth/tenant";
 export async function GET(request: NextRequest) {
   try {
     const supabase = await createClient();
-    const isProduction = process.env.NODE_ENV === "production";
 
     // 1. Authoritative User Authentication & Tenant Resolution
     const {
@@ -20,6 +18,7 @@ export async function GET(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     let organizationId: string | null = null;
+    let userRole: string | null = null;
 
     if (user && !authError) {
       const { data: profile } = await supabase
@@ -30,18 +29,15 @@ export async function GET(request: NextRequest) {
 
       if (profile?.organization_id) {
         organizationId = profile.organization_id;
+        userRole = profile.role;
       }
     }
 
-    // In development mode, fallback to active tenant if unauthenticated
     if (!organizationId) {
-      if (isProduction) {
-        return NextResponse.json(
-          { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
-          { status: 401 }
-        );
-      }
-      organizationId = DEV_ORGANIZATION_ID;
+      return NextResponse.json(
+        { success: false, error: "Sesi tidak terautentikasi atau organisasi tidak ditemukan", code: "UNAUTHORIZED" },
+        { status: 401 }
+      );
     }
 
     // Query parameters (defaults to 30d for active operational view)
@@ -59,14 +55,21 @@ export async function GET(request: NextRequest) {
       campaignStatusFilter,
       deliveryStatusFilter,
       objectiveFilter,
+      adAccountId: searchParams.get("adAccountId"),
     });
 
     return NextResponse.json({
       success: true,
-      data,
+      data: { ...data, canSync: ["owner", "admin", "supervisor"].includes(userRole || "") },
     });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : "Kesalahan server internal";
+    if (errorMsg.startsWith("FORBIDDEN_AD_ACCOUNT")) {
+      return NextResponse.json(
+        { success: false, error: "Akun iklan tidak termasuk milik organisasi ini.", code: "FORBIDDEN" },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: `Gagal memuat data Ads Intelligence: ${errorMsg}` },
       { status: 500 }

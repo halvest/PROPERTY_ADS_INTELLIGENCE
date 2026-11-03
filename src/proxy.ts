@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/ads", "/leads", "/reviews", "/settings"];
+const PROTECTED_PREFIXES = ["/dashboard", "/ads", "/leads", "/studio", "/reviews", "/enhancer", "/settings"];
 const AUTH_ROUTES = ["/login", "/register"];
 
 export async function proxy(request: NextRequest) {
@@ -10,13 +10,6 @@ export async function proxy(request: NextRequest) {
 
   const isProtectedRoute = PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   const isAuthRoute = AUTH_ROUTES.some((route) => pathname.startsWith(route));
-  // Demo access is a server deployment decision (DATA_MODE=demo), never a
-  // client-controlled cookie alone. The cookie only opts in when the server
-  // has explicitly been deployed in demo mode.
-  const isDemoMode =
-    process.env.DATA_MODE === "demo" &&
-    request.cookies.get("demo_mode")?.value === "true";
-
   // Helper to preserve Set-Cookie headers on redirects to prevent cookie drops or accumulation
   const createRedirectWithCookies = (url: URL | string): NextResponse => {
     const redirectResponse = NextResponse.redirect(url);
@@ -28,7 +21,7 @@ export async function proxy(request: NextRequest) {
 
   // 1. Protected route enforcement
   if (isProtectedRoute) {
-    if (!user && !isDemoMode) {
+    if (!user) {
       const loginUrl = new URL("/login", request.url);
       loginUrl.searchParams.set("redirect", pathname);
       return createRedirectWithCookies(loginUrl);
@@ -54,6 +47,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|api/webhook|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

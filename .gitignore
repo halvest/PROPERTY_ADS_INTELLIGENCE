@@ -41,6 +41,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# documentation
+# local documentation, migrations, and tests
 /docs/
+/supabase/migrations/
+/tests/
+
+# Supabase CLI local metadata
+/supabase/.temp/
 

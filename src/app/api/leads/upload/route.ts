@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import {
   parseCrmLeadsFile,
   importCrmLeadsToDatabase,
+  annotateCrmImportPreview,
+  type CrmColumnMap,
 } from "@/lib/crm/crm-sheets-service";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
 
@@ -62,8 +64,7 @@ export async function POST(request: NextRequest) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    const isProduction = process.env.NODE_ENV === "production";
-    if ((authError || !user) && isProduction) {
+    if (authError || !user) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
         { status: 401 }
@@ -78,8 +79,11 @@ export async function POST(request: NextRequest) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     const { searchParams } = request.nextUrl;
     const validateOnly = searchParams.get("validateOnly") === "true";
@@ -89,6 +93,8 @@ export async function POST(request: NextRequest) {
 
     let fileBuffer: Buffer | null = null;
     let fileName = "upload.xlsx";
+    let columnMap: CrmColumnMap | undefined;
+    let allowUnattributed = false;
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await new Response(new Uint8Array(requestBody), {
@@ -112,6 +118,9 @@ export async function POST(request: NextRequest) {
       const arrayBuffer = await file.arrayBuffer();
       fileBuffer = Buffer.from(arrayBuffer);
       fileName = file.name || "upload.xlsx";
+      const rawMap = formData.get("columnMap");
+      if (typeof rawMap === "string" && rawMap.trim()) columnMap = JSON.parse(rawMap) as CrmColumnMap;
+      allowUnattributed = formData.get("allowUnattributed") === "true";
     } else {
       const body: unknown = JSON.parse(requestBody.toString("utf8"));
       if (!body || typeof body !== "object" || !("base64Content" in body)) {
@@ -120,10 +129,12 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      const uploadBody = body as { base64Content?: unknown; fileName?: unknown };
+      const uploadBody = body as { base64Content?: unknown; fileName?: unknown; columnMap?: CrmColumnMap };
       if (typeof uploadBody.base64Content === "string") {
         fileBuffer = Buffer.from(uploadBody.base64Content, "base64");
         fileName = typeof uploadBody.fileName === "string" ? uploadBody.fileName : "upload.xlsx";
+        columnMap = uploadBody.columnMap;
+        allowUnattributed = (body as { allowUnattributed?: boolean }).allowUnattributed === true;
       } else {
         return NextResponse.json(
           { success: false, error: "Payload tidak valid. Sertakan file multipart atau base64Content." },
@@ -147,7 +158,11 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. Parse and validate file content
-    const parsedSummary = parseCrmLeadsFile(fileBuffer);
+    const parsedSummary = await annotateCrmImportPreview(
+      supabase,
+      organizationId,
+      parseCrmLeadsFile(fileBuffer, columnMap)
+    );
 
     if (parsedSummary.totalRows === 0) {
       return NextResponse.json(
@@ -190,6 +205,7 @@ export async function POST(request: NextRequest) {
       organizationId,
       leads: validLeads,
       supabase,
+      allowUnattributed,
     });
 
     return NextResponse.json({

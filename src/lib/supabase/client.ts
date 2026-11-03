@@ -6,16 +6,11 @@ export function createClient() {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    // Provide a warning in development instead of throwing to prevent app crash when in pure demo mode
-    if (process.env.NODE_ENV === "development") {
-      console.warn(
-        "[Supabase Client] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Running in unauthenticated demo fallback mode."
-      );
-    }
+    throw new Error("Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.");
   }
 
   return createBrowserClient<Database>(
-    supabaseUrl || "https://placeholder-project.supabase.co",
-    supabaseAnonKey || "placeholder-anon-key"
+    supabaseUrl,
+    supabaseAnonKey
   );
 }

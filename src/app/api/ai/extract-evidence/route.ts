@@ -8,6 +8,7 @@ import { AIProviderError } from "@/lib/ai/providers/types";
 
 import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
+import { finishAiAnalysis, validateIdempotencyKey, reserveAiAnalysis } from "@/lib/ai/usage-quota";
 
 const RequestPayloadSchema = z.object({
   conversationId: z.string().uuid().optional(),
@@ -34,10 +35,10 @@ const RequestPayloadSchema = z.object({
       location: z.string().optional(),
     })
     .optional(),
-  allowDemoFallback: z.boolean().optional(),
 });
 
 export async function POST(request: Request) {
+  let quotaReservation: { userId: string; reservationId: string } | null = null;
   try {
     const rl = checkRateLimit(rateLimitKey(request, "ai-extract"), 20, 60_000);
     if (!rl.allowed) {
@@ -68,11 +69,7 @@ export async function POST(request: Request) {
       error: authErr,
     } = await supabase.auth.getUser();
 
-    // Demo fallback is a server deployment mode, never a client-controlled
-    // auth bypass. Production always requires an authenticated session.
-    const isDemoMode = process.env.DATA_MODE === "demo";
-
-    if ((authErr || !user) && process.env.NODE_ENV === "production") {
+    if (authErr || !user) {
       return NextResponse.json(
         { status: "error", code: "UNAUTHORIZED", message: "Sesi tidak terautentikasi." },
         { status: 401 }
@@ -87,8 +84,11 @@ export async function POST(request: Request) {
           .maybeSingle()
       : { data: null };
 
-    const organizationId =
-      profile?.organization_id || "00000000-0000-0000-0000-000000000001";
+    if (!profile?.organization_id) {
+      return NextResponse.json({ success: false, error: "Organisasi tidak ditemukan untuk pengguna ini.", code: "FORBIDDEN" }, { status: 403 });
+    }
+
+    const organizationId = profile.organization_id;
 
     let textToAnalyze = parseResult.data.conversationText || "";
     const conversationId = parseResult.data.conversationId;
@@ -144,14 +144,32 @@ export async function POST(request: Request) {
     const isConfigured = isMetaModelApiConfigured();
     const config = getMetaConfig({ requireApiKey: false });
 
-    // Demo fallback only in server demo mode or non-production development.
-    const allowDemoFallback =
-      isDemoMode || process.env.NODE_ENV !== "production" ? !isConfigured : false;
-    if (!isConfigured && !allowDemoFallback) {
+    if (!isConfigured) {
       return NextResponse.json(
         { status: "error", code: "MISSING_CONFIGURATION", message: "Model AI belum dikonfigurasi pada server." },
         { status: 503 }
       );
+    }
+
+    const idempotencyKey = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
+    if (!idempotencyKey) {
+      return NextResponse.json({ status: "error", code: "IDEMPOTENCY_KEY_REQUIRED", message: "Header Idempotency-Key wajib berupa UUID yang valid agar retry aman." }, { status: 400 });
+    }
+    const reservation = await reserveAiAnalysis(user.id, idempotencyKey);
+    if (!reservation.ok) {
+      if (reservation.unavailable) {
+        return NextResponse.json({ status: "error", code: "QUOTA_UNAVAILABLE", message: "Kuota analisis sementara tidak tersedia. Coba lagi sebentar." }, { status: 503 });
+      }
+      const limitReached = reservation.status === "limit_reached";
+      return NextResponse.json({
+        status: "error",
+        code: limitReached ? "AI_QUOTA_EXHAUSTED" : "AI_ANALYSIS_DUPLICATE",
+        message: limitReached ? "Kuota analisis AI untuk periode ini telah habis." : "Permintaan analisis ini sedang diproses atau sudah selesai.",
+        resetAt: reservation.resetAt,
+      }, { status: limitReached ? 429 : 409 });
+    }
+    if (reservation.reservationId) {
+      quotaReservation = { userId: user.id, reservationId: reservation.reservationId };
     }
 
     const evidence = await extractLeadEvidence(
@@ -160,9 +178,7 @@ export async function POST(request: Request) {
         leadContext,
         propertyContext,
       },
-      {
-        allowDemoFallback,
-      }
+      {}
     );
 
     // Feed extracted facts into deterministic Buyer Score engine
@@ -223,9 +239,13 @@ export async function POST(request: Request) {
       }
     }
 
+    if (reservation.reservationId && !(await finishAiAnalysis(user.id, reservation.reservationId, true))) {
+      return NextResponse.json({ status: "error", code: "QUOTA_COMMIT_FAILED", message: "Analisis selesai tetapi pencatatan kuota belum terkonfirmasi." }, { status: 503 });
+    }
+    quotaReservation = null;
     return NextResponse.json({
       status: "success",
-      isLiveMetaApi: isConfigured && evidence.model !== "muse-spark-demo-fallback",
+      isLiveMetaApi: isConfigured,
       provider: evidence.provider,
       model: evidence.model,
       maskedApiKey: maskApiKey(config.apiKey),
@@ -235,6 +255,9 @@ export async function POST(request: Request) {
       persistedAssessmentId,
     });
   } catch (error) {
+    if (quotaReservation) {
+      await finishAiAnalysis(quotaReservation.userId, quotaReservation.reservationId, false, "analysis_failed");
+    }
     if (error instanceof AIProviderError) {
       return NextResponse.json(
         {

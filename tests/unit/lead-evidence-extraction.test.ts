@@ -247,20 +247,12 @@ describe("extractLeadEvidence with Meta Model API (Muse Spark)", () => {
     expect(result.confidenceScore).toBe(0.3);
   });
 
-  it("supports demo fallback when allowDemoFallback is true and key is unset", async () => {
+  it("fails explicitly when the model provider key is unset instead of fabricating evidence", async () => {
     delete process.env.MODEL_API_KEY;
     delete process.env.META_MODEL_API_KEY;
 
-    const result = await extractLeadEvidence(
-      {
-        conversationText: "Halo, budget kami 1,5 miliar dan kami bisa survey akhir pekan ini di BSD.",
-      },
-      { allowDemoFallback: true }
-    );
-
-    expect(result.model).toBe("muse-spark-demo-fallback");
-    expect(result.budget?.amount).toBe(1500000000);
-    expect(result.readinessForNextStep).toBe("ready_for_survey");
-    expect(result.uncertaintyReason).toContain("mode demo lokal");
+    await expect(extractLeadEvidence({
+      conversationText: "Halo, budget kami 1,5 miliar dan kami bisa survey akhir pekan ini di BSD.",
+    })).rejects.toMatchObject({ code: "MISSING_CONFIGURATION" });
   });
 });

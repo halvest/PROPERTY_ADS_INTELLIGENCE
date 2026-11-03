@@ -23,19 +23,19 @@ export function KPICard({
 }: KPICardProps) {
   return (
     <div
-      className={`rounded-xl border p-4.5 transition-colors shadow-2xs ${
+      className={`surface-card relative isolate overflow-hidden rounded-xl border p-4.5 transition-colors ${
         highlight
-          ? "border-indigo-500/30 bg-indigo-50/40 dark:border-indigo-500/20 dark:bg-indigo-950/20"
-          : "border-zinc-200/90 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+          ? "border-indigo-500/30 bg-white dark:border-indigo-400/25 dark:bg-zinc-900 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:bg-[radial-gradient(ellipse_70%_90%_at_100%_0%,var(--solar-1),transparent_70%)]"
+          : "border-zinc-200/90 bg-white hover:border-zinc-300/90 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700"
       }`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+      <div className="relative flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500 dark:text-zinc-400">
           {title}
         </span>
         {formulaLabel && (
           <span
-            className="rounded px-1.5 py-0.5 font-mono text-[10px] font-medium bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+            className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium bg-zinc-100 text-zinc-600 ring-1 ring-inset ring-zinc-200/80 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700/60"
             title={`Formula: ${formulaLabel}`}
           >
             {formulaLabel}
@@ -43,7 +43,7 @@ export function KPICard({
         )}
       </div>
 
-      <div className="mt-2.5 flex items-baseline gap-2">
+      <div className="relative mt-2.5 flex items-baseline gap-2">
         {value === "..." ? (
           <span className="inline-block h-7 w-28 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
         ) : (

@@ -22,19 +22,31 @@ describe("Meta Marketing API - Data Mapper & Normalization", () => {
       expect(parseSpend("4500000.00")).toBe(4500000);
       expect(parseSpend("1250000.50")).toBe(1250000.5);
       expect(parseSpend(350000)).toBe(350000);
-      expect(parseSpend("invalid")).toBe(0);
-      expect(parseSpend("-50000")).toBe(0);
-      expect(parseSpend(null)).toBe(0);
-      expect(parseSpend(undefined)).toBe(0);
+    });
+
+    it("distinguishes explicit zero from not-available (DI-04)", () => {
+      // Explicit zero reported by Meta stays zero.
+      expect(parseSpend("0")).toBe(0);
+      expect(parseSpend("0.00")).toBe(0);
+      expect(parseSpend(0)).toBe(0);
+      expect(parseCount("0")).toBe(0);
+      expect(parseCount(0)).toBe(0);
+      // Missing, empty, non-numeric, or negative values are NOT available.
+      expect(parseSpend(null)).toBeNull();
+      expect(parseSpend(undefined)).toBeNull();
+      expect(parseSpend("")).toBeNull();
+      expect(parseSpend("invalid")).toBeNull();
+      expect(parseSpend("-50000")).toBeNull();
+      expect(parseCount(null)).toBeNull();
+      expect(parseCount(undefined)).toBeNull();
+      expect(parseCount("N/A")).toBeNull();
+      expect(parseCount("-100")).toBeNull();
     });
 
     it("safely converts metric counts to non-negative integers", () => {
       expect(parseCount("48200")).toBe(48200);
       expect(parseCount(1250)).toBe(1250);
       expect(parseCount("1250.9")).toBe(1250);
-      expect(parseCount("N/A")).toBe(0);
-      expect(parseCount("-100")).toBe(0);
-      expect(parseCount(null)).toBe(0);
     });
   });
 
@@ -133,6 +145,51 @@ describe("Meta Marketing API - Data Mapper & Normalization", () => {
       expect(normalized.dateStop).toBe("2026-10-26");
       expect(normalized.level).toBe("ad");
       expect(normalized.source).toBe("meta");
+    });
+
+    it("keeps optional metrics null when Meta does not provide them (DI-04)", () => {
+      const rawInsight: MetaInsightResponse = {
+        ad_id: "ad_202",
+        spend: "0",
+        impressions: "0",
+        clicks: "0",
+        date_start: "2026-10-01",
+        date_stop: "2026-10-01",
+      };
+      const normalized = mapMetaInsightToInternal(rawInsight, {
+        organizationId: orgId,
+        adId: "ad_internal_uuid",
+        currency: "IDR",
+        source: "meta",
+      });
+      // Explicit zeros stay zero...
+      expect(normalized.spend).toBe(0);
+      expect(normalized.impressions).toBe(0);
+      expect(normalized.clicks).toBe(0);
+      // ...while absent optional metrics stay not-available.
+      expect(normalized.reach).toBeNull();
+      expect(normalized.linkClicks).toBeNull();
+      expect(normalized.conversions).toBeNull();
+    });
+
+    it("reports conversions as 0 when Meta returns actions without conversion actions", () => {
+      const rawInsight: MetaInsightResponse = {
+        ad_id: "ad_202",
+        spend: "1000",
+        impressions: "10",
+        clicks: "1",
+        actions: [{ action_type: "link_click", value: "1" }],
+        date_start: "2026-10-01",
+        date_stop: "2026-10-01",
+      };
+      const normalized = mapMetaInsightToInternal(rawInsight, {
+        organizationId: orgId,
+        adId: "ad_internal_uuid",
+        currency: "IDR",
+        source: "meta",
+      });
+      expect(normalized.conversions).toBe(0);
+      expect(normalized.linkClicks).toBe(1);
     });
   });
 });

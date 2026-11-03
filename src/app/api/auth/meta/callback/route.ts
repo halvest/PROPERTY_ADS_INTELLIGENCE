@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { verifyOAuthCsrfState, encryptAccessToken } from "@/lib/whatsapp/crypto";
+import { verifyOAuthCsrfState, encryptAccessToken } from "@/lib/security/credential-crypto";
 import { persistMetaUserToken } from "@/lib/marketing/meta/token-storage";
 
 interface MetaTokenResponse {
@@ -91,8 +91,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(settingsUrl);
     }
 
-    // Role check: Only owner, admin, or supervisor can connect Meta Ads
-    const allowedRoles = ["owner", "admin", "supervisor"];
+    // Role check: aligned with /authorize — only owner or admin connect Meta
+    const allowedRoles = ["owner", "admin"];
     if (!profile.role || !allowedRoles.includes(profile.role)) {
       settingsUrl.searchParams.set("error", "forbidden_role");
       settingsUrl.searchParams.set(
@@ -102,7 +102,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(settingsUrl);
     }
 
-    // 3. Verify anti-CSRF state token bound to (orgId, userId)
+    // 3a. Single-use state: must match the HttpOnly cookie set by /authorize
+    const stateCookie = request.cookies.get("meta_oauth_state")?.value;
+    if (!stateCookie || stateCookie !== state) {
+      settingsUrl.searchParams.set("error", "invalid_csrf_state");
+      settingsUrl.searchParams.set(
+        "details",
+        encodeURIComponent("State OAuth tidak cocok dengan sesi yang memulai proses. Mulai ulang dari Hubungkan Meta.")
+      );
+      const res = NextResponse.redirect(settingsUrl);
+      res.cookies.set("meta_oauth_state", "", { path: "/api/auth/meta", maxAge: 0 });
+      return res;
+    }
+
+    // 3b. Verify anti-CSRF state token bound to (orgId, userId) of the CURRENT session
     const stateVerification = verifyOAuthCsrfState(state, {
       organizationId: profile.organization_id,
       userId: user.id,
@@ -111,13 +124,15 @@ export async function GET(request: NextRequest) {
     if (!stateVerification.valid) {
       settingsUrl.searchParams.set("error", "invalid_csrf_state");
       settingsUrl.searchParams.set("details", encodeURIComponent(stateVerification.reason || "State token invalid"));
-      return NextResponse.redirect(settingsUrl);
+      const res = NextResponse.redirect(settingsUrl);
+      res.cookies.set("meta_oauth_state", "", { path: "/api/auth/meta", maxAge: 0 });
+      return res;
     }
 
     // 4. Retrieve server configuration for token exchange
     const appId = process.env.META_APP_ID?.trim();
     const appSecret = process.env.META_APP_SECRET?.trim();
-    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v21.0";
+    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v26.0";
 
     if (!appId || !appSecret) {
       settingsUrl.searchParams.set("error", "meta_app_credentials_missing");
@@ -174,22 +189,49 @@ export async function GET(request: NextRequest) {
       // Continue with short-lived token if long-lived exchange encounters network glitch
     }
 
-    // 7. Inspect token to discover granted scopes and verify validity
-    let grantedScopes: string[] = ["ads_read", "pages_read_engagement", "pages_show_list"];
+    // 7. Inspect token: validity, app binding, and granted scopes are verified
+    // with debug_token. Unverifiable or under-permissioned tokens are NOT stored.
+    let grantedScopes: string[] = [];
     try {
       const debugUrl = new URL(`https://graph.facebook.com/${apiVersion}/debug_token`);
       debugUrl.searchParams.set("input_token", activeToken);
       debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
 
       const debugRes = await fetch(debugUrl.toString(), { method: "GET" });
-      if (debugRes.ok) {
-        const debugData: MetaDebugTokenResponse = await debugRes.json();
-        if (debugData.data?.scopes && Array.isArray(debugData.data.scopes)) {
-          grantedScopes = debugData.data.scopes;
-        }
+      const debugData: MetaDebugTokenResponse = debugRes.ok
+        ? await debugRes.json()
+        : {};
+      const d = debugData.data;
+      if (!d?.is_valid || (d.app_id && d.app_id !== appId)) {
+        settingsUrl.searchParams.set("error", "token_validation_failed");
+        settingsUrl.searchParams.set(
+          "details",
+          encodeURIComponent("Token Meta tidak valid atau bukan untuk aplikasi ini. Silakan hubungkan ulang.")
+        );
+        return NextResponse.redirect(settingsUrl);
+      }
+      grantedScopes = Array.isArray(d.scopes) ? d.scopes : [];
+      if (d.expires_at && d.expires_at > 0) {
+        expiresInSeconds = Math.max(0, d.expires_at - Math.floor(Date.now() / 1000));
       }
     } catch {
-      // Non-fatal inspection error
+      settingsUrl.searchParams.set("error", "token_validation_failed");
+      settingsUrl.searchParams.set(
+        "details",
+        encodeURIComponent("Validasi token Meta tidak dapat dilakukan. Silakan coba lagi.")
+      );
+      return NextResponse.redirect(settingsUrl);
+    }
+
+    if (!grantedScopes.includes("ads_read")) {
+      settingsUrl.searchParams.set("error", "permission_insufficient");
+      settingsUrl.searchParams.set(
+        "details",
+        encodeURIComponent(
+          "Izin ads_read tidak diberikan. Hubungkan ulang akun Meta dan setujui izin bacaan iklan agar data dapat dibaca."
+        )
+      );
+      return NextResponse.redirect(settingsUrl);
     }
 
     // 8. Encrypt access token using AES-256-GCM
@@ -239,7 +281,9 @@ export async function GET(request: NextRequest) {
     );
 
     settingsUrl.searchParams.set("meta_connected", "true");
-    return NextResponse.redirect(settingsUrl);
+    const successRes = NextResponse.redirect(settingsUrl);
+    successRes.cookies.set("meta_oauth_state", "", { path: "/api/auth/meta", maxAge: 0 });
+    return successRes;
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : "Internal callback error";
     settingsUrl.searchParams.set("error", "callback_exception");

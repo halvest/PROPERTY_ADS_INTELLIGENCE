@@ -6,7 +6,7 @@ import { safeInternalRedirect } from "@/lib/security/redirect";
 
 /**
  * GET /auth/callback
- * Handles server-side OAuth code exchange for Supabase authentication (e.g. Google OAuth).
+ * Handles server-side Supabase Auth code exchange, including email recovery links.
  * Exchanges the authorization code for a session and idempotently provisions the user workspace.
  */
 export async function GET(request: NextRequest) {
@@ -18,6 +18,9 @@ export async function GET(request: NextRequest) {
 
   // Handle OAuth cancellation or provider-level errors
   if (error || errorDescription) {
+    if (redirectTarget === "/reset-password") {
+      return NextResponse.redirect(new URL("/reset-password", request.url));
+    }
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("error", errorDescription || error || "oauth_failed");
     return NextResponse.redirect(loginUrl);
@@ -30,6 +33,9 @@ export async function GET(request: NextRequest) {
 
       if (exchangeError) {
         console.error("[Auth Callback] Code exchange error:", exchangeError.message);
+        if (redirectTarget === "/reset-password") {
+          return NextResponse.redirect(new URL("/reset-password", request.url));
+        }
         const loginUrl = new URL("/login", request.url);
         loginUrl.searchParams.set("error", exchangeError.message);
         return NextResponse.redirect(loginUrl);
@@ -78,6 +84,9 @@ export async function GET(request: NextRequest) {
       return redirectResponse;
     } catch (err) {
       console.error("[Auth Callback] Unexpected error:", err);
+      if (redirectTarget === "/reset-password") {
+        return NextResponse.redirect(new URL("/reset-password", request.url));
+      }
       const loginUrl = new URL("/login", request.url);
       loginUrl.searchParams.set("error", "oauth_unexpected_error");
       return NextResponse.redirect(loginUrl);

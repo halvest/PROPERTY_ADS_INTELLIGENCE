@@ -11,8 +11,6 @@ export async function POST(request?: NextRequest) {
       message: "Berhasil keluar dari sesi.",
     });
 
-    // Clear demo_mode cookie if set
-    response.cookies.delete("demo_mode");
 
     // Proactively clear all Supabase auth and chunk cookies to prevent cookie accumulation
     const allCookies = request?.cookies ? request.cookies.getAll() : [];

@@ -192,7 +192,7 @@ function VerifyOtpContent() {
           <label htmlFor="token" className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">{dict.auth.otpCodeLabel}</label>
           <input id="token" name="token" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={8} required value={token} onChange={(e) => setToken(e.target.value)} placeholder={dict.auth.otpCodePlaceholder} className="block min-h-14 w-full rounded-xl border border-zinc-200 bg-white px-4 text-center font-mono text-xl tracking-[0.35em] text-zinc-950 outline-none transition placeholder:tracking-normal placeholder:text-sm focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 dark:border-white/10 dark:bg-white/[0.04] dark:text-white" />
         </div>
-        <button type="submit" disabled={isLoading} className="flex min-h-12 w-full items-center justify-center rounded-xl bg-[#20263a] px-4 text-sm font-semibold text-white transition hover:bg-[#2c3450] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-indigo-500 dark:hover:bg-indigo-400">
+        <button type="submit" disabled={isLoading} className="flex min-h-12 w-full items-center justify-center rounded-xl btn-solar px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-55 cursor-pointer">
           {isLoading ? dict.common.loading : dict.auth.verifyButton}
         </button>
       </form>

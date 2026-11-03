@@ -6,7 +6,7 @@
 export type AttributionStatus = "verified" | "inferred" | "unknown";
 
 export interface OfficialReferralEvidence {
-  referralSource: "ad_click" | "cta_button" | "webhook_payload";
+  referralSource: "ad_click" | "cta_button";
   providerAdId?: string;
   providerCampaignId?: string;
   headline?: string;

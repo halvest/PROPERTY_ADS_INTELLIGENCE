@@ -559,7 +559,27 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     const actionCounts: Record<string, number> = {};
     const actionCostWeighted: Record<string, number> = {};
     const actionCostWeights: Record<string, number> = {};
+    const adDailyMap = new Map<
+      string,
+      { date: string; spend: number; impressions: number; allClicks: number; linkClicks: number; results: number }
+    >();
     for (const row of rowsByAd.get(ad.id) || []) {
+      if (row.date_start) {
+        const dayEntry = adDailyMap.get(row.date_start) || {
+          date: row.date_start,
+          spend: 0,
+          impressions: 0,
+          allClicks: 0,
+          linkClicks: 0,
+          results: 0,
+        };
+        dayEntry.spend += Number(row.spend) || 0;
+        dayEntry.impressions += Number(row.impressions) || 0;
+        dayEntry.allClicks += Number(row.clicks) || 0;
+        dayEntry.linkClicks += Number(row.link_clicks) || 0;
+        dayEntry.results += Number(row.conversions) || 0;
+        adDailyMap.set(row.date_start, dayEntry);
+      }
       const counts = row.action_breakdown && typeof row.action_breakdown === "object" ? row.action_breakdown as Record<string, unknown> : {};
       const costs = (row as typeof row & { cost_per_action_type?: unknown }).cost_per_action_type;
       const costMap = costs && typeof costs === "object" ? costs as Record<string, unknown> : {};
@@ -574,6 +594,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
         }
       }
     }
+    const dailySeries = Array.from(adDailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
     const primaryType = primaryActionType(actionCounts, cmp?.objective);
     const detailTypes = primaryType
       ? [primaryType]
@@ -637,6 +658,7 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
       createdAt: ad.created_at,
       updatedAt: ad.updated_at,
       hasInsights: rowsByAd.has(ad.id),
+      dailySeries,
     };
   });
 

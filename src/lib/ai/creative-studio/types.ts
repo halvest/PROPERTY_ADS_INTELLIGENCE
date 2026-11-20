@@ -677,3 +677,80 @@ export const CreativeBriefSchema = z.object({
     fileName: z.string().optional(),
   })).optional().default([]),
 });
+
+// Conversational Studio Workspace Models
+export interface StudioConversation {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  project_id?: string | null;
+  title: string;
+  is_pinned: boolean;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StudioMessageAttachment {
+  type: "image" | "file";
+  url: string;
+  name?: string;
+  size?: number;
+}
+
+export interface StudioMessage {
+  id: string;
+  conversation_id: string;
+  organization_id: string;
+  user_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  attachments: (string | StudioMessageAttachment)[];
+  generation_id?: string | null;
+  generation?: StudioGenerationItem | null;
+  created_at: string;
+}
+
+export type StudioMemoryCategory =
+  | "user_preference"
+  | "project_memory"
+  | "brand_identity"
+  | "style_guide"
+  | "pinned_context";
+
+export interface StudioMemory {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  project_id?: string | null;
+  category: StudioMemoryCategory;
+  key: string;
+  value: string;
+  confidence: number;
+  source_message_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StudioGenerationItem {
+  id: string;
+  conversation_id?: string | null;
+  parent_generation_id?: string | null;
+  project_id?: string | null;
+  aspect_ratio: string;
+  style_preset?: string;
+  width: number;
+  height: number;
+  raw_image_url: string;
+  final_composed_url: string;
+  prompt_used: string;
+  revision_instruction?: string | null;
+  model_used?: string;
+  provider?: string;
+  status: "generating" | "completed" | "failed";
+  error_message?: string | null;
+  is_fallback?: boolean;
+  reasoning?: string;
+  created_at: string;
+}
+

@@ -33,8 +33,10 @@ describe("CRM Leads Redesign Invariants & Quality Verification", () => {
     expect(enDictionary.leads.kpi.newLeads).toBeTruthy();
     expect(idDictionary.leads.kpi.qualifiedLeads).toBeTruthy();
     expect(enDictionary.leads.kpi.qualifiedLeads).toBeTruthy();
-    expect(idDictionary.leads.kpi.surveyClosing).toBeTruthy();
-    expect(enDictionary.leads.kpi.surveyClosing).toBeTruthy();
+    expect(idDictionary.leads.kpi.survey).toBeTruthy();
+    expect(enDictionary.leads.kpi.survey).toBeTruthy();
+    expect(idDictionary.leads.kpi.closing).toBeTruthy();
+    expect(enDictionary.leads.kpi.closing).toBeTruthy();
 
     // Scoring Tooltip keys
     expect(idDictionary.leads.scoringTooltip.buyerScoreTitle).toBeTruthy();

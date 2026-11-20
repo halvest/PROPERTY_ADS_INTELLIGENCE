@@ -46,7 +46,7 @@ export function mapMetaCampaignToInternal(
     adAccountId,
     providerCampaignId: metaCampaign.id,
     name: metaCampaign.name?.trim() || `Campaign ${metaCampaign.id}`,
-    status: (metaCampaign.status || "ACTIVE").toUpperCase(),
+    status: (metaCampaign.status || metaCampaign.effective_status || "ACTIVE").toUpperCase(),
     objective: metaCampaign.objective || null,
   };
 }
@@ -64,7 +64,7 @@ export function mapMetaAdToInternal(
     campaignId,
     providerAdId: metaAd.id,
     name: metaAd.name?.trim() || `Ad ${metaAd.id}`,
-    status: (metaAd.status || "ACTIVE").toUpperCase(),
+    status: (metaAd.status || metaAd.effective_status || "ACTIVE").toUpperCase(),
   };
 }
 

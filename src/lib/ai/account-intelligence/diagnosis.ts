@@ -172,7 +172,59 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
     });
   }
 
-  if (summary.average_ctr !== null && summary.average_ctr < 0.8 && summary.total_impressions >= 1000) {
+  /**
+   * SAFEGUARD 3A & AUDIT PATCH 2 — Creative Bottleneck (Golden Offer) Detection:
+   * Rule: link_ctr < 0.8% AND CVR > 20% AND link_clicks >= 30 AND CPR <= Target.
+   * Protects profitable high-CVR campaigns from being penalized, while enforcing
+   * a strict link_clicks >= 30 denominator floor to eliminate micro-sample noise.
+   */
+  const goldenOfferEntity = [...report.campaign_rankings, ...report.ad_rankings].find((item) => {
+    const ctr = item.ctr;
+    const linkClicks = item.linkClicks ?? 0;
+    const cvr =
+      item.cvr !== undefined && item.cvr !== null
+        ? item.cvr
+        : linkClicks > 0 && item.results !== null
+        ? Number(((item.results / linkClicks) * 100).toFixed(2))
+        : null;
+    const isProfitableCpr =
+      item.cpr !== null &&
+      item.cpr > 0 &&
+      (item.target.value !== null ? item.cpr <= item.target.value : (item.results ?? 0) >= 5);
+    return (
+      ctr !== null &&
+      ctr < 0.8 &&
+      cvr !== null &&
+      cvr > 20 &&
+      linkClicks >= 30 &&
+      isProfitableCpr
+    );
+  });
+
+  if (goldenOfferEntity) {
+    const resolvedCvr =
+      goldenOfferEntity.cvr ??
+      (goldenOfferEntity.linkClicks && goldenOfferEntity.results !== null
+        ? Number(((goldenOfferEntity.results / goldenOfferEntity.linkClicks) * 100).toFixed(2))
+        : 0);
+    findings.push({
+      title: `Creative Bottleneck (Golden Offer): ${goldenOfferEntity.name}`,
+      category: "creative",
+      severity: "medium",
+      certainty: "confirmed",
+      observation: `${goldenOfferEntity.name} mencatat CTR tautan rendah (${goldenOfferEntity.ctr}%), tetapi CVR konversi sangat tinggi (${resolvedCvr}%) dengan CPR efisien (${rupiah(goldenOfferEntity.cpr)}).`,
+      evidence: [
+        { metric: "link_ctr", value: goldenOfferEntity.ctr ?? "null", source: "entity ranking" },
+        { metric: "cvr_pct", value: resolvedCvr, source: "results / link_clicks" },
+        { metric: "cpr", value: goldenOfferEntity.cpr ?? "null", source: "entity ranking" },
+      ],
+      diagnosis:
+        "Penawaran (Offer/CVR) sangat kuat, tetapi materi visual gagal menarik klik. Jangan matikan kampanye ini. Duplikasi dan ganti hook visual/video.",
+      business_impact:
+        "Potensi skala konversi sangat besar apabila daya tarik visual (hook) ditingkatkan tanpa mengubah penawaran inti.",
+      limitations: ["Variasi hook visual baru tetap perlu diuji terpisah agar algoritma kampanye asli tidak terganggu."],
+    });
+  } else if (summary.average_ctr !== null && summary.average_ctr < 0.8 && summary.total_impressions >= 1000) {
     findings.push({
       title: "CTR tautan akun rendah",
       category: "creative",
@@ -186,19 +238,46 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
     });
   }
 
-  const clickRich = report.ad_rankings.find((item) => (item.ctr ?? 0) >= 1.2 && (item.results ?? 0) === 0 && item.spend >= 100_000);
-  if (clickRich) {
+  /**
+   * SAFEGUARD 3B — Traffic Leak (Clickbait) Detection:
+   * IF (link_ctr > 1.5% AND CVR < 2% AND Spend >= Rp 100,000) OR (link_ctr >= 1.2% AND Results === 0 AND Spend >= Rp 100,000):
+   * Flags high-CTR ads that fail to convert post-click traffic.
+   */
+  const trafficLeakEntity = [...report.ad_rankings, ...report.campaign_rankings].find((item) => {
+    const ctr = item.ctr ?? 0;
+    const cvr =
+      item.cvr !== undefined && item.cvr !== null
+        ? item.cvr
+        : item.linkClicks && item.linkClicks > 0 && item.results !== null
+        ? Number(((item.results / item.linkClicks) * 100).toFixed(2))
+        : (item.results ?? 0) === 0
+        ? 0
+        : 100;
+    return (
+      item.spend >= 100_000 &&
+      ((ctr > 1.5 && cvr < 2) || (ctr >= 1.2 && (item.results ?? 0) === 0))
+    );
+  });
+
+  if (trafficLeakEntity) {
+    const resolvedCvr =
+      trafficLeakEntity.cvr ??
+      (trafficLeakEntity.linkClicks && trafficLeakEntity.results !== null
+        ? Number(((trafficLeakEntity.results / trafficLeakEntity.linkClicks) * 100).toFixed(2))
+        : 0);
     findings.push({
-      title: `${clickRich.name} mendapat klik tanpa hasil`,
+      title: `${trafficLeakEntity.name} mendapat klik tanpa hasil (Traffic Leak)`,
       category: "conversion",
       severity: "high",
       certainty: "hypothesis",
-      observation: `${clickRich.name} punya CTR ${clickRich.ctr}% dan hasil 0 pada belanja ${rupiah(clickRich.spend)}.`,
+      observation: `${trafficLeakEntity.name} punya CTR ${trafficLeakEntity.ctr}%, CVR ${resolvedCvr}%, dan hasil ${trafficLeakEntity.results ?? 0} pada belanja ${rupiah(trafficLeakEntity.spend)}.`,
       evidence: [
-        { metric: "link_ctr", value: clickRich.ctr ?? "null", source: "ad ranking" },
-        { metric: "results", value: 0, source: "primary result" },
+        { metric: "link_ctr", value: trafficLeakEntity.ctr ?? "null", source: "entity ranking" },
+        { metric: "cvr_pct", value: resolvedCvr, source: "results / link_clicks" },
+        { metric: "results", value: trafficLeakEntity.results ?? 0, source: "primary result" },
       ],
-      diagnosis: "Klik dan hasil tidak sebanding. Halaman tujuan, penawaran, atau definisi hasil perlu diperiksa. Ini bukan bukti creative gagal.",
+      diagnosis:
+        "Iklan bersifat clickbait. Banyak klik tetapi audiens langsung keluar dari Landing Page/WhatsApp. Periksa relevansi janji iklan dengan penawaran asli.",
       business_impact: "Belanja menghasilkan traffic yang belum menjadi hasil utama.",
       limitations: ["Landing page view dan CRM tidak tersedia pada laporan ini."],
     });
@@ -234,7 +313,13 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
     });
   }
 
-  const dataGaps: AdvertisingIntelligence["data_gaps"] = [];
+  const dataGaps: AdvertisingIntelligence["data_gaps"] = [
+    {
+      field: "crm_funnel",
+      importance: "high",
+      impact_on_analysis: "Data kualifikasi prospek hilir (CRM Hot/Warm/Cold) tidak terhubung langsung ke peringkat objek akun.",
+    },
+  ];
   if (report.comparison.status === "COMPARISON_DATA_UNAVAILABLE") {
     dataGaps.push({
       field: "previous_period",

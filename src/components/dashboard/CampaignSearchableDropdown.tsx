@@ -134,7 +134,7 @@ export function CampaignSearchableDropdown({
 
   return (
     <div className={`relative inline-block w-full min-w-0 text-left ${className}`} ref={containerRef}>
-      {/* Trigger Button with Ellipsis Control and Tooltip */}
+      {/* Trigger Button with Standardized Premium Dropdown Styling */}
       <button
         type="button"
         id="campaign-dropdown-trigger"
@@ -142,10 +142,10 @@ export function CampaignSearchableDropdown({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         title={selectedCampaign ? `${copy.allCampaigns}: ${selectedCampaign.name}` : copy.allCampaigns}
-        className={`group flex min-h-9 w-full min-w-0 items-center justify-between gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium shadow-2xs transition-colors cursor-pointer select-none ${
+        className={`group flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-sm transition-colors cursor-pointer select-none ${
           selectedCampaignId !== "all"
-            ? "border-indigo-300 bg-indigo-50/70 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200"
-            : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            ? "border-indigo-300 bg-indigo-50/80 text-indigo-900 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200"
+            : "border-zinc-200 dark:border-white/[0.08] bg-white/80 dark:bg-zinc-900/80 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
         }`}
       >
         <div className="flex items-center gap-1.5 min-w-0">
@@ -207,7 +207,7 @@ export function CampaignSearchableDropdown({
         <div
           role="listbox"
           aria-labelledby="campaign-dropdown-trigger"
-          className="glass-popover absolute left-0 mt-1.5 w-[min(20rem,calc(100vw-2rem))] rounded-xl z-50 overflow-hidden flex flex-col"
+          className="absolute left-0 mt-1.5 w-[min(22rem,calc(100vw-2rem))] rounded-xl z-[100] shadow-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/[0.08] overflow-hidden flex flex-col"
           style={{ maxHeight: "360px" }}
         >
           {/* Internal Search Header */}

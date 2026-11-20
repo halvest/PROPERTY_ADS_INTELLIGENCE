@@ -8,12 +8,18 @@ import {
 import { buildAdvertisingIntelligence, type AdvertisingIntelligence } from "./diagnosis";
 import { resolveOperationalStatus, type OperationalStatus } from "./status";
 
+/**
+ * SAFEGUARD 3 — Funnel Priority Weights (Anti-CTR Trap):
+ * Bottom-of-funnel unit economics (CPR 45% + Volume 30% = 75%) dictate 75% of the score.
+ * Upper-funnel Link CTR (5%) and CPC (5%) never override profitable conversion performance,
+ * protecting high-CVR / low-CTR "Golden Offer" campaigns from being penalized.
+ */
 export const RANKING_WEIGHTS = {
-  cpr: 0.35,
-  volume: 0.25,
-  ctr: 0.15,
-  cpc: 0.1,
+  cpr: 0.45,
+  volume: 0.30,
   confidence: 0.15,
+  ctr: 0.05,
+  cpc: 0.05,
 } as const;
 
 export interface RankingThresholds {
@@ -28,8 +34,8 @@ export interface RankingThresholds {
 
 export const DEFAULT_RANKING_THRESHOLDS: RankingThresholds = {
   minImpressionsForWinner: 1000,
-  minResultsForWinner: 5,
-  minResultsForStrong: 3,
+  minResultsForWinner: 10,
+  minResultsForStrong: 5,
   smallSampleMaxResults: 1,
   smallSampleMaxSpend: 50_000,
   materialZeroResultSpend: 100_000,
@@ -45,14 +51,17 @@ export type CampaignRankCategory =
   | "NEEDS_OPTIMIZATION"
   | "UNDERPERFORMING"
   | "INSUFFICIENT_DATA"
+  | "GATHERING_DATA"
   | "UNRANKED";
 export type AdRankCategory =
   | "WINNER"
   | "STRONG_PERFORMER"
   | "POTENTIAL_WINNER"
+  | "STABLE"
   | "NEEDS_OPTIMIZATION"
   | "LOSING"
   | "INSUFFICIENT_DATA"
+  | "GATHERING_DATA"
   | "UNRANKED";
 export type IntelligenceAction =
   | "SCALE"
@@ -91,6 +100,7 @@ export interface AccountCampaignInput {
   status: string | null;
   objective: string | null;
   targetCpr?: number | null;
+  spend?: number | null;
 }
 
 export interface AccountAdInput {
@@ -130,6 +140,8 @@ export interface RankedCampaign {
   impressions: number;
   reach: number | null;
   frequency: number | null;
+  linkClicks?: number | null;
+  cvr?: number | null;
   spendSharePct: number | null;
   target: ResolvedTarget;
   category: CampaignRankCategory;
@@ -160,6 +172,8 @@ export interface RankedAd {
   impressions: number;
   reach: number | null;
   frequency: number | null;
+  linkClicks?: number | null;
+  cvr?: number | null;
   target: ResolvedTarget;
   category: AdRankCategory;
   score: ScoreBreakdown;
@@ -326,30 +340,99 @@ function confidenceScore(impressions: number, results: number | null, thresholds
   return Math.round(impressionPart * 0.55 + resultPart * 0.45);
 }
 
+/**
+ * SAFEGUARD 2 — Statistical Significance Floor (Anti-Micro-Spend Lottery):
+ * Prevents a lucky micro-spend entity (e.g., Rp 5,000 spend with 1 conversion)
+ * from outranking stable high-volume campaigns.
+ *
+ * Anti-Hallucination Rules:
+ * 1. Material Zero-Result Waste (results === 0 && spend >= materialZeroResultSpend && impressions >= minImpressionsToJudge)
+ *    is NOT treated as insufficient data — it is evaluated and penalized as UNDERPERFORMING / LOSING.
+ * 2. Any entity with results <= smallSampleMaxResults (1) and spend < minSpendFloor is quarantined as INSUFFICIENT_DATA.
+ * 3. Any entity with impressions < minImpressionsToJudge (500) and results < minResultsForStrong (3) is quarantined as INSUFFICIENT_DATA.
+ */
 function insufficientSample(input: {
   impressions: number;
   results: number | null;
   spend: number;
+  target?: number | null;
   thresholds: RankingThresholds;
 }): boolean {
   const results = input.results ?? 0;
-  if (results === 0 && input.spend >= input.thresholds.materialZeroResultSpend) return false;
-  if (results <= input.thresholds.smallSampleMaxResults && input.spend < input.thresholds.smallSampleMaxSpend) return true;
+  const minSpendFloor =
+    input.target && input.target > 0
+      ? Math.max(input.target * 2, input.thresholds.smallSampleMaxSpend)
+      : input.thresholds.smallSampleMaxSpend;
+  if (results === 0 && input.spend >= input.thresholds.materialZeroResultSpend && input.impressions >= input.thresholds.minImpressionsToJudge) {
+    return false;
+  }
+  if (results <= input.thresholds.smallSampleMaxResults && input.spend < minSpendFloor) return true;
   if (input.impressions < input.thresholds.minImpressionsToJudge && results < input.thresholds.minResultsForStrong) return true;
   return false;
 }
 
+/**
+ * AUDIT PATCH 3 — Statistical Significance Upgrade:
+ * Checks whether an entity meets the statistical significance floor required
+ * to enter the TOP_PERFORMER / WINNER / EFFICIENT pool:
+ * - results >= minResultsForWinner (default 10)
+ * - spend >= max(target * 3, smallSampleMaxSpend)
+ * Entities failing this floor are quarantined to STABLE or GATHERING_DATA,
+ * preventing micro-samples from receiving winner classification.
+ */
+export function meetsWinnerSignificanceFloor(
+  results: number | null,
+  spend: number,
+  target: number | null,
+  thresholds: RankingThresholds = DEFAULT_RANKING_THRESHOLDS
+): boolean {
+  const minSpendFloor =
+    target && target > 0
+      ? Math.max(target * 3, thresholds.smallSampleMaxSpend)
+      : thresholds.smallSampleMaxSpend;
+  return (results ?? 0) >= thresholds.minResultsForWinner && spend >= minSpendFloor;
+}
+
+/**
+ * SAFEGUARD 4 — Material Waste Protocol (Zero-Result Infinity Guard):
+ * When Results === 0 and Spend >= materialZeroResultSpend (Rp 100,000),
+ * the score is deterministically forced to 0 across all components,
+ * preventing division-by-zero (CPR = Infinity) from corrupting sort order.
+ */
+function materialZeroResult(results: number | null, spend: number, impressions: number, thresholds: RankingThresholds): boolean {
+  return (results ?? 0) === 0 && spend >= thresholds.materialZeroResultSpend && impressions >= thresholds.minImpressionsToJudge;
+}
+
+/**
+ * SAFEGUARD 3 & 4 — Composite 5-Component Deterministic Scoring Algorithm:
+ * - CPR (45%) + Volume (30%) = 75% weight priority.
+ * - Protects "Golden Offer" campaigns (low CTR < 0.8%, high CVR >= 20%, linkClicks >= 30, profitable CPR <= target)
+ *   from being penalized by upper-funnel CTR scores.
+ * - Forces total score to 0 when Material Waste Protocol triggers.
+ */
 function buildScore(
-  metrics: { cpr: number | null; results: number | null; ctr: number | null; cpc: number | null; impressions: number },
+  metrics: { cpr: number | null; results: number | null; ctr: number | null; cpc: number | null; impressions: number; spend?: number; cvr?: number | null; linkClicks?: number | null },
   peers: Array<{ cpr: number | null; results: number | null; ctr: number | null; cpc: number | null }>,
   target: number | null,
   thresholds: RankingThresholds
 ): ScoreBreakdown {
-  const cpr = target && metrics.cpr
+  if (materialZeroResult(metrics.results, metrics.spend ?? 0, metrics.impressions, thresholds)) {
+    return { cpr: 0, volume: 0, ctr: 0, cpc: 0, confidence: 0, total: 0 };
+  }
+
+  const cpr = target && metrics.cpr && metrics.cpr > 0
     ? Math.max(0, Math.min(100, Math.round((target / metrics.cpr) * 70)))
     : lowerBetter(metrics.cpr, peers.map((item) => item.cpr));
   const volume = higherBetter(metrics.results, peers.map((item) => item.results));
-  const ctr = higherBetter(metrics.ctr, peers.map((item) => item.ctr));
+  const rawCtr = higherBetter(metrics.ctr, peers.map((item) => item.ctr));
+  const isGoldenOffer =
+    (metrics.linkClicks ?? 0) >= 30 &&
+    (metrics.ctr ?? 0) < 0.8 &&
+    (metrics.cvr ?? 0) >= 20 &&
+    metrics.cpr !== null &&
+    metrics.cpr > 0 &&
+    (target === null || metrics.cpr <= target);
+  const ctr = isGoldenOffer ? Math.max(rawCtr, 75) : rawCtr;
   const cpc = lowerBetter(metrics.cpc, peers.map((item) => item.cpc));
   const confidence = confidenceScore(metrics.impressions, metrics.results, thresholds);
   const total = Math.round(
@@ -362,16 +445,34 @@ function buildScore(
   return { cpr, volume, ctr, cpc, confidence, total };
 }
 
-function materialZeroResult(results: number | null, spend: number, impressions: number, thresholds: RankingThresholds): boolean {
-  return (results ?? 0) === 0 && spend >= thresholds.materialZeroResultSpend && impressions >= thresholds.minImpressionsToJudge;
-}
-
-function campaignCategory(score: number, insufficient: boolean, results: number | null, spend: number, impressions: number, cpr: number | null, target: number | null, peerCount: number, thresholds: RankingThresholds): CampaignRankCategory {
+function campaignCategory(
+  score: number,
+  insufficient: boolean,
+  results: number | null,
+  spend: number,
+  impressions: number,
+  cpr: number | null,
+  target: number | null,
+  peerCount: number,
+  thresholds: RankingThresholds
+): CampaignRankCategory {
   if (insufficient) return "INSUFFICIENT_DATA";
   if ((results ?? 0) === 0) return materialZeroResult(results, spend, impressions, thresholds) ? "UNDERPERFORMING" : "INSUFFICIENT_DATA";
   if (peerCount < 2) return "UNRANKED";
-  if (score >= 78 && (results ?? 0) >= 5 && (target === null || (cpr !== null && cpr <= target))) return "TOP_PERFORMER";
-  if (score >= 64) return "EFFICIENT";
+
+  const res = results ?? 0;
+  const significantForWinner = meetsWinnerSignificanceFloor(results, spend, target, thresholds);
+
+  // Eligible for TOP_PERFORMER or EFFICIENT only when statistical significance floor is met
+  if (significantForWinner && score >= 78 && (target === null || (cpr !== null && cpr <= target))) return "TOP_PERFORMER";
+  if (significantForWinner && score >= 64) return "EFFICIENT";
+
+  // AUDIT PATCH 3: Entities with results between 1 and 9 are capped at STABLE or flagged as GATHERING_DATA unless spend is massive
+  const isMassiveSpend = target && target > 0 ? spend >= target * 5 : spend >= thresholds.materialZeroResultSpend * 2;
+  if (res >= 1 && res < thresholds.minResultsForWinner && !isMassiveSpend) {
+    return score >= 48 ? "STABLE" : "GATHERING_DATA";
+  }
+
   if (score >= 48) return "STABLE";
   if (score >= 34) return "NEEDS_OPTIMIZATION";
   return "UNDERPERFORMING";
@@ -391,12 +492,25 @@ function adCategory(
   if (insufficient) return "INSUFFICIENT_DATA";
   if ((results ?? 0) === 0) return materialZeroResult(results, spend, impressions, thresholds) ? "LOSING" : "INSUFFICIENT_DATA";
   if (peerCount < 2) return "UNRANKED";
+
+  const res = results ?? 0;
+  const significantForWinner = meetsWinnerSignificanceFloor(results, spend, target, thresholds);
   const enoughForWinner =
-    (results ?? 0) >= thresholds.minResultsForWinner &&
+    significantForWinner &&
     impressions >= thresholds.minImpressionsForWinner &&
     (target === null || (cpr !== null && cpr <= target));
+
   if (enoughForWinner && score >= 72) return "WINNER";
-  if ((results ?? 0) >= thresholds.minResultsForStrong && score >= 60) return "STRONG_PERFORMER";
+  if (significantForWinner && (results ?? 0) >= thresholds.minResultsForStrong && spend >= thresholds.smallSampleMaxSpend && score >= 60) {
+    return "STRONG_PERFORMER";
+  }
+
+  // AUDIT PATCH 3: Entities with results between 1 and 9 are capped at STABLE or flagged as GATHERING_DATA unless spend is massive
+  const isMassiveSpend = target && target > 0 ? spend >= target * 5 : spend >= thresholds.materialZeroResultSpend * 2;
+  if (res >= 1 && res < thresholds.minResultsForWinner && !isMassiveSpend) {
+    return score >= 50 ? "STABLE" : "GATHERING_DATA";
+  }
+
   if ((results ?? 0) >= 2 && score >= 50) return "POTENTIAL_WINNER";
   if ((results ?? 0) === 0 || score < 34) return "LOSING";
   return "NEEDS_OPTIMIZATION";
@@ -422,6 +536,7 @@ function campaignAction(category: CampaignRankCategory, paused: boolean, spendSh
   if (paused) return "HISTORICAL_REVIEW";
   if (category === "TOP_PERFORMER") return "SCALE";
   if (category === "EFFICIENT" || category === "STABLE") return "MAINTAIN";
+  if (category === "GATHERING_DATA") return "MONITOR";
   if (category === "UNDERPERFORMING" && (spendShare ?? 0) >= 15) return "REDUCE_BUDGET";
   if (category === "UNDERPERFORMING") return "OPTIMIZE";
   if (category === "NEEDS_OPTIMIZATION") return "OPTIMIZE";
@@ -431,7 +546,8 @@ function campaignAction(category: CampaignRankCategory, paused: boolean, spendSh
 function adAction(category: AdRankCategory, paused: boolean): IntelligenceAction {
   if (paused) return "HISTORICAL_REVIEW";
   if (category === "WINNER") return "SCALE";
-  if (category === "STRONG_PERFORMER" || category === "POTENTIAL_WINNER") return "MAINTAIN";
+  if (category === "STRONG_PERFORMER" || category === "POTENTIAL_WINNER" || category === "STABLE") return "MAINTAIN";
+  if (category === "GATHERING_DATA") return "MONITOR";
   if (category === "LOSING") return "PAUSE";
   if (category === "NEEDS_OPTIMIZATION") return "OPTIMIZE";
   return "MONITOR";
@@ -458,11 +574,59 @@ function recommendationCopy(action: IntelligenceAction, longPeriod: boolean): st
   return "Belum cukup dasar untuk mengubah anggaran atau status.";
 }
 
-export function insightFallsInPeriod(row: AdInsightRowLike, periodStart: string, periodEnd: string): boolean {
-  const day = row.date_start ? String(row.date_start).slice(0, 10) : "";
+/**
+ * AUDIT PATCH 1 — Timezone & Date Truncation Safe Normalization:
+ * Normalizes an ISO timestamp, Date object, or calendar string into a YYYY-MM-DD
+ * representation aligned with the specified account timezone (default Asia/Jakarta).
+ * Eliminates timezone drift (e.g. conversions at 23:00 UTC bleeding into the wrong day).
+ */
+export function normalizeDateToTimezone(
+  rawDate: string | Date | null | undefined,
+  timezone: string = "Asia/Jakarta"
+): string | null {
+  if (!rawDate) return null;
+
+  // Strict YYYY-MM-DD calendar string without time or timezone offset
+  if (typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawDate.trim())) {
+    return rawDate.trim();
+  }
+
+  try {
+    const dateObj = rawDate instanceof Date ? rawDate : new Date(rawDate);
+    if (isNaN(dateObj.getTime())) {
+      return typeof rawDate === "string" ? rawDate.slice(0, 10) : null;
+    }
+
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return formatter.format(dateObj);
+  } catch {
+    try {
+      const dateObj = new Date(rawDate);
+      return dateObj.toISOString().slice(0, 10);
+    } catch {
+      return typeof rawDate === "string" ? rawDate.slice(0, 10) : null;
+    }
+  }
+}
+
+export function insightFallsInPeriod(
+  row: AdInsightRowLike,
+  periodStart: string,
+  periodEnd: string,
+  timezone: string = "Asia/Jakarta"
+): boolean {
+  if (!row.date_start) return false;
+  const day = normalizeDateToTimezone(row.date_start, timezone);
   if (!day) return false;
-  if (periodStart && day < periodStart) return false;
-  if (periodEnd && day > periodEnd) return false;
+  const startDay = normalizeDateToTimezone(periodStart, timezone) || periodStart;
+  const endDay = normalizeDateToTimezone(periodEnd, timezone) || periodEnd;
+  if (startDay && day < startDay) return false;
+  if (endDay && day > endDay) return false;
   return true;
 }
 
@@ -479,9 +643,56 @@ export function insightShowsActivity(row: AdInsightRowLike): boolean {
     || leads > 0;
 }
 
+/**
+ * SAFEGUARD 1 — Strict Objective & Action Type Isolation:
+ * Resolves the canonical conversion action kind so that cheap upper-funnel actions
+ * (e.g., `post_engagement`, `video_view`, `link_click`) are never blended or ranked
+ * in the same peer leaderboard as high-intent outcomes (`messaging`, `leads`).
+ */
 function metricsOf(rows: AdInsightRowLike[], objective: string | null) {
   const agg = aggregateAdInsights(rows);
   const primary = selectPrimaryResult(agg, objective);
+
+  let resultKind: string = primary.kind;
+  let resultLabel: string = primary.label;
+  let results: number | null = primary.count;
+  let cpr: number | null = primary.count && primary.count > 0 ? primary.cost : null;
+
+  const explicitActionTypes = Array.from(
+    new Set(
+      rows
+        .map((r) => (r.conversion_action_type || "").trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  const firstAction = explicitActionTypes[0] || "";
+  const hasMessaging = (agg.messagingConversations ?? 0) > 0;
+  const hasLeads = (agg.leads ?? 0) > 0;
+
+  if (!hasMessaging && !hasLeads && firstAction) {
+    if (firstAction.includes("post_engagement") || firstAction.includes("page_engagement") || firstAction === "engagement") {
+      resultKind = "post_engagement";
+      resultLabel = "Interaksi Postingan (Engagement)";
+      results = agg.results;
+      cpr = agg.results && agg.results > 0 ? agg.costPerResult : null;
+    } else if (firstAction.includes("video_view")) {
+      resultKind = "video_view";
+      resultLabel = "Tayangan Video";
+      results = agg.results;
+      cpr = agg.results && agg.results > 0 ? agg.costPerResult : null;
+    } else if (firstAction.includes("link_click")) {
+      resultKind = "link_click";
+      resultLabel = "Klik Tautan";
+      results = agg.linkClicks ?? agg.results;
+      cpr = results && results > 0 ? agg.linkCpc ?? agg.costPerResult : null;
+    }
+  }
+
+  const cvr =
+    agg.linkClicks && agg.linkClicks > 0 && results !== null
+      ? Number(((results / agg.linkClicks) * 100).toFixed(2))
+      : null;
+
   return {
     spend: agg.spend,
     impressions: agg.impressions,
@@ -492,10 +703,11 @@ function metricsOf(rows: AdInsightRowLike[], objective: string | null) {
     cpm: agg.cpm,
     linkClicks: agg.linkClicks,
     clicks: agg.allClicks,
-    results: primary.count,
-    cpr: primary.count && primary.count > 0 ? primary.cost : null,
-    resultKind: primary.kind,
-    resultLabel: primary.label,
+    results,
+    cpr: cpr !== null && Number.isFinite(cpr) ? cpr : null,
+    cvr,
+    resultKind,
+    resultLabel,
   };
 }
 
@@ -530,7 +742,10 @@ export function buildAccountIntelligence(input: {
   warnings.push("Anggaran dialokasikan dan sisa anggaran tidak tersedia di snapshot lokal, jadi tidak dihitung.");
   warnings.push("Ad set, audience, dan placement tidak ada di data lokal. Tidak ada kesimpulan audience atau penempatan.");
 
-  const periodInsights = input.insights.filter((row) => insightFallsInPeriod(row, input.periodStart, input.periodEnd));
+  const accountTimezone = input.timezone || "Asia/Jakarta";
+  const periodInsights = input.insights.filter((row) =>
+    insightFallsInPeriod(row, input.periodStart, input.periodEnd, accountTimezone)
+  );
   const droppedOutsidePeriod = input.insights.length - periodInsights.length;
   const activeInsights = periodInsights.filter((row) => insightShowsActivity(row));
   if (droppedOutsidePeriod > 0) {
@@ -538,6 +753,22 @@ export function buildAccountIntelligence(input: {
   }
   if (input.insights.some((row) => !row.date_start)) {
     warnings.push("Baris insight tanpa tanggal dibuang agar metrik seumur hidup tidak masuk periode.");
+  }
+
+  // AUDIT PATCH 4 — CBO Budget Illusion Check:
+  // Detects discrepancy between campaign-level spend and ad-level insight spend (> 5%).
+  const campaignsWithSpend = input.campaigns.filter((c) => typeof c.spend === "number" && (c.spend ?? 0) > 0);
+  if (campaignsWithSpend.length > 0) {
+    const sumCampaignSpend = campaignsWithSpend.reduce((acc, c) => acc + (c.spend || 0), 0);
+    const sumAdSpend = activeInsights.reduce((acc, r) => acc + (r.spend || 0), 0);
+    if (sumCampaignSpend > 0) {
+      const discrepancyRatio = Math.abs(sumCampaignSpend - sumAdSpend) / sumCampaignSpend;
+      if (discrepancyRatio > 0.05) {
+        warnings.push(
+          "Terdeteksi selisih pembelanjaan antara level Iklan dan Kampanye. Metrik dihitung berdasarkan data level iklan."
+        );
+      }
+    }
   }
 
   const campaignById = new Map(input.campaigns.map((campaign) => [campaign.id, campaign]));
@@ -603,7 +834,7 @@ export function buildAccountIntelligence(input: {
         }),
         item.metrics.cpr
       );
-      const insufficient = insufficientSample({ ...item.metrics, thresholds });
+      const insufficient = insufficientSample({ ...item.metrics, target: target.value, thresholds });
       const sameKind = peerCampaign.filter((peer) => peer.resultKind === item.metrics.resultKind);
       const score = buildScore(item.metrics, sameKind, target.value, thresholds);
       const share = totalSpend > 0 ? Number(((item.metrics.spend / totalSpend) * 100).toFixed(1)) : null;
@@ -644,6 +875,8 @@ export function buildAccountIntelligence(input: {
         impressions: item.metrics.impressions,
         reach: item.metrics.reach,
         frequency: item.metrics.frequency,
+        linkClicks: item.metrics.linkClicks,
+        cvr: item.metrics.cvr,
         spendSharePct: share,
         target,
         category,
@@ -670,7 +903,7 @@ export function buildAccountIntelligence(input: {
         }),
         metrics.cpr
       );
-      const insufficient = insufficientSample({ ...metrics, thresholds });
+      const insufficient = insufficientSample({ ...metrics, target: target.value, thresholds });
       const sameKind = adPeers.filter((peer) => peer.resultKind === metrics.resultKind);
       const score = buildScore(metrics, sameKind, target.value, thresholds);
       const category = adCategory(score.total, insufficient, metrics.results, metrics.impressions, metrics.spend, metrics.cpr, target.value, thresholds, sameKind.length);
@@ -713,6 +946,8 @@ export function buildAccountIntelligence(input: {
         impressions: metrics.impressions,
         reach: metrics.reach,
         frequency: metrics.frequency,
+        linkClicks: metrics.linkClicks,
+        cvr: metrics.cvr,
         target,
         category,
         score,

@@ -3,7 +3,7 @@ import { getArchetype, type AdArchetypeId } from "./ad-archetypes";
 
 export interface AdPosterSynthesizerParams {
   archetypeId: AdArchetypeId;
-  aspectRatio: AspectRatio;
+  aspectRatio: AspectRatio | "16:9" | "2:3" | "auto" | string;
   projectName: string;
   propertyType?: string;
   propertyLocation?: string;
@@ -29,11 +29,14 @@ export interface AdPosterSynthesizerParams {
 export class AdPosterSynthesizer {
   static synthesize(params: AdPosterSynthesizerParams): string {
     getArchetype(params.archetypeId);
-    const dimensions = {
+    const dimensionsMap: Record<string, { width: number; height: number }> = {
       "1:1": { width: 1080, height: 1080 },
       "4:5": { width: 1080, height: 1350 },
       "9:16": { width: 1080, height: 1920 },
-    }[params.aspectRatio];
+      "16:9": { width: 1920, height: 1080 },
+      "2:3": { width: 1080, height: 1620 },
+    };
+    const dimensions = dimensionsMap[params.aspectRatio] || dimensionsMap["4:5"];
 
     const { width, height } = dimensions;
 
@@ -110,7 +113,7 @@ export class AdPosterSynthesizer {
    * Computes ratio-adaptive vertical zones so 1:1, 4:5, and 9:16 never clip or leave awkward gaps.
    * For 9:16, enforces 15% top safe zone (y >= 288) and 20% bottom safe zone (y <= 1536).
    */
-  private static getVerticalZones(aspectRatio: AspectRatio, h: number) {
+  private static getVerticalZones(aspectRatio: AspectRatio | string, h: number) {
     if (aspectRatio === "9:16") {
       return {
         topSafeY: 280,
@@ -118,6 +121,24 @@ export class AdPosterSynthesizer {
         dockY: 1150,
         dockContentY: 1200,
         bottomSafeLimitY: 1530,
+      };
+    }
+    if (aspectRatio === "2:3") {
+      return {
+        topSafeY: 120,
+        photoH: 1050,
+        dockY: 1040,
+        dockContentY: 1090,
+        bottomSafeLimitY: 1480,
+      };
+    }
+    if (aspectRatio === "16:9") {
+      return {
+        topSafeY: 44,
+        photoH: 680,
+        dockY: 680,
+        dockContentY: 720,
+        bottomSafeLimitY: h - 44,
       };
     }
     if (aspectRatio === "1:1") {

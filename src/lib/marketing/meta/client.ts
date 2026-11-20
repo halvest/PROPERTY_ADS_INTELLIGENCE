@@ -1,9 +1,11 @@
 import "server-only";
 
 import {
+  ALL_EFFECTIVE_STATUSES,
   MarketingApiError,
   type MetaAdAccountResponse,
   type MetaCampaignResponse,
+  type MetaAdSetResponse,
   type MetaAdResponse,
   type MetaInsightResponse,
   type MetaAccountInsightResponse,
@@ -18,6 +20,8 @@ import {
   sanitizeMarketingLog,
 } from "./config";
 
+export { ALL_EFFECTIVE_STATUSES };
+
 export interface MetaMarketingClientOptions {
   accessToken?: string;
   adAccountId?: string;
@@ -30,8 +34,10 @@ export interface MetaMarketingClientOptions {
 
 /**
  * Meta Marketing API Server Client (Read-Only)
- * Connects directly to Meta Graph API (default v26.0) with cursor pagination,
- * rate limit detection, bounded retries, and sanitized error reporting.
+ * Connects directly to Meta Graph API (default v26.0) with strict cursor pagination
+ * (`while (hasNextPage)` traversal via `paging.cursors.after`), comprehensive
+ * `effective_status` filtering, BUC rate limit header throttling, bounded retries,
+ * and sanitized error reporting.
  *
  * CRITICAL RULE: This client NEVER modifies campaigns, ads, bids, or budgets.
  * All requests are strictly HTTP GET operations.
@@ -50,6 +56,8 @@ export class MetaMarketingApiClient {
   public lastFetchPages = 0;
   /** Whether Meta indicated another page existed when traversal stopped. */
   public lastFetchHasMore = false;
+  /** Latest parsed Meta Business Use Case (BUC) / Ad Account usage telemetry header. */
+  public lastBucUsageHeader: Record<string, unknown> | null = null;
 
   constructor(options: MetaMarketingClientOptions = {}) {
     const config = getMetaMarketingConfig({ requireConfigured: false });
@@ -138,33 +146,185 @@ export class MetaMarketingApiClient {
   }
 
   /**
-   * Fetches all active & paused campaigns for an Ad Account.
+   * Fetches all campaigns across all effective statuses for an Ad Account using cursor pagination.
+   * Explicitly includes ALL_EFFECTIVE_STATUSES so paused, archived, deleted, and review-pending
+   * campaigns are never dropped by Meta's default filter.
    * Endpoint: GET /v26.0/act_<ID>/campaigns
    */
   async getCampaigns(targetAdAccountId?: string): Promise<MetaCampaignResponse[]> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
     this.assertAccountId(accountId);
 
-    const fields = "id,name,status,objective,created_time,updated_time";
-    const endpoint = `/${accountId}/campaigns?fields=${fields}&limit=100`;
-    return this.fetchAllPages<MetaCampaignResponse>(endpoint);
+    const fields = "id,name,status,effective_status,objective,created_time,updated_time";
+    const params = new URLSearchParams({
+      fields,
+      effective_status: JSON.stringify(ALL_EFFECTIVE_STATUSES),
+      limit: "100",
+    });
+    const endpoint = `/${accountId}/campaigns?${params.toString()}`;
+    try {
+      return await this.fetchAllPages<MetaCampaignResponse>(endpoint, 200);
+    } catch (err) {
+      if (err instanceof MarketingApiError && err.metaErrorCode === 100) {
+        const fallbackParams = new URLSearchParams({
+          fields,
+          effective_status: JSON.stringify(["ACTIVE", "PAUSED", "ARCHIVED", "IN_PROCESS", "WITH_ISSUES"]),
+          limit: "100",
+        });
+        try {
+          return await this.fetchAllPages<MetaCampaignResponse>(
+            `/${accountId}/campaigns?${fallbackParams.toString()}`,
+            200
+          );
+        } catch {
+          return this.fetchAllPages<MetaCampaignResponse>(
+            `/${accountId}/campaigns?fields=${fields}&limit=100`,
+            200
+          );
+        }
+      }
+      throw err;
+    }
   }
 
   /**
-   * Fetches all active & paused ads for an Ad Account.
+   * Fetches all AdSets across all effective statuses for an Ad Account using cursor pagination.
+   * Explicitly includes ALL_EFFECTIVE_STATUSES so paused, archived, deleted, and parent-paused
+   * adsets are never omitted.
+   * Endpoint: GET /v26.0/act_<ID>/adsets
+   */
+  async getAdSets(targetAdAccountId?: string): Promise<MetaAdSetResponse[]> {
+    const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
+    this.assertAccountId(accountId);
+
+    const fields = "id,name,status,effective_status,campaign_id,daily_budget,lifetime_budget,optimization_goal,created_time,updated_time";
+    const params = new URLSearchParams({
+      fields,
+      effective_status: JSON.stringify(ALL_EFFECTIVE_STATUSES),
+      limit: "100",
+    });
+    const endpoint = `/${accountId}/adsets?${params.toString()}`;
+    try {
+      return await this.fetchAllPages<MetaAdSetResponse>(endpoint, 200);
+    } catch (err) {
+      if (err instanceof MarketingApiError && err.metaErrorCode === 100) {
+        const fallbackParams = new URLSearchParams({
+          fields,
+          effective_status: JSON.stringify([
+            "ACTIVE",
+            "PAUSED",
+            "ARCHIVED",
+            "CAMPAIGN_PAUSED",
+            "IN_PROCESS",
+            "WITH_ISSUES",
+          ]),
+          limit: "100",
+        });
+        try {
+          return await this.fetchAllPages<MetaAdSetResponse>(
+            `/${accountId}/adsets?${fallbackParams.toString()}`,
+            200
+          );
+        } catch {
+          return this.fetchAllPages<MetaAdSetResponse>(
+            `/${accountId}/adsets?fields=${fields}&limit=100`,
+            200
+          );
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Fetches all Ads across all effective statuses for an Ad Account using cursor pagination.
+   * Explicitly passes ALL_EFFECTIVE_STATUSES so paused, campaign-paused, adset-paused,
+   * archived, and deleted ads with historical spend are always synchronized.
    * Endpoint: GET /v26.0/act_<ID>/ads
    */
   async getAds(targetAdAccountId?: string): Promise<MetaAdResponse[]> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
     this.assertAccountId(accountId);
 
-    const fields = "id,name,status,campaign_id,adset_id,created_time,updated_time";
-    const endpoint = `/${accountId}/ads?fields=${fields}&limit=100`;
-    return this.fetchAllPages<MetaAdResponse>(endpoint);
+    const fields = "id,name,status,effective_status,campaign_id,adset_id,created_time,updated_time";
+    const params = new URLSearchParams({
+      fields,
+      effective_status: JSON.stringify(ALL_EFFECTIVE_STATUSES),
+      limit: "100",
+    });
+    const endpoint = `/${accountId}/ads?${params.toString()}`;
+    try {
+      return await this.fetchAllPages<MetaAdResponse>(endpoint, 200);
+    } catch (err) {
+      if (err instanceof MarketingApiError && err.metaErrorCode === 100) {
+        const fallbackParams = new URLSearchParams({
+          fields,
+          effective_status: JSON.stringify([
+            "ACTIVE",
+            "PAUSED",
+            "ARCHIVED",
+            "CAMPAIGN_PAUSED",
+            "ADSET_PAUSED",
+            "PENDING_REVIEW",
+            "DISAPPROVED",
+            "PREAPPROVED",
+          ]),
+          limit: "100",
+        });
+        try {
+          return await this.fetchAllPages<MetaAdResponse>(
+            `/${accountId}/ads?${fallbackParams.toString()}`,
+            200
+          );
+        } catch {
+          return this.fetchAllPages<MetaAdResponse>(
+            `/${accountId}/ads?fields=${fields}&limit=100`,
+            200
+          );
+        }
+      }
+      throw err;
+    }
   }
 
   /**
-   * Fetches ad-level performance insights for a date range or preset.
+   * Splits a wide `timeRange` into safe windows (max `maxDaysPerWindow` days each)
+   * so Meta Graph API `/insights` with `time_increment=1` never rejects or truncates
+   * multi-year historical syncs.
+   */
+  private splitTimeRangeWindows(
+    timeRange: { since: string; until: string },
+    maxDaysPerWindow = 365
+  ): Array<{ since: string; until: string }> {
+    const startMs = Date.parse(`${timeRange.since}T00:00:00Z`);
+    const endMs = Date.parse(`${timeRange.until}T00:00:00Z`);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      return [timeRange];
+    }
+    const dayMs = 24 * 60 * 60 * 1000;
+    const totalDays = Math.floor((endMs - startMs) / dayMs) + 1;
+    if (totalDays <= maxDaysPerWindow) {
+      return [timeRange];
+    }
+
+    const windows: Array<{ since: string; until: string }> = [];
+    let cursorMs = startMs;
+    while (cursorMs <= endMs) {
+      const windowEndMs = Math.min(cursorMs + (maxDaysPerWindow - 1) * dayMs, endMs);
+      windows.push({
+        since: new Date(cursorMs).toISOString().slice(0, 10),
+        until: new Date(windowEndMs).toISOString().slice(0, 10),
+      });
+      cursorMs = windowEndMs + dayMs;
+    }
+    return windows;
+  }
+
+  /**
+   * Fetches ad-level (`level=ad`) performance insights for a date range or preset,
+   * traversing all cursor pages and applying the 7-day click / 1-day view attribution window.
+   * Automatically splits multi-year `timeRange` spans into 365-day windows when `timeIncrement`
+   * is daily so Meta Graph API never rejects or drops historical rows.
    * Endpoint: GET /v26.0/act_<ID>/insights?level=ad
    */
   async getAdInsights(options: {
@@ -209,32 +369,57 @@ export class MetaMarketingApiClient {
     ];
 
     const fields = fieldList.join(",");
+    const maxPages = options.maxPages ?? 20;
 
-    const params = new URLSearchParams({
-      level: "ad",
-      fields,
-      use_account_attribution_setting: "true",
-      limit: String(options.limit ?? 50),
-    });
+    const buildEndpoint = (rangeOverride?: { since: string; until: string }) => {
+      const params = new URLSearchParams({
+        level: "ad",
+        fields,
+        use_account_attribution_setting: "true",
+        action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
+        limit: String(options.limit ?? 50),
+      });
 
-    if (options.timeIncrement !== undefined) {
-      params.set("time_increment", String(options.timeIncrement));
+      if (options.timeIncrement !== undefined) {
+        params.set("time_increment", String(options.timeIncrement));
+      }
+
+      if (options.datePreset) {
+        params.set("date_preset", options.datePreset);
+      } else if (rangeOverride?.since && rangeOverride?.until) {
+        params.set(
+          "time_range",
+          JSON.stringify({
+            since: rangeOverride.since,
+            until: rangeOverride.until,
+          })
+        );
+      }
+      return `/${accountId}/insights?${params.toString()}`;
+    };
+
+    if (!options.datePreset && options.timeRange?.since && options.timeRange?.until) {
+      const windows = this.splitTimeRangeWindows(options.timeRange, 365);
+      if (windows.length > 1) {
+        const aggregated: MetaInsightResponse[] = [];
+        let totalPages = 0;
+        let anyTruncated = false;
+        let anyHasMore = false;
+        for (const win of windows) {
+          const rows = await this.fetchAllPages<MetaInsightResponse>(buildEndpoint(win), maxPages);
+          aggregated.push(...rows);
+          totalPages += this.lastFetchPages;
+          if (this.lastFetchTruncated) anyTruncated = true;
+          if (this.lastFetchHasMore) anyHasMore = true;
+        }
+        this.lastFetchPages = totalPages;
+        this.lastFetchTruncated = anyTruncated;
+        this.lastFetchHasMore = anyHasMore;
+        return aggregated;
+      }
     }
 
-    if (options.datePreset) {
-      params.set("date_preset", options.datePreset);
-    } else if (options.timeRange?.since && options.timeRange?.until) {
-      params.set(
-        "time_range",
-        JSON.stringify({
-          since: options.timeRange.since,
-          until: options.timeRange.until,
-        })
-      );
-    }
-
-    const endpoint = `/${accountId}/insights?${params.toString()}`;
-    return this.fetchAllPages<MetaInsightResponse>(endpoint, options.maxPages ?? 20);
+    return this.fetchAllPages<MetaInsightResponse>(buildEndpoint(options.timeRange), maxPages);
   }
 
   /**
@@ -252,20 +437,38 @@ export class MetaMarketingApiClient {
     const accountId = normalizeAdAccountId(options.targetAdAccountId || this.defaultAdAccountId);
     this.assertAccountId(accountId);
 
-    const params = new URLSearchParams({
-      level: "account",
-      fields: "spend,impressions,reach,frequency,cpm,inline_link_clicks,inline_link_click_ctr,cost_per_inline_link_click,clicks,ctr,cpc,actions,account_currency,date_start,date_stop",
-      time_increment: "all_days",
-      limit: String(options.limit ?? 100),
-    });
-    if (options.datePreset) params.set("date_preset", options.datePreset);
-    else params.set("time_range", JSON.stringify(options.timeRange));
-    const endpoint = `/${accountId}/insights?${params.toString()}`;
-    return this.fetchAllPages<MetaAccountInsightResponse>(endpoint, options.maxPages ?? 20);
+    const buildAccountEndpoint = (range: { since: string; until: string }) => {
+      const params = new URLSearchParams({
+        level: "account",
+        fields: "spend,impressions,reach,frequency,cpm,inline_link_clicks,inline_link_click_ctr,cost_per_inline_link_click,clicks,ctr,cpc,actions,account_currency,date_start,date_stop",
+        time_increment: "all_days",
+        use_account_attribution_setting: "true",
+        action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
+        limit: String(options.limit ?? 100),
+      });
+      if (options.datePreset) params.set("date_preset", options.datePreset);
+      else params.set("time_range", JSON.stringify(range));
+      return `/${accountId}/insights?${params.toString()}`;
+    };
+
+    try {
+      return await this.fetchAllPages<MetaAccountInsightResponse>(
+        buildAccountEndpoint(options.timeRange),
+        options.maxPages ?? 20
+      );
+    } catch (err) {
+      // Meta restricts single account-level reach/frequency window to ~37 months
+      if (err instanceof MarketingApiError && err.metaErrorCode === 100 && !options.datePreset) {
+        return [];
+      }
+      throw err;
+    }
   }
 
   /**
-   * Traverses cursor-based pagination to collect all records up to a safe maximum.
+   * Traverses Meta Graph API cursor-based pagination using a strict `while (hasNextPage)`
+   * loop driven by `paging.cursors.after` (and `paging.next`), collecting all pages up to
+   * `maxPages` while respecting Meta BUC rate-limit telemetry between page fetches.
    */
   private async fetchAllPages<T>(initialEndpoint: string, maxPages = 100): Promise<T[]> {
     this.lastFetchTruncated = false;
@@ -273,47 +476,156 @@ export class MetaMarketingApiClient {
     this.lastFetchHasMore = false;
     const allRecords: T[] = [];
     let currentEndpoint: string | null = initialEndpoint;
+    let hasNextPage = true;
     let pageCount = 0;
 
-    while (currentEndpoint && pageCount < maxPages) {
+    while (hasNextPage && currentEndpoint && pageCount < maxPages) {
       pageCount++;
       const response: MetaPaginatedResponse<T> =
         await this.requestSingle<MetaPaginatedResponse<T>>(currentEndpoint);
 
       if (response?.data && Array.isArray(response.data)) {
         if (response.data.length === 0) {
+          hasNextPage = false;
+          currentEndpoint = null;
           break;
         }
         allRecords.push(...response.data);
       } else {
+        hasNextPage = false;
+        currentEndpoint = null;
         break;
       }
 
-      // Check for cursor next page
-      if (response?.paging?.next) {
-        currentEndpoint = response.paging.next;
-      } else if (response?.paging?.cursors?.after) {
-        // If after cursor provided but no next URL, append cursor
-        const separator = initialEndpoint.includes("?") ? "&" : "?";
-        currentEndpoint = `${initialEndpoint}${separator}after=${encodeURIComponent(
-          response.paging.cursors.after
-        )}`;
+      const afterCursor = response?.paging?.cursors?.after;
+      const nextUrl = response?.paging?.next;
+
+      if (nextUrl && afterCursor) {
+        currentEndpoint = this.withAfterCursor(initialEndpoint, afterCursor);
+        hasNextPage = true;
+      } else if (nextUrl) {
+        currentEndpoint = nextUrl;
+        hasNextPage = true;
+      } else if (afterCursor) {
+        currentEndpoint = this.withAfterCursor(initialEndpoint, afterCursor);
+        hasNextPage = true;
       } else {
         currentEndpoint = null;
+        hasNextPage = false;
+      }
+
+      // If another page is queued and Meta BUC usage headers indicate high utilization,
+      // apply a proactive throttle pause before requesting the next cursor page.
+      if (hasNextPage && pageCount < maxPages) {
+        const cooldownMs = this.evaluateBucThrottleDelayMs();
+        if (cooldownMs > 0) {
+          await this.sleep(cooldownMs);
+        }
       }
     }
 
-    if (currentEndpoint && pageCount >= maxPages) {
+    if (hasNextPage && currentEndpoint && pageCount >= maxPages) {
       this.lastFetchTruncated = true;
     }
     this.lastFetchPages = pageCount;
-    this.lastFetchHasMore = Boolean(currentEndpoint);
+    this.lastFetchHasMore = Boolean(hasNextPage && currentEndpoint);
 
     return allRecords;
   }
 
   /**
-   * Executes a single HTTP GET request with retries, timeout, and error classification.
+   * Attaches or replaces the `after` cursor parameter on `endpoint` without
+   * duplicating existing query parameters across multi-page cursor loops.
+   */
+  private withAfterCursor(endpoint: string, afterCursor: string): string {
+    const qIndex = endpoint.indexOf("?");
+    if (qIndex === -1) {
+      return `${endpoint}?after=${encodeURIComponent(afterCursor)}`;
+    }
+    const basePath = endpoint.slice(0, qIndex);
+    const params = new URLSearchParams(endpoint.slice(qIndex + 1));
+    params.set("after", afterCursor);
+    return `${basePath}?${params.toString()}`;
+  }
+
+  /**
+   * Parses Meta's Business Use Case (`x-business-use-case-usage`), Ad Account
+   * (`x-ad-account-usage`), and App (`x-app-usage`) rate-limit headers when present.
+   */
+  private captureBucUsageHeaders(headers?: Headers): void {
+    if (!headers || typeof headers.get !== "function") return;
+    const bucRaw = headers.get("x-business-use-case-usage");
+    const accRaw = headers.get("x-ad-account-usage");
+    const appRaw = headers.get("x-app-usage");
+    if (!bucRaw && !accRaw && !appRaw) return;
+
+    const parsed: Record<string, unknown> = {};
+    for (const [key, raw] of [
+      ["business_use_case", bucRaw],
+      ["ad_account", accRaw],
+      ["app", appRaw],
+    ] as const) {
+      if (!raw) continue;
+      try {
+        parsed[key] = JSON.parse(raw);
+      } catch {
+        // Ignore malformed header JSON
+      }
+    }
+    if (Object.keys(parsed).length > 0) {
+      this.lastBucUsageHeader = parsed;
+    }
+  }
+
+  /**
+   * Evaluates the latest Meta BUC / Ad Account usage telemetry and returns a protective
+   * delay in milliseconds (0 when utilization is well below the 80% threshold).
+   */
+  private evaluateBucThrottleDelayMs(): number {
+    if (!this.lastBucUsageHeader) return 0;
+    let maxPct = 0;
+    let regainMinutes = 0;
+
+    const acc = this.lastBucUsageHeader.ad_account as Record<string, unknown> | undefined;
+    if (acc && typeof acc.acc_id_util_pct === "number") {
+      maxPct = Math.max(maxPct, acc.acc_id_util_pct);
+    }
+
+    const app = this.lastBucUsageHeader.app as Record<string, unknown> | undefined;
+    if (app) {
+      for (const k of ["call_count", "total_cputime", "total_time"]) {
+        if (typeof app[k] === "number") maxPct = Math.max(maxPct, app[k] as number);
+      }
+    }
+
+    const buc = this.lastBucUsageHeader.business_use_case as Record<string, unknown> | undefined;
+    if (buc && typeof buc === "object") {
+      for (const entries of Object.values(buc)) {
+        if (!Array.isArray(entries)) continue;
+        for (const entry of entries) {
+          if (entry && typeof entry === "object") {
+            const rec = entry as Record<string, unknown>;
+            for (const k of ["call_count", "total_cputime", "total_time"]) {
+              if (typeof rec[k] === "number") maxPct = Math.max(maxPct, rec[k] as number);
+            }
+            if (typeof rec.estimated_time_to_regain_access === "number") {
+              regainMinutes = Math.max(regainMinutes, rec.estimated_time_to_regain_access);
+            }
+          }
+        }
+      }
+    }
+
+    if (regainMinutes > 0) return Math.min(regainMinutes * 1000, 3000);
+    if (maxPct >= 95) return 1500;
+    if (maxPct >= 85) return 600;
+    if (maxPct >= 80) return 250;
+    return 0;
+  }
+
+  /**
+   * Executes a single HTTP GET request with retries, timeout, BUC header inspection,
+   * and error classification.
    */
   private async requestSingle<T>(path: string): Promise<T> {
     if (!this.accessToken || this.accessToken.trim() === "") {
@@ -360,6 +672,7 @@ export class MetaMarketingApiClient {
         });
 
         clearTimeout(timeoutId);
+        this.captureBucUsageHeaders(response.headers);
 
         // Success response
         if (response.ok) {
@@ -413,8 +726,17 @@ export class MetaMarketingApiClient {
           });
         }
 
-        // Check for Rate Limit Error (Codes 17, 32, 613, or HTTP 429)
-        if (metaCode === 17 || metaCode === 32 || metaCode === 613 || statusCode === 429) {
+        // Check for Rate Limit Error (Standard & BUC Codes: 17, 32, 613, 80000, 80003, 80004, or HTTP 429)
+        const isBucOrRateLimit =
+          metaCode === 17 ||
+          metaCode === 32 ||
+          metaCode === 613 ||
+          metaCode === 80000 ||
+          metaCode === 80003 ||
+          metaCode === 80004 ||
+          statusCode === 429;
+
+        if (isBucOrRateLimit) {
           const rateLimitErr = new MarketingApiError({
             code: "RATE_LIMIT_ERROR",
             message: `Batas panggilan Meta Marketing API tercapai (Rate Limit Code ${metaCode || 429}): ${sanitizedMsg}`,

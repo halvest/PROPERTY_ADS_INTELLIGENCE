@@ -215,13 +215,41 @@ export interface PrimaryResultSelection {
  * CTWA decision metric. Messaging conversations are the ad result.
  * Lead and pixel counts stay on the aggregate and are not selected here.
  */
-export function selectPrimaryResult(agg: AdMetricsAggregate, _objective?: string | null): PrimaryResultSelection {
+export function selectPrimaryResult(agg: AdMetricsAggregate, objective?: string | null): PrimaryResultSelection {
+  const normObjective = (objective || "").toUpperCase();
+  const hasMessaging = agg.messagingConversations !== null && agg.messagingConversations > 0;
+  const hasLeads = agg.leads !== null && agg.leads > 0;
+
+  if (normObjective.includes("LEAD") && (hasLeads || !hasMessaging)) {
+    return {
+      kind: "leads",
+      count: agg.leads ?? agg.results,
+      cost: agg.costPerLead ?? agg.costPerResult,
+      label: "Leads (Meta)",
+    };
+  }
+  if (hasLeads && !hasMessaging) {
+    return {
+      kind: "leads",
+      count: agg.leads,
+      cost: agg.costPerLead,
+      label: "Leads (Meta)",
+    };
+  }
   if (agg.messagingConversations !== null) {
     return {
       kind: "messaging",
       count: agg.messagingConversations,
       cost: agg.costPerMessagingConversation,
       label: "Percakapan Pesan (CTWA)",
+    };
+  }
+  if (agg.leads !== null) {
+    return {
+      kind: "leads",
+      count: agg.leads,
+      cost: agg.costPerLead,
+      label: "Leads (Meta)",
     };
   }
   return {

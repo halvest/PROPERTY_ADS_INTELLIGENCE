@@ -224,6 +224,25 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.glass-surface {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.glass-popover {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
+}
+
+.glass-overlay {
+  background: rgba(9, 9, 11, 0.55);
+}
+
+.nav-solar-active {
+  background: var(--accent-subtle);
+}
+
 /* ─── Design-system surfaces ─── */
 
 /* Glass: reserved for header, popovers, dropdowns, overlays, floating UI */

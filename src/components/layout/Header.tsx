@@ -93,7 +93,7 @@ export function Header({
     .toUpperCase();
 
   return (
-    <header className="glass-surface sticky top-0 z-40 border-b">
+    <header className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white dark:border-zinc-800/80 dark:bg-zinc-950">
       <div className="flex h-14 items-center justify-between px-4 sm:px-6 lg:px-8">
         {/* Left: Mobile hamburger, Logo, and Desktop Sidebar Toggle */}
         <div className="flex items-center gap-2.5">
@@ -173,7 +173,7 @@ export function Header({
             </button>
 
             {isUserMenuOpen && (
-              <div className="glass-popover absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-xl p-1.5 focus:outline-none">
+              <div className="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-xl border border-zinc-200/80 bg-white p-1.5 shadow-xl focus:outline-none dark:border-zinc-800 dark:bg-zinc-900">
                 <div className="px-2.5 py-2 border-b border-zinc-200/70 dark:border-white/10">
                   <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">
                     {userName || "User"}

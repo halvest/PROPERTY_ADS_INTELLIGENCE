@@ -598,7 +598,7 @@ export function buildMuseAdGenerationPrompt(params: {
 
   if (hasReferenceImage) {
     promptSegments.push(
-      `[STRICT ARCHITECTURAL PRESERVATION PROTOCOL] 1. LOCK 100% OF THE BUILDING GEOMETRY: Keep exact roof shape, windows, walls, and carport vehicles in the center zone untouched. 2. EXTEND SKY & FOREGROUND ONLY: Seamlessly extend ONLY the upper sky and lower driveway/paving to fit the target ${aspectRatio} aspect ratio. 3. NO CROPPING: Fit the full width of the house cleanly inside the frame. STRICT RULES FOR IMAGE GENERATION: 1. PRESERVE 100% OF THE BUILDING STRUCTURE: Keep exact roof geometry (never turn a flat roof into a pitched roof), exact window/door positions, materials, and single carport state. 2. NO CROPPING: Fit the full width of the house cleanly inside the ${aspectRatio} frame. 3. FLEXIBLE SKY ADJUSTMENT ONLY: Extend and harmonize ONLY the upper sky and natural ambient lighting to match the ${archetype.name} mood so it blends seamlessly with the house.`
+      `[FACADE LOCK, ATMOSPHERE OPEN] 1. LOCK the building: exact roof geometry, floor count, window and door positions, facade design, and every wall, glass, wood, and stone material. Never turn a flat roof into a pitched roof. Never replace materials. 2. ALLOW a more professional atmosphere: cleaner sky, refined daylight, cars that may be replaced or added, and one quiet family activity in the foreground. Those additions must match the same modern line as the house. 3. Fit the full facade inside the ${aspectRatio} frame without cropping the roof.`
     );
   } else {
     promptSegments.push(

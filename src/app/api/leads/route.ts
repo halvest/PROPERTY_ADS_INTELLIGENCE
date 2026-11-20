@@ -297,7 +297,9 @@ export async function GET(request: NextRequest) {
     const warm = leads.filter((lead) => lead.qualityLabel === "Warm").length;
     const cold = leads.filter((lead) => lead.qualityLabel === "Cold").length;
     const hotWarm = hot + warm;
-    const surveyOrClosing = leads.filter((lead) => lead.funnelStage === "survei" || lead.funnelStage === "closing").length;
+    const surveyCount = leads.filter((lead) => lead.funnelStage === "survei").length;
+    const closingCount = leads.filter((lead) => lead.funnelStage === "closing").length;
+    const surveyOrClosing = surveyCount + closingCount;
     const linkedSources = leads.filter((lead) => Boolean(lead.adId || lead.campaignId)).length;
     const summary = {
       total,
@@ -309,8 +311,10 @@ export async function GET(request: NextRequest) {
       qualifiedLeads: hot + warm,
       unclassifiedLeads: total - hot - warm - cold,
       hotWarmRate: total ? (hotWarm / total) * 100 : 0,
+      surveyCount,
+      closingCount,
       surveyOrClosing,
-      leadToSurveyRate: total ? (surveyOrClosing / total) * 100 : 0,
+      leadToSurveyRate: total ? (surveyCount / total) * 100 : 0,
       linkedSources,
       unlinkedSources: total - linkedSources,
       adLinkRate: total ? (linkedSources / total) * 100 : 0,

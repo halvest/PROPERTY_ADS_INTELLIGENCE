@@ -70,11 +70,39 @@ export interface MetaAdAccountResponse {
   business_name?: string;
 }
 
+export const ALL_EFFECTIVE_STATUSES = [
+  "ACTIVE",
+  "PAUSED",
+  "DELETED",
+  "ARCHIVED",
+  "CAMPAIGN_PAUSED",
+  "ADSET_PAUSED",
+  "PENDING_REVIEW",
+  "DISAPPROVED",
+  "PREAPPROVED",
+] as const;
+
+export type MetaEffectiveStatus = (typeof ALL_EFFECTIVE_STATUSES)[number];
+
 export interface MetaCampaignResponse {
   id: string;
   name: string;
   status: string; // "ACTIVE" | "PAUSED" | "ARCHIVED" | "DELETED"
+  effective_status?: string;
   objective?: string;
+  created_time?: string;
+  updated_time?: string;
+}
+
+export interface MetaAdSetResponse {
+  id: string;
+  name: string;
+  status: string;
+  effective_status?: string;
+  campaign_id: string;
+  daily_budget?: string;
+  lifetime_budget?: string;
+  optimization_goal?: string;
   created_time?: string;
   updated_time?: string;
 }
@@ -83,6 +111,7 @@ export interface MetaAdResponse {
   id: string;
   name: string;
   status: string;
+  effective_status?: string;
   campaign_id: string;
   adset_id?: string;
   created_time?: string;

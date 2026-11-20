@@ -297,7 +297,7 @@ function extractBriefFacts(layout: ComposedAdLayout): ExtractedBriefFacts {
     locationAdvantages.push("Dekat Bandara");
   } else if (fullText.includes("mall") || fullText.includes("pusat belanja")) {
     locationAdvantages.push("Dekat Pusat Perbelanjaan");
-  } else {
+    } else {
     locationAdvantages.push("Lokasi Strategis Bebas Banjir");
   }
 
@@ -453,7 +453,7 @@ function renderNiche1Minimalist(
   const safeW = bounds.safeRect.width;
 
   // Soft top atmospheric veil for crisp white serif readability
-  ctx.save();
+    ctx.save();
   const skyVeil = ctx.createLinearGradient(0, 0, 0, topSafeY + 220);
   skyVeil.addColorStop(0, "rgba(24, 34, 46, 0.52)");
   skyVeil.addColorStop(0.7, "rgba(24, 34, 46, 0.22)");
@@ -605,12 +605,12 @@ function renderNiche1Minimalist(
   if (facts.location) {
     ctx.font = `500 15px ${FONT_SANS}`;
     ctx.fillStyle = "#D6C7B2";
-    ctx.textAlign = "right";
+      ctx.textAlign = "right";
     const locMaxW = bounds.rightNotch && aspectRatio === "9:16" ? bounds.rightNotch.xStart - 400 : 360;
     const locX = bounds.rightNotch && aspectRatio === "9:16" ? bounds.rightNotch.xStart - 10 : safeRightX;
     ctx.fillText(truncateTextToWidth(ctx, facts.location, locMaxW), locX, footerY + 2);
-  }
-  ctx.restore();
+    }
+    ctx.restore();
 }
 
 // ============================================================================
@@ -700,7 +700,7 @@ function renderNiche2ModernCatalog(
   ctx.fillStyle = "#1E3226";
   ctx.textBaseline = "middle";
   ctx.fillText(truncateTextToWidth(ctx, promoText, leftW - 24), safeX + 18, curY + 18);
-  ctx.restore();
+    ctx.restore();
 
   // Main Title (Intelligent 2-line wrapping & zero awkward truncation)
   ctx.save();
@@ -736,24 +736,24 @@ function renderNiche2ModernCatalog(
   for (let i = 0; i < row1Items.length; i++) {
     const ix = safeX + i * cellW;
     drawMinimalistIcon(ctx, row1Items[i].icon, ix, row1Y + 4, 24, "#1B3022", 1.7);
-    ctx.save();
+      ctx.save();
     ctx.font = `800 16px ${FONT_SANS}`;
     ctx.fillStyle = "#1B3022";
     ctx.fillText(row1Items[i].val, ix + 30, row1Y + 16);
     ctx.font = `500 12px ${FONT_SANS}`;
     ctx.fillStyle = "#4A5D50";
     ctx.fillText(row1Items[i].label, ix + 30, row1Y + 32);
-    ctx.restore();
+      ctx.restore();
   }
 
   // Horizontal Hairline (1px solid rgba(27,48,34,0.16))
   ctx.save();
   ctx.strokeStyle = "rgba(27, 48, 34, 0.16)";
   ctx.lineWidth = 1;
-  ctx.beginPath();
+    ctx.beginPath();
   ctx.moveTo(safeX, divY);
   ctx.lineTo(safeX + leftW, divY);
-  ctx.stroke();
+    ctx.stroke();
   ctx.restore();
 
   // Row 2: Secondary Specs / WhatsApp Contact
@@ -786,8 +786,8 @@ function renderNiche2ModernCatalog(
       ix + 26,
       row2Y + 20
     );
-    ctx.restore();
-  }
+      ctx.restore();
+    }
 
   // 4. Right Side: Asymmetric Dark Forest Price Card (Strictly above bottomSafeY)
   ctx.save();
@@ -913,7 +913,7 @@ function renderNiche3PromoConversion(
   // Title in Banner: "RUMAH MODERN 2 LANTAI"
   const titleMaxWidth = promoBadgeX - textStartX - 16;
   const mainTitle = (facts.projectName || facts.propertyType || "RUMAH MODERN 2 LANTAI").toUpperCase();
-  ctx.save();
+    ctx.save();
   ctx.font = `800 32px ${FONT_SANS}`;
   ctx.fillStyle = "#FFFFFF";
   ctx.textBaseline = "top";
@@ -925,7 +925,7 @@ function renderNiche3PromoConversion(
   ctx.font = `700 15px ${FONT_SANS}`;
   ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
   ctx.fillText(truncateTextToWidth(ctx, locationLabel, titleMaxWidth - 28), textStartX + 26, bannerY + 60);
-  ctx.restore();
+    ctx.restore();
 
   // 2. BOTTOM CARD DOCK (Strictly above bottomSafeY)
   const cardW = safeW;
@@ -933,18 +933,18 @@ function renderNiche3PromoConversion(
   const cardX = safeX;
   const cardY = bottomSafeY - cardH - 12;
 
-  ctx.save();
+    ctx.save();
   ctx.shadowColor = "rgba(15, 23, 42, 0.16)";
   ctx.shadowBlur = 32;
   ctx.shadowOffsetY = 8;
-  ctx.fillStyle = "#FFFFFF";
+    ctx.fillStyle = "#FFFFFF";
   roundRect(ctx, cardX, cardY, cardW, cardH, 20);
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.strokeStyle = "rgba(226, 232, 240, 0.9)";
   ctx.lineWidth = 1.5;
   ctx.stroke();
-  ctx.restore();
+    ctx.restore();
 
   // Layout 3 Columns inside Card: Left (Price), Center (Specs 2x2 pills), Right (Target Audience card)
   const innerMargin = 22;
@@ -959,7 +959,7 @@ function renderNiche3PromoConversion(
   const contentTopY = cardY + 20;
 
   // --- COLUMN 1: PRICE ---
-  ctx.save();
+    ctx.save();
   ctx.font = `700 13px ${FONT_SANS}`;
   ctx.fillStyle = "#64748B";
   ctx.fillText("Mulai", col1X, contentTopY + 12);
@@ -972,17 +972,17 @@ function renderNiche3PromoConversion(
   ctx.font = `700 13px ${FONT_SANS}`;
   ctx.fillStyle = "#059669";
   ctx.fillText("Harga Spesial Promo Launching!", col1X, contentTopY + 82);
-  ctx.restore();
+    ctx.restore();
 
   // Vertical divider 1
-  ctx.save();
+      ctx.save();
   ctx.strokeStyle = "rgba(226, 232, 240, 0.8)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(col2X - 10, contentTopY + 8);
   ctx.lineTo(col2X - 10, contentTopY + 130);
   ctx.stroke();
-  ctx.restore();
+      ctx.restore();
 
   // --- COLUMN 2: 4 SPEC CHIPS (2x2 Grid) ---
   const specItems: { icon: MinimalistIconId; text: string }[] = [
@@ -1001,7 +1001,7 @@ function renderNiche3PromoConversion(
     const chipX = col2X + colIdx * (chipColW + 10);
     const chipY = contentTopY + 10 + rowIdx * (chipH + 12);
 
-    ctx.save();
+      ctx.save();
     ctx.fillStyle = "rgba(240, 249, 255, 0.65)";
     roundRect(ctx, chipX, chipY, chipColW, chipH, 12);
     ctx.fill();
@@ -1020,8 +1020,8 @@ function renderNiche3PromoConversion(
       chipX + 38,
       chipY + chipH / 2 + 1
     );
-    ctx.restore();
-  }
+      ctx.restore();
+    }
 
   // Vertical divider 2
   ctx.save();
@@ -1075,17 +1075,17 @@ function renderNiche3PromoConversion(
   const waBarY = cardY + cardH - waBarH - 24;
   const waBarW = cardW - innerMargin * 2;
 
-  ctx.save();
+      ctx.save();
   ctx.fillStyle = "#075E54"; // Official WhatsApp primary green
   roundRect(ctx, waBarX, waBarY, waBarW, waBarH, 12);
-  ctx.fill();
+      ctx.fill();
 
   const waNumber = facts.whatsappNumber || "0812-8899-5500";
   const contactText = `HUBUNGI SEKARANG  •  SURVEY LOKASI GRATIS  •  ${waNumber} (WhatsApp)`;
   drawMinimalistIcon(ctx, "icon_whatsapp", waBarX + 22, waBarY + 14, 26, "#FFFFFF", 2);
 
   ctx.font = `800 15px ${FONT_SANS}`;
-  ctx.fillStyle = "#FFFFFF";
+      ctx.fillStyle = "#FFFFFF";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(
@@ -1106,8 +1106,8 @@ function renderNiche3PromoConversion(
     cardX + cardW / 2,
     cardY + cardH - 8
   );
-  ctx.restore();
-}
+      ctx.restore();
+    }
 
 // ============================================================================
 // NICHE 4: CREATIVE DUAL-DOCK (Sky Box & Double Floating Pills)
@@ -1168,15 +1168,15 @@ function renderNiche4CreativeDock(
   const skyBoxX = centerX - skyBoxW / 2;
   const skyBoxY = curY;
 
-  ctx.save();
+    ctx.save();
   ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
   roundRect(ctx, skyBoxX, skyBoxY, skyBoxW, skyBoxH, 20);
-  ctx.fill();
+    ctx.fill();
   ctx.strokeStyle = "#FFFFFF";
   ctx.lineWidth = 1.5;
-  ctx.stroke();
+    ctx.stroke();
 
-  ctx.textAlign = "center";
+    ctx.textAlign = "center";
   ctx.font = `600 15px ${FONT_SANS}`;
   ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
   ctx.fillText("HARGA PERDANA MULAI", centerX, skyBoxY + 30);
@@ -1184,7 +1184,7 @@ function renderNiche4CreativeDock(
   ctx.font = `800 40px ${FONT_SANS}`;
   ctx.fillStyle = "#FFFFFF";
   ctx.fillText(facts.price || "Rp 850 Juta", centerX, skyBoxY + 76);
-  ctx.restore();
+    ctx.restore();
 
   // 4. Bottom Zone: Double Floating Pills (Strictly inside safe bounds above bottomSafeY)
   const pillMarginX = safeX;
@@ -1195,7 +1195,7 @@ function renderNiche4CreativeDock(
   const bar1Y = bar2Y - 14 - bar1H;
 
   // Floating Bar 1: Slate Blue Pill (background: #385A82, borderRadius: 24px)
-  ctx.save();
+    ctx.save();
   ctx.shadowColor = "rgba(15, 23, 42, 0.32)";
   ctx.shadowBlur = 22;
   ctx.shadowOffsetY = 8;
@@ -1246,7 +1246,7 @@ function renderNiche4CreativeDock(
   ctx.fillStyle = "#F4F5F7";
   roundRect(ctx, pillMarginX, bar2Y, pillW, bar2H, 24);
   ctx.fill();
-  ctx.restore();
+    ctx.restore();
 
   const bar2Cols: { icon: MinimalistIconId; title: string; sub: string }[] = [
     {
@@ -1323,7 +1323,7 @@ function renderNiche5TropicalLuxury(
 
   // Thin Brushed Bronze Architectural Border Frame (Strictly inside safe viewport)
   const frameInset = Math.max(16, safeX - 16);
-  ctx.save();
+      ctx.save();
   ctx.strokeStyle = "rgba(213, 184, 139, 0.38)";
   ctx.lineWidth = 1.5;
   roundRect(
@@ -1356,8 +1356,8 @@ function renderNiche5TropicalLuxury(
     ctx.fillStyle = "#D5B88B";
     ctx.textBaseline = "middle";
     ctx.fillText(tagText, safeX + 18, topSafeY + 27);
-    ctx.restore();
-  }
+      ctx.restore();
+    }
 
   // Bottom Zone over #161514 Matte Obsidian Feather (Strictly above bottomSafeY)
   const bottomStartY = bottomSafeY - 280;
@@ -1430,14 +1430,14 @@ function renderNiche5TropicalLuxury(
     ? (bounds.rightNotch.xStart - safeX) * 0.45
     : safeW * 0.45;
 
-  const ctaFit = CreativeLayoutValidator.calculateFittedCta(
+    const ctaFit = CreativeLayoutValidator.calculateFittedCta(
     facts.ctaText,
     safeRightX,
     footerY - 24,
-    (txt, sz) => {
+      (txt, sz) => {
       ctx.font = `bold ${sz}px ${FONT_SANS}`;
-      return ctx.measureText(txt).width;
-    },
+        return ctx.measureText(txt).width;
+      },
     {
       maxAvailableWidth: maxCtaW,
       height: facts.whatsappNumber ? 58 : 52,
@@ -1492,7 +1492,7 @@ export function renderFamily3SwissGridEditorial(
   const safeW = bounds.safeRect.width;
 
   // 1. Modernist 1px Grid Lines
-  ctx.save();
+    ctx.save();
   ctx.strokeStyle = "rgba(17, 17, 17, 0.14)";
   ctx.lineWidth = 1;
 
@@ -1528,7 +1528,7 @@ export function renderFamily3SwissGridEditorial(
     ctx.fillText(line, safeX, headerY + titleFit.fontSize * 0.85);
     headerY += titleFit.fontSize + 6;
   }
-  ctx.restore();
+    ctx.restore();
 
   // 3. Bottom 4-Box Modular Matrix (Josef Müller-Brockmann Grid)
   const matrixH = aspectRatio === "9:16" ? 220 : 190;
@@ -1576,7 +1576,7 @@ export function renderFamily3SwissGridEditorial(
   // Box 04: Action / Direct WhatsApp Button (Bottom-Right)
   const b4X = safeX + colW + 12;
   const b4Y = matrixY + rowH + 12;
-  ctx.save();
+      ctx.save();
   ctx.fillStyle = "#E11D48"; // Crimson Red CTA Box
   roundRect(ctx, b4X, b4Y, colW, rowH, 8);
   ctx.fill();
@@ -1590,10 +1590,10 @@ export function renderFamily3SwissGridEditorial(
   ctx.fillText(ctaMain, b4X + 16, b4Y + 46);
 
   ctx.font = `600 12px ${FONT_SANS}`;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
   ctx.fillText("Klik untuk Jadwal Survey Langsung →", b4X + 16, b4Y + 66);
-  ctx.restore();
-}
+      ctx.restore();
+    }
 
 function drawSwissMatrixBox(
   ctx: CanvasRenderingContext2D,
@@ -1652,7 +1652,7 @@ export function renderFamily4ModernJapaneseMinimalism(
   const safeW = bounds.safeRect.width;
 
   // 1. Natural Linen Mat Border Frame (#F5F2EB)
-  ctx.save();
+    ctx.save();
   ctx.strokeStyle = "rgba(74, 93, 78, 0.28)";
   ctx.lineWidth = 1.2;
   roundRect(ctx, safeX - 8, topSafeY - 8, safeW + 16, bottomSafeY - topSafeY + 16, 20);
@@ -1761,7 +1761,7 @@ export function renderFamily4ModernJapaneseMinimalism(
   roundRect(ctx, ctaX, ctaY, ctaW, ctaH, 28);
   ctx.fill();
 
-  ctx.fillStyle = "#FFFFFF";
+    ctx.fillStyle = "#FFFFFF";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   if (facts.whatsappNumber) {
@@ -1772,8 +1772,8 @@ export function renderFamily4ModernJapaneseMinimalism(
   } else {
     ctx.font = `700 16px ${FONT_SANS}`;
     ctx.fillText(facts.ctaText || "Jadwalkan Kunjungan", ctaX + ctaW / 2, ctaY + ctaH / 2);
-  }
-  ctx.restore();
+    }
+    ctx.restore();
 }
 
 // ============================================================================
@@ -1798,7 +1798,7 @@ export function renderFamily6ContemporaryCorporate(
   // 1. Top Corporate Navy Plaque (#0A192F) with Platinum Border
   const headerH = 100;
   const headerY = topSafeY;
-  ctx.save();
+      ctx.save();
   ctx.fillStyle = "#0A192F";
   roundRect(ctx, safeX, headerY, safeW, headerH, 16);
   ctx.fill();
@@ -1911,8 +1911,8 @@ export function renderFamily6ContemporaryCorporate(
     ctx.font = `800 15px ${FONT_SANS}`;
     ctx.fillText(facts.ctaText || "Hubungi Marketing", btnCx, btnY + btnH / 2);
   }
-  ctx.restore();
-}
+      ctx.restore();
+    }
 
 // ============================================================================
 // FAMILY 8: HIGH-END PROPERTY CATALOG (Architectural Lookbook & Unit Type Specs)
@@ -1940,7 +1940,7 @@ export function renderFamily8HighEndPropertyCatalog(
   }
 
   const tagText = `TYPE ${facts.lb || "85"}/${facts.lt || "72"}  •  ${facts.floors || "2"} LANTAI`;
-  ctx.save();
+      ctx.save();
   ctx.font = `800 12px ${FONT_SANS}`;
   const tw = Math.round(ctx.measureText(tagText).width + 28);
   ctx.fillStyle = "#1E293B";
@@ -1968,7 +1968,7 @@ export function renderFamily8HighEndPropertyCatalog(
   const tableH = 175;
   const tableY = bottomSafeY - tableH;
   ctx.save();
-  ctx.fillStyle = "#FFFFFF";
+      ctx.fillStyle = "#FFFFFF";
   roundRect(ctx, safeX, tableY, safeW, tableH, 14);
   ctx.fill();
   ctx.strokeStyle = "rgba(15, 23, 42, 0.18)";
@@ -2039,8 +2039,8 @@ export function renderFamily8HighEndPropertyCatalog(
     ctx.font = `800 15px ${FONT_SANS}`;
     ctx.fillText(facts.ctaText || "Download Brosur & Pricelist", btnMidX, btnY + btnH / 2);
   }
-  ctx.restore();
-}
+      ctx.restore();
+    }
 
 /**
  * Samples the top 8% sky strip (left, center, right) and bottom 8% ground strip of the property photo.

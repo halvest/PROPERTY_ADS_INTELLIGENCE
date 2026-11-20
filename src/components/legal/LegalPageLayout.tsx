@@ -23,12 +23,20 @@ export interface LegalDocument {
 }
 
 const pageLinks = [
-  { href: "/privacy-policy", id: "Kebijakan Privasi", en: "Privacy Policy" },
-  { href: "/terms-of-service", id: "Ketentuan Layanan", en: "Terms of Service" },
-  { href: "/data-deletion", id: "Penghapusan Data", en: "Data Deletion" },
+  { href: "/privacy", altHref: "/privacy-policy", id: "Kebijakan Privasi", en: "Privacy Policy" },
+  { href: "/terms", altHref: "/terms-of-service", id: "Ketentuan Layanan", en: "Terms of Service" },
+  { href: "/data-deletion", altHref: "/data-deletion", id: "Penghapusan Data", en: "Data Deletion" },
 ];
 
-export function LegalPageLayout({ document, currentPath }: { document: LegalDocument; currentPath: string }) {
+export function LegalPageLayout({
+  document,
+  currentPath,
+  confirmationCode,
+}: {
+  document: LegalDocument;
+  currentPath: string;
+  confirmationCode?: string;
+}) {
   const { locale, dict } = useI18n();
   const language = locale === "id" ? "id" : "en";
   const title = document.title[language];
@@ -45,16 +53,19 @@ export function LegalPageLayout({ document, currentPath }: { document: LegalDocu
             <Link href="/" className="shrink-0 rounded-lg px-3 py-2 text-muted hover:bg-accent/5 hover:text-foreground">
               {locale === "id" ? "Beranda" : "Home"}
             </Link>
-            {pageLinks.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                aria-current={link.href === currentPath ? "page" : undefined}
-                className={`shrink-0 rounded-lg px-3 py-2 hover:bg-accent/5 hover:text-foreground ${link.href === currentPath ? "font-semibold text-foreground" : "text-muted"}`}
-              >
-                {locale === "id" ? link.id : link.en}
-              </Link>
-            ))}
+            {pageLinks.map((link) => {
+              const isCurrent = link.href === currentPath || link.altHref === currentPath;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-current={isCurrent ? "page" : undefined}
+                  className={`shrink-0 rounded-lg px-3 py-2 hover:bg-accent/5 hover:text-foreground ${isCurrent ? "font-semibold text-foreground" : "text-muted"}`}
+                >
+                  {locale === "id" ? link.id : link.en}
+                </Link>
+              );
+            })}
           </nav>
           <div className="order-2 flex items-center gap-2 sm:order-3">
             <NavbarActions />
@@ -74,6 +85,21 @@ export function LegalPageLayout({ document, currentPath }: { document: LegalDocu
             <p className="mt-3 text-sm text-muted">
               {locale === "id" ? "Berlaku mulai 29 Oktober 2026" : "Effective 29 October 2026"}
             </p>
+            {confirmationCode && (
+              <div className="mt-5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-foreground">
+                <p className="font-semibold">
+                  {locale === "id"
+                    ? "Permintaan Penghapusan Data Diterima"
+                    : "Data Deletion Request Received"}
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  {locale === "id" ? "Kode konfirmasi:" : "Confirmation code:"}{" "}
+                  <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono font-semibold text-foreground">
+                    {confirmationCode}
+                  </code>
+                </p>
+              </div>
+            )}
           </header>
 
           <div className="space-y-8 text-[15px] leading-7 text-muted [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:text-foreground [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_ol]:space-y-1 [&_ul]:space-y-1">

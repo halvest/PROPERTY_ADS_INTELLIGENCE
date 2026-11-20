@@ -22,7 +22,9 @@ interface LeadsSummary {
   cold?: number;
   qualifiedLeads?: number;
   hotWarmRate: number;
-  surveyOrClosing: number;
+  surveyCount?: number;
+  closingCount?: number;
+  surveyOrClosing?: number;
   leadToSurveyRate: number;
   linkedSources: number;
   unlinkedSources: number;
@@ -384,8 +386,8 @@ export default function LeadsDirectoryPage() {
         </div>
       )}
 
-      {/* 2. Compact Modern 4-KPI Grid (Adaptive 2x2 Mobile, 4-in-a-row Desktop) */}
-      <section aria-label="CRM Metrics Summary" className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      {/* 2. Compact Modern 5-KPI Grid (Adaptive 2-col Mobile, 3-col Tablet, 5-in-a-row Desktop) */}
+      <section aria-label="CRM Metrics Summary" className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {/* KPI 1: Total Leads */}
         <KPICard
           title={t.leads.kpi.totalLeads}
@@ -402,7 +404,7 @@ export default function LeadsDirectoryPage() {
         <KPICard
           title={t.leads.kpi.newLeads}
           value={summary?.newLeads ?? 0}
-          detail={t.leads.kpi.newLeadsDesc}
+          detail={`${followUpPendingCount} ${t.leads.kpi.followUpPending} · ${t.leads.kpi.newLeadsDesc}`}
           badge={{
             text: locale === "id" ? "Baru" : "New",
             color: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/20",
@@ -426,11 +428,23 @@ export default function LeadsDirectoryPage() {
           }
         />
 
-        {/* KPI 4: Survey & Closing (with active follow-up count) */}
+        {/* KPI 4: Survei (stage = survei) */}
         <KPICard
-          title={t.leads.kpi.surveyClosing}
-          value={summary?.surveyOrClosing ?? 0}
-          detail={`${followUpPendingCount} ${t.leads.kpi.followUpPending}`}
+          title={t.leads.kpi.survey}
+          value={summary?.surveyCount ?? stageCounts.survei ?? 0}
+          detail={t.leads.kpi.surveyDesc}
+          icon={
+            <svg className="h-4 w-4 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+            </svg>
+          }
+        />
+
+        {/* KPI 5: Closing (stage = closing) */}
+        <KPICard
+          title={t.leads.kpi.closing}
+          value={summary?.closingCount ?? stageCounts.closing ?? 0}
+          detail={t.leads.kpi.closingDesc}
           icon={
             <svg className="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

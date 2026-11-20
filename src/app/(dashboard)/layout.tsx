@@ -10,6 +10,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
   const { isCollapsed, toggleMobileMenu, closeMobileMenu, mobileMenuOpen } = useSidebar();
   const pathname = usePathname();
   const studioBleed = pathname === "/studio" || pathname === "/reviews" || pathname === "/enhancer";
+  const isFluidAdsWorkspace = pathname === "/ads";
 
   return (
     <div className={`solar-ambient bg-zinc-50 dark:bg-zinc-950 flex flex-col ${studioBleed ? "h-dvh overflow-hidden" : "min-h-screen"}`}>
@@ -30,6 +31,8 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
           className={
             studioBleed
               ? "flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden p-0"
+              : isFluidAdsWorkspace
+              ? "flex-1 w-full min-w-0 py-4 sm:py-6"
               : "p-4 sm:p-6 lg:p-8 flex-1 max-w-7xl w-full mx-auto min-w-0"
           }
         >

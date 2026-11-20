@@ -1,18 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MetaMarketingApiClient } from "@/lib/marketing/meta/client";
-import { executeMarketingSync } from "@/lib/marketing/meta/sync-service";
+import { MetaMarketingApiClient, ALL_EFFECTIVE_STATUSES } from "@/lib/marketing/meta/client";
+import { executeMarketingSync, chunkArray, SUPABASE_UPSERT_CHUNK_SIZE } from "@/lib/marketing/meta/sync-service";
 import { MarketingApiError } from "@/lib/marketing/meta/types";
 
-function jsonResponse(body: unknown) {
+function jsonResponse(body: unknown, extraHeaders?: Record<string, string>) {
   return {
     ok: true,
     status: 200,
+    headers: new Headers({ "content-type": "application/json", ...(extraHeaders || {}) }),
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as unknown as Response;
 }
 
-describe("Meta client pagination", () => {
+describe("Meta client pagination, effective_status & BUC rate limits", () => {
   it("collects insights across multiple pages", async () => {
     let calls = 0;
     const fetchFn = vi.fn(async () => {
@@ -43,6 +44,58 @@ describe("Meta client pagination", () => {
     const data = await client.getAdInsights({ targetAdAccountId: "act_1", maxPages: 2 });
     expect(data).toHaveLength(2);
     expect(client.lastFetchTruncated).toBe(true);
+  });
+
+  it("explicitly passes all 9 ALL_EFFECTIVE_STATUSES on getCampaigns, getAdSets, and getAds", async () => {
+    const urls: string[] = [];
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return jsonResponse({ data: [] });
+    });
+    const client = new MetaMarketingApiClient({ accessToken: "t", adAccountId: "act_1", fetchFn });
+    await client.getCampaigns();
+    await client.getAdSets();
+    await client.getAds();
+
+    expect(urls).toHaveLength(3);
+    for (const rawUrl of urls) {
+      const parsed = new URL(rawUrl);
+      const eff = parsed.searchParams.get("effective_status");
+      expect(eff).toBeTruthy();
+      expect(JSON.parse(eff!)).toEqual(Array.from(ALL_EFFECTIVE_STATUSES));
+    }
+  });
+
+  it("passes level=ad and 7d_click/1d_view attribution windows on getAdInsights and captures BUC headers", async () => {
+    let capturedUrl = "";
+    const bucPayload = {
+      "123456": [{ type: "ads_insights", call_count: 42, total_cputime: 30, total_time: 35 }],
+    };
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      capturedUrl = String(input);
+      return jsonResponse(
+        { data: [{ ad_id: "1", spend: "100", impressions: "50", clicks: "5", date_start: "2026-10-01", date_stop: "2026-10-01" }] },
+        { "x-business-use-case-usage": JSON.stringify(bucPayload) }
+      );
+    });
+    const client = new MetaMarketingApiClient({ accessToken: "t", adAccountId: "act_1", fetchFn });
+    await client.getAdInsights({ timeRange: { since: "2026-10-01", until: "2026-10-07" } });
+
+    const parsed = new URL(capturedUrl);
+    expect(parsed.searchParams.get("level")).toBe("ad");
+    expect(parsed.searchParams.get("use_account_attribution_setting")).toBe("true");
+    expect(JSON.parse(parsed.searchParams.get("action_attribution_windows") || "[]")).toEqual(["7d_click", "1d_view"]);
+    expect(client.lastBucUsageHeader).toEqual({ business_use_case: bucPayload });
+  });
+
+  it("chunks large arrays into batches of 200 to prevent Supabase Payload Too Large errors", () => {
+    const items = Array.from({ length: 450 }, (_, idx) => ({ id: idx }));
+    const chunks = chunkArray(items, SUPABASE_UPSERT_CHUNK_SIZE);
+    expect(SUPABASE_UPSERT_CHUNK_SIZE).toBe(200);
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]).toHaveLength(200);
+    expect(chunks[1]).toHaveLength(200);
+    expect(chunks[2]).toHaveLength(50);
   });
 });
 

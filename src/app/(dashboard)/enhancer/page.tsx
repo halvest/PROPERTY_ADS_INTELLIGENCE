@@ -69,6 +69,71 @@ async function downloadEnhancedImage(
   }
 }
 
+async function compressFileForUpload(
+  file: File,
+  maxDimension: number = 1600,
+  quality: number = 0.84
+): Promise<File> {
+  if (file.size <= 700 * 1024) {
+    return file;
+  }
+
+  return new Promise<File>((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      try {
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+        if (!width || !height) {
+          resolve(file);
+          return;
+        }
+
+        if (width > maxDimension || height > maxDimension) {
+          const scale = maxDimension / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(file);
+          return;
+        }
+
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(file);
+              return;
+            }
+            const safeName = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+            resolve(new File([blob], safeName, { type: "image/jpeg" }));
+          },
+          "image/jpeg",
+          quality
+        );
+      } catch {
+        resolve(file);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file);
+    };
+    img.src = objectUrl;
+  });
+}
+
 export default function PropertyImageEnhancerPage() {
   const { showToast } = useToast();
   const { locale } = useI18n();
@@ -149,7 +214,8 @@ export default function PropertyImageEnhancerPage() {
     try {
       const formData = new FormData();
       if (selectedFile) {
-        formData.append("file", selectedFile);
+        const uploadFile = await compressFileForUpload(selectedFile);
+        formData.append("file", uploadFile);
       }
       formData.append("mode", mode);
       formData.append("style", style);
@@ -165,8 +231,25 @@ export default function PropertyImageEnhancerPage() {
         body: formData,
       });
 
-      const json = await res.json();
-      if (!res.ok || !json.success) {
+      const rawText = await res.text();
+      let json: { success?: boolean; error?: string; data?: EnhancementJobResult } = {};
+      try {
+        json = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        if (res.status === 413 || rawText.includes("Request Entity Too Large")) {
+          throw new Error(
+            isEn
+              ? "Image file is too large for the server. Please try a smaller photo."
+              : "Ukuran gambar terlalu besar untuk server. Silakan coba foto dengan ukuran lebih kecil."
+          );
+        }
+        throw new Error(
+          isEn
+            ? `Server returned an unexpected response (HTTP ${res.status}).`
+            : `Server mengembalikan respons yang tidak terduga (HTTP ${res.status}).`
+        );
+      }
+      if (!res.ok || !json.success || !json.data) {
         throw new Error(
           json.error ||
             (isEn ? "Failed to process architectural enhancement" : "Gagal memproses peningkatan arsitektur")

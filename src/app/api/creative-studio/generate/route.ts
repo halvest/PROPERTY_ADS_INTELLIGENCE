@@ -8,7 +8,7 @@ import { AdCompositionEngine } from "@/lib/ai/creative-studio/composition-engine
 import { AIVariationsEngine } from "@/lib/ai/creative-studio/advanced-features";
 import { AdTemplateRetrievalEngine } from "@/lib/ai/creative-studio/template-retrieval";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   try {
@@ -33,17 +33,193 @@ export async function POST(req: Request) {
 
     const body = await req.json();
 
-    // 1. Pure Conversational Meta Muse Image 1.0 Studio Request
+    // =========================================================================
+    // 1. Conversational Studio Generation (Chat-First Persistent Pipeline)
+    // =========================================================================
     if (body.prompt && typeof body.prompt === "string" && !body.projectName) {
+      const userPrompt = body.prompt.trim();
+      const inputImages: string[] = Array.isArray(body.images)
+        ? body.images
+        : body.image
+        ? [body.image]
+        : [];
+      const userRatio = body.aspectRatio || "auto";
+      const parentGenId = body.parentGenerationId || null;
+      let convoId = body.conversationId || null;
+      const projectId = body.projectId || null;
+
+      // 1.1 Ensure persistent conversation session exists
+      if (!convoId) {
+        // Derive clean initial title from prompt
+        const rawTitle = userPrompt.length > 50 ? `${userPrompt.slice(0, 48)}...` : userPrompt;
+        const cleanTitle = rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1);
+
+        const { data: newConvo, error: createConvoErr } = await supabase
+          .from("studio_conversations")
+          .insert({
+            organization_id: organizationId,
+            user_id: user.id,
+            project_id: projectId,
+            title: cleanTitle || "Percakapan Kreatif Baru",
+            is_pinned: false,
+          })
+          .select("id")
+          .single();
+
+        if (newConvo) {
+          convoId = newConvo.id;
+        } else if (createConvoErr) {
+          console.warn("[Studio Conversation Create Warning]:", createConvoErr.message);
+        }
+      }
+
+      // 1.2 Persist User Message into Timeline
+      let userMsgId: string | null = null;
+      if (convoId) {
+        const { data: userMsg } = await supabase
+          .from("studio_messages")
+          .insert({
+            conversation_id: convoId,
+            organization_id: organizationId,
+            user_id: user.id,
+            role: "user",
+            content: userPrompt,
+            attachments: inputImages.map((img) => ({
+              type: "image",
+              url: img.length > 200 ? `${img.slice(0, 60)}...[data-url]` : img,
+            })),
+          })
+          .select("id")
+          .single();
+
+        if (userMsg) userMsgId = userMsg.id;
+      }
+
+      // 1.3 Retrieve Relevant Creative Memory & Preferences
+      const userPreferences: string[] = [];
+      let projectContextText = "";
+
+      try {
+        const { data: memories } = await supabase
+          .from("studio_memories")
+          .select("category, key, value")
+          .eq("organization_id", organizationId);
+
+        if (memories && memories.length > 0) {
+          for (const m of memories) {
+            if (m.category === "user_preference") {
+              userPreferences.push(`${m.key}: ${m.value}`);
+            } else if (m.category === "project_memory" && projectId) {
+              projectContextText += `${m.key}: ${m.value}\n`;
+            }
+          }
+        }
+      } catch (memErr) {
+        console.warn("[Studio Memory Retrieval Warning]:", memErr);
+      }
+
+      const requestedDirection = body.creativeDirection;
+      const creativeDirection = requestedDirection === "premium_editorial"
+        || requestedDirection === "commercial_performance"
+        || requestedDirection === "architectural_portfolio"
+        ? requestedDirection
+        : undefined;
+
+      // 1.4 Generate Studio Image via Provider
       const studioResult = await MuseImageProvider.generateStudioImage({
-        prompt: body.prompt,
-        images: Array.isArray(body.images) ? body.images : body.image ? [body.image] : [],
-        aspectRatio: body.aspectRatio || "4:5",
+        prompt: userPrompt,
+        images: inputImages,
+        aspectRatio: userRatio,
         previousResponseId: body.previousResponseId || null,
+        creativeDirection,
+        userPreferences: userPreferences.length > 0 ? userPreferences : undefined,
+        projectContext: projectContextText ? projectContextText.trim() : undefined,
       });
+
+      // 1.5 Persist Generation Record into Database
+      let generationId: string | null = null;
+      const dimMap: Record<string, { width: number; height: number }> = {
+        "1:1": { width: 1080, height: 1080 },
+        "4:5": { width: 1080, height: 1350 },
+        "2:3": { width: 1080, height: 1620 },
+        "9:16": { width: 1080, height: 1920 },
+        "16:9": { width: 1920, height: 1080 },
+        auto: { width: 1080, height: 1350 },
+      };
+      const dims = dimMap[studioResult.aspectRatio] || dimMap["4:5"];
+
+      try {
+        const { data: genRow, error: genErr } = await supabase
+          .from("creative_generations")
+          .insert({
+            organization_id: organizationId,
+            user_id: user.id,
+            conversation_id: convoId,
+            parent_generation_id: parentGenId,
+            project_id: projectId,
+            aspect_ratio: studioResult.aspectRatio,
+            style_preset: "natural_creative",
+            width: dims.width,
+            height: dims.height,
+            raw_image_url: studioResult.imageUrl,
+            final_composed_url: studioResult.imageUrl,
+            prompt_used: userPrompt,
+            revision_instruction: parentGenId ? userPrompt : null,
+            model_used: studioResult.modelUsed || "muse-image-1.0",
+            provider: studioResult.provider || "meta_muse",
+            status: "completed",
+            creative_direction: {
+              reasoning: studioResult.reasoning,
+              nativeSize: studioResult.nativeSize,
+              isFallback: studioResult.isFallback,
+              modelLog: studioResult.modelLog || [],
+              artDirections: studioResult.artDirections || [],
+            } as unknown as Json,
+          })
+          .select("id")
+          .single();
+
+        if (genRow) {
+          generationId = genRow.id;
+        } else if (genErr) {
+          console.warn("[Creative Generation DB Save Warning]:", genErr.message);
+        }
+      } catch (dbErr) {
+        console.warn("[Creative Generation DB Exception]:", dbErr);
+      }
+
+      // 1.6 Persist Assistant Response Message
+      let assistantMsgId: string | null = null;
+      if (convoId) {
+        const { data: assistantMsg } = await supabase
+          .from("studio_messages")
+          .insert({
+            conversation_id: convoId,
+            organization_id: organizationId,
+            user_id: user.id,
+            role: "assistant",
+            content: studioResult.reasoning || "Visual berhasil dibuat sesuai arahan kreatif Anda.",
+            attachments: [],
+            generation_id: generationId,
+          })
+          .select("id")
+          .single();
+
+        if (assistantMsg) assistantMsgId = assistantMsg.id;
+
+        // Update conversation timestamp
+        await supabase
+          .from("studio_conversations")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", convoId);
+      }
 
       return NextResponse.json({
         success: true,
+        conversationId: convoId,
+        userMessageId: userMsgId,
+        assistantMessageId: assistantMsgId,
+        generationId,
         imageUrl: studioResult.imageUrl,
         responseId: studioResult.responseId,
         reasoning: studioResult.reasoning,
@@ -51,8 +227,18 @@ export async function POST(req: Request) {
         nativeSize: studioResult.nativeSize,
         generationTimeMs: studioResult.generationTimeMs,
         isFallback: studioResult.isFallback,
+        provider: studioResult.provider,
+        modelUsed: studioResult.modelUsed,
+        fallbackReason: studioResult.fallbackReason,
+        adFacts: studioResult.adFacts,
+        modelLog: studioResult.modelLog || [],
+        artDirections: studioResult.artDirections || [],
       });
     }
+
+    // =========================================================================
+    // 2. Structured Brief Generation (Legacy Fallback Support)
+    // =========================================================================
     const parsed = CreativeBriefSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -62,25 +248,24 @@ export async function POST(req: Request) {
 
     const brief = parsed.data;
 
-    // 1. Resolve primary reference image if uploaded
+    // Resolve primary reference image if uploaded
     const primaryAsset = brief.assets.find((a) => a.isPrimary) || brief.assets[0];
     const referenceImageUrl = primaryAsset?.previewUrl;
 
-    // 2. Retrieve Best Ad Reference Template from Supabase (Visual RAG)
+    // Retrieve Best Ad Reference Template from Supabase (Visual RAG)
     const matchedTemplate = await AdTemplateRetrievalEngine.retrieveBestTemplate(
       supabase,
       brief,
       organizationId
     );
 
-    // 3. Plan Art Direction & Strategy via AI Creative Director
+    // Plan Art Direction & Strategy via AI Creative Director
     const creativeStrategy = AICreativeDirector.planCreativeStrategy(
       brief,
       brief.aspectRatio,
       brief.stylePreset
     );
 
-    // If template was retrieved from DB and user chose Auto Director, inject its design knowledge
     const isAutoDirector =
       !brief.stylePreset ||
       brief.stylePreset === "creative_freedom" ||
@@ -93,14 +278,13 @@ export async function POST(req: Request) {
       creativeStrategy.styleName = matchedTemplate.name;
     }
 
-    // 4. Resolve Dimensions
+    // Resolve Dimensions
     const dimensions = {
       "1:1": { width: 1080, height: 1080 },
       "4:5": { width: 1080, height: 1350 },
       "9:16": { width: 1080, height: 1920 },
     }[brief.aspectRatio];
 
-    // 5. Generate Visual Backdrop via Muse Image Provider
     const fidelityMode = brief.fidelityMode || (referenceImageUrl ? "preserve_original" : "ai_atmosphere");
     const archetypeId = (
       (isAutoDirector ? matchedTemplate?.category : undefined) ||
@@ -137,7 +321,6 @@ export async function POST(req: Request) {
       },
     });
 
-    // 5. Compose Graphic & Typography Overlay (Hybrid Composition Engine)
     const uncroppedPhotoUrl = referenceImageUrl || imageResult.rawPhotoUrl || imageResult.imageUrl;
     const composedLayout = AdCompositionEngine.composeAd(
       brief,
@@ -145,17 +328,14 @@ export async function POST(req: Request) {
       uncroppedPhotoUrl,
       brief.aspectRatio
     );
-    // When live Meta Muse Image API synthesized a complete brochure flyer, use it directly
     const isLiveAiGeneration = !imageResult.isFallback;
     const usePureGeneratedFlyer = isLiveAiGeneration && (brief.fidelityMode !== "preserve_original" || !referenceImageUrl);
     composedLayout.finalComposedUrl = usePureGeneratedFlyer ? imageResult.imageUrl : undefined;
     composedLayout.isPureGeneratedImage = usePureGeneratedFlyer;
     composedLayout.adArchetypeId = archetypeId;
 
-    // 6. Evaluate Quality Scores & Pre-Flight Standards
     const qualityScore = AICreativeDirector.evaluateQualityScore(brief, composedLayout);
 
-    // 7. Persist to Database (creative_projects & creative_generations)
     let projectId: string | null = null;
     let generationId: string | null = null;
 
@@ -224,7 +404,6 @@ export async function POST(req: Request) {
     const genSafeId = generationId || `gen-${Date.now()}`;
     const projectSafeId = projectId || `proj-${Date.now()}`;
 
-    // 8. Generate 3 Variations
     const variations = AIVariationsEngine.generateVariations(
       brief,
       imageResult.imageUrl,

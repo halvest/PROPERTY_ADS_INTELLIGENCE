@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildAccountIntelligence, resolveEvaluationTarget } from "@/lib/ai/account-intelligence/engine";
+import {
+  buildAccountIntelligence,
+  resolveEvaluationTarget,
+  normalizeDateToTimezone,
+  insightFallsInPeriod,
+  meetsWinnerSignificanceFloor,
+} from "@/lib/ai/account-intelligence/engine";
 import { accountReportSupersedesLegacyDecision, resolveOperationalStatus } from "@/lib/ai/account-intelligence/status";
 
 function insight(adId: string, spend: number, impressions: number, conversations: number) {
@@ -389,5 +395,275 @@ describe("account intelligence", () => {
       parentTarget: 10_000,
       inheritExplicit: true,
     }).source).toBe("inherited");
+  });
+
+  it("enforces the 4 core anti-hallucination safeguards (Golden Offer, Clickbait Traffic Leak, Material Waste Score 0, Objective Isolation)", () => {
+    const report = buildAccountIntelligence({
+      accountName: "Akun Safeguard",
+      periodStart: "2026-10-01",
+      periodEnd: "2026-10-14",
+      durationDays: 14,
+      accountCampaignTargetCpr: 15_000,
+      campaigns: [
+        { id: "c-gold", providerId: "101", name: "Golden Offer CTWA", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+        { id: "c-leak", providerId: "102", name: "Clickbait Leak", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+        { id: "c-waste", providerId: "103", name: "Material Waste", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+        { id: "c-like", providerId: "104", name: "Cheap Likes", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+      ],
+      ads: [
+        { id: "a-gold", providerId: "a101", name: "Ad Golden", status: "ACTIVE", campaignId: "c-gold" },
+        { id: "a-leak", providerId: "a102", name: "Ad Clickbait", status: "ACTIVE", campaignId: "c-leak" },
+        { id: "a-waste", providerId: "a103", name: "Ad Waste", status: "ACTIVE", campaignId: "c-waste" },
+        { id: "a-like", providerId: "a104", name: "Ad Likes", status: "ACTIVE", campaignId: "c-like" },
+      ],
+      insights: [
+        // 1. Golden Offer: CTR 0.5% (< 0.8%), 50 link clicks -> 20 chats (CVR 40% > 20%), spend 200k -> CPR 10k (<= 15k target)
+        {
+          ...insight("a-gold", 200_000, 10_000, 20),
+          link_clicks: 50,
+        },
+        // 2. Traffic Leak (Clickbait): CTR 2.0% (> 1.5%), 200 link clicks -> 1 chat (CVR 0.5% < 2%), spend 150k
+        {
+          ...insight("a-leak", 150_000, 10_000, 1),
+          link_clicks: 200,
+        },
+        // 3. Material Waste: Spend 150k (>= 100k), 0 results -> score.total forced to 0
+        {
+          ...insight("a-waste", 150_000, 5_000, 0),
+          link_clicks: 15,
+        },
+        // 4. Cheap Engagement (post_engagement action type, Rp 30 per like)
+        {
+          ad_id: "a-like",
+          spend: 30_000,
+          impressions: 10_000,
+          clicks: 1_200,
+          link_clicks: 50,
+          reach: null,
+          conversions: 1_000,
+          date_start: "2026-10-01",
+          action_breakdown: { post_engagement: 1_000 },
+          conversion_action_type: "post_engagement",
+        },
+      ],
+    });
+
+    // Safeguard 1: Objective & Action Type Isolation (post_engagement vs messaging)
+    expect(report.analysis_metadata.result_comparability).toBe("ACCOUNT_RESULT_NOT_COMPARABLE");
+    expect(report.account_summary.blended_cpr).toBeNull();
+
+    // Safeguard 3A: Creative Bottleneck (Golden Offer) detected
+    expect(
+      report.intelligence.key_findings.some((f) =>
+        f.diagnosis.includes("Penawaran (Offer/CVR) sangat kuat, tetapi materi visual gagal menarik klik")
+      )
+    ).toBe(true);
+
+    // Safeguard 3B: Traffic Leak (Clickbait) detected
+    expect(
+      report.intelligence.key_findings.some((f) =>
+        f.diagnosis.includes("Iklan bersifat clickbait. Banyak klik tetapi audiens langsung keluar dari Landing Page/WhatsApp")
+      )
+    ).toBe(true);
+
+    // Safeguard 4: Material Waste forces total score to 0 and cpr to null
+    const wasteCampaign = report.campaign_rankings.find((c) => c.name === "Material Waste");
+    expect(wasteCampaign?.cpr).toBeNull();
+    expect(wasteCampaign?.score.total).toBe(0);
+    expect(wasteCampaign?.category).toBe("UNDERPERFORMING");
+  });
+
+  describe("Audit v2.1 Patches (Production Hardening)", () => {
+    it("PATCH 1: safely normalizes timezone and prevents UTC truncation drift (P0)", () => {
+      // 23:00 UTC on Oct 1st is 06:00 AM on Oct 2nd in Asia/Jakarta (UTC+7)
+      const lateNightUtc = "2026-10-01T23:00:00Z";
+      const normalizedJakarta = normalizeDateToTimezone(lateNightUtc, "Asia/Jakarta");
+      expect(normalizedJakarta).toBe("2026-10-02");
+
+      // Verify insightFallsInPeriod correctly identifies it as Oct 2nd in Jakarta
+      expect(insightFallsInPeriod({ date_start: lateNightUtc }, "2026-10-02", "2026-10-02", "Asia/Jakarta")).toBe(true);
+      expect(insightFallsInPeriod({ date_start: lateNightUtc }, "2026-10-01", "2026-10-01", "Asia/Jakarta")).toBe(false);
+
+      // Verify buildAccountIntelligence retains it for Oct 2nd period
+      const report = buildAccountIntelligence({
+        accountName: "Timezone Audit",
+        periodStart: "2026-10-02",
+        periodEnd: "2026-10-02",
+        timezone: "Asia/Jakarta",
+        durationDays: 1,
+        campaigns: [{ id: "c1", providerId: "1", name: "C1", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" }],
+        ads: [{ id: "a1", providerId: "a1", name: "A1", status: "ACTIVE", campaignId: "c1" }],
+        insights: [
+          {
+            ...insight("a1", 100_000, 5_000, 10),
+            date_start: lateNightUtc,
+          },
+        ],
+      });
+      expect(report.campaign_rankings.length).toBe(1);
+      expect(report.account_summary.total_spend).toBe(100_000);
+    });
+
+    it("PATCH 2: enforces link_clicks >= 30 noise floor on Golden Offer diagnosis (P0)", () => {
+      // Scenario A: Micro-sample (4 clicks, 1 conversion = 25% CVR, CTR 0.4%)
+      // MUST NOT trigger Golden Offer finding
+      const microSampleReport = buildAccountIntelligence({
+        accountName: "Noise Floor Test",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-14",
+        durationDays: 14,
+        accountCampaignTargetCpr: 15_000,
+        campaigns: [
+          { id: "c1", providerId: "1", name: "Micro Noise", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+          { id: "c2", providerId: "2", name: "Stable Normal", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+        ],
+        ads: [
+          { id: "a1", providerId: "a1", name: "Ad Micro", status: "ACTIVE", campaignId: "c1" },
+          { id: "a2", providerId: "a2", name: "Ad Normal", status: "ACTIVE", campaignId: "c2" },
+        ],
+        insights: [
+          {
+            ...insight("a1", 10_000, 1_000, 1),
+            link_clicks: 4, // < 30 noise floor!
+          },
+          {
+            ...insight("a2", 200_000, 10_000, 15),
+            link_clicks: 150,
+          },
+        ],
+      });
+      expect(
+        microSampleReport.intelligence.key_findings.some((f) =>
+          f.title.includes("Creative Bottleneck (Golden Offer)")
+        )
+      ).toBe(false);
+
+      // Scenario B: Robust sample (35 clicks, 10 conversions = 28.57% CVR, CTR 0.5%, CPR 10k <= 15k target)
+      // MUST trigger Golden Offer finding
+      const robustSampleReport = buildAccountIntelligence({
+        accountName: "Noise Floor Test",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-14",
+        durationDays: 14,
+        accountCampaignTargetCpr: 15_000,
+        campaigns: [
+          { id: "c1", providerId: "1", name: "Robust Golden", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+          { id: "c2", providerId: "2", name: "Stable Normal", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+        ],
+        ads: [
+          { id: "a1", providerId: "a1", name: "Ad Robust", status: "ACTIVE", campaignId: "c1" },
+          { id: "a2", providerId: "a2", name: "Ad Normal", status: "ACTIVE", campaignId: "c2" },
+        ],
+        insights: [
+          {
+            ...insight("a1", 100_000, 7_000, 10),
+            link_clicks: 35, // >= 30 passes noise floor!
+          },
+          {
+            ...insight("a2", 200_000, 10_000, 15),
+            link_clicks: 150,
+          },
+        ],
+      });
+      expect(
+        robustSampleReport.intelligence.key_findings.some((f) =>
+          f.title.includes("Creative Bottleneck (Golden Offer)")
+        )
+      ).toBe(true);
+    });
+
+    it("PATCH 3: enforces 10 results and 3x target CPR significance floor, capping 1-9 results at STABLE (P1)", () => {
+      // Direct helper test
+      expect(meetsWinnerSignificanceFloor(9, 100_000, 10_000)).toBe(false); // results < 10
+      expect(meetsWinnerSignificanceFloor(10, 25_000, 10_000)).toBe(false); // spend < 3 * 10_000 = 30_000
+      expect(meetsWinnerSignificanceFloor(10, 50_000, 10_000)).toBe(true);  // results >= 10 and spend >= 3x target
+
+      // Engine ranking test: Compare 7 results vs 15 results
+      const report = buildAccountIntelligence({
+        accountName: "Floor Test",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-14",
+        durationDays: 14,
+        accountCampaignTargetCpr: 10_000,
+        campaigns: [
+          { id: "c-mid", providerId: "1", name: "Mid Sample (7 results)", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+          { id: "c-high", providerId: "2", name: "High Sample (15 results)", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+        ],
+        ads: [
+          { id: "a-mid", providerId: "a1", name: "Ad Mid", status: "ACTIVE", campaignId: "c-mid" },
+          { id: "a-high", providerId: "a2", name: "Ad High", status: "ACTIVE", campaignId: "c-high" },
+        ],
+        insights: [
+          {
+            ...insight("a-mid", 70_000, 5_000, 7),
+            link_clicks: 100,
+          },
+          {
+            ...insight("a-high", 150_000, 10_000, 15),
+            link_clicks: 200,
+          },
+        ],
+      });
+
+      const midCampaign = report.campaign_rankings.find((c) => c.id === "c-mid");
+      const highCampaign = report.campaign_rankings.find((c) => c.id === "c-high");
+
+      // Mid campaign with 7 results cannot be TOP_PERFORMER or EFFICIENT; capped at STABLE
+      expect(midCampaign?.category).toBe("STABLE");
+      expect(midCampaign?.category).not.toBe("TOP_PERFORMER");
+      expect(midCampaign?.category).not.toBe("EFFICIENT");
+
+      // High campaign with 15 results and sufficient spend achieves EFFICIENT / TOP_PERFORMER
+      expect(["TOP_PERFORMER", "EFFICIENT"]).toContain(highCampaign?.category);
+      expect(highCampaign?.category).not.toBe("STABLE");
+    });
+
+    it("PATCH 4: detects CBO spend discrepancy > 5% between campaign and ad insights (P1)", () => {
+      // Discrepancy > 5%: Campaign spend 1,000,000 vs Ad insights sum 800,000 (20% diff)
+      const divergentReport = buildAccountIntelligence({
+        accountName: "CBO Discrepancy Test",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-14",
+        durationDays: 14,
+        campaigns: [
+          { id: "c1", providerId: "1", name: "CBO Campaign", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT", spend: 1_000_000 },
+        ],
+        ads: [
+          { id: "a1", providerId: "a1", name: "Ad A1", status: "ACTIVE", campaignId: "c1" },
+        ],
+        insights: [
+          insight("a1", 800_000, 20_000, 50),
+        ],
+      });
+
+      expect(
+        divergentReport.data_quality.warnings.some((w) =>
+          w.includes("Terdeteksi selisih pembelanjaan antara level Iklan dan Kampanye. Metrik dihitung berdasarkan data level iklan.")
+        )
+      ).toBe(true);
+
+      // Discrepancy <= 5%: Campaign spend 1,000,000 vs Ad insights sum 980,000 (2% diff)
+      const matchingReport = buildAccountIntelligence({
+        accountName: "CBO Match Test",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-14",
+        durationDays: 14,
+        campaigns: [
+          { id: "c1", providerId: "1", name: "CBO Campaign", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT", spend: 1_000_000 },
+        ],
+        ads: [
+          { id: "a1", providerId: "a1", name: "Ad A1", status: "ACTIVE", campaignId: "c1" },
+        ],
+        insights: [
+          insight("a1", 980_000, 20_000, 50),
+        ],
+      });
+
+      expect(
+        matchingReport.data_quality.warnings.some((w) =>
+          w.includes("Terdeteksi selisih pembelanjaan antara level Iklan dan Kampanye")
+        )
+      ).toBe(false);
+    });
   });
 });

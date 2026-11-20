@@ -120,6 +120,13 @@ export interface AccountInsightInput extends AdInsightRowLike {
   ad_id: string;
 }
 
+export type FunnelSignal =
+  | "golden_offer"
+  | "traffic_leak"
+  | "material_waste"
+  | "fatigue"
+  | "normal";
+
 export interface RankedCampaign {
   rank: number;
   id: string;
@@ -149,6 +156,10 @@ export interface RankedCampaign {
   reason: string;
   action: IntelligenceAction;
   performanceBasis: "active_delivery" | "historical_paused";
+  funnelSignal?: FunnelSignal;
+  diagnosisLabel?: string;
+  summaryShort?: string;
+  actionLabel?: string;
 }
 
 export interface RankedAd {
@@ -180,6 +191,37 @@ export interface RankedAd {
   reason: string;
   action: IntelligenceAction;
   performanceBasis: "active_delivery" | "historical_paused";
+  funnelSignal?: FunnelSignal;
+  diagnosisLabel?: string;
+  summaryShort?: string;
+  actionLabel?: string;
+}
+
+export interface ObjectiveKindBreakdownItem {
+  kind: string;
+  label: string;
+  shortUnit: string;
+  spend: number;
+  results: number;
+  cpr: number | null;
+  campaignCount: number;
+}
+
+export interface PriorityActionItem {
+  objectId: string;
+  providerId: string;
+  objectLevel: "campaign" | "ad";
+  objectName: string;
+  parentName?: string;
+  priority: "CRITICAL" | "HIGH" | "MEDIUM";
+  action: IntelligenceAction;
+  actionLabel: string;
+  funnelSignal: FunnelSignal;
+  spend: number;
+  results: number | null;
+  cpr: number | null;
+  summaryShort: string;
+  diagnosisLabel: string;
 }
 
 export interface AccountRecommendation {
@@ -247,9 +289,22 @@ export interface AccountIntelligenceReport {
     total_link_clicks: number | null;
     result_label: string | null;
     results_comparable: boolean;
+    result_breakdown_by_kind?: ObjectiveKindBreakdownItem[];
+    health_counts?: {
+      activeCount: number;
+      scaleCount: number;
+      wasteCount: number;
+      optimizeCount: number;
+      holdCount: number;
+      historicalCount: number;
+      historicalGoodCount: number;
+      historicalNeutralCount: number;
+      historicalUnderperformingCount: number;
+    };
   };
   campaign_rankings: RankedCampaign[];
   ad_rankings: RankedAd[];
+  priority_actions?: PriorityActionItem[];
   budget_analysis: {
     total_spend: number;
     allocated_budget: null;
@@ -527,6 +582,7 @@ function eligibleAction(input: {
   if (input.effective === "UNKNOWN") return "STATUS_UNKNOWN";
   if (input.effective === "PAUSED") {
     if (input.insufficient) return "KEEP_PAUSED";
+    if (input.targetStatus === "BETTER" || input.targetStatus === "ON_TARGET") return "REACTIVATION_CANDIDATE";
     return "HISTORICAL_REVIEW";
   }
   return input.activeAction;
@@ -557,9 +613,213 @@ function money(value: number): string {
   return `Rp ${Math.round(value).toLocaleString("id-ID")}`;
 }
 
+export function compactRupiah(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) {
+    return `Rp ${(value / 1_000_000_000).toLocaleString("id-ID", { maximumFractionDigits: 1 })}M`;
+  }
+  if (abs >= 1_000_000) {
+    return `Rp ${(value / 1_000_000).toLocaleString("id-ID", { maximumFractionDigits: 1 })}jt`;
+  }
+  if (abs >= 1_000) {
+    return `Rp ${Math.round(value / 1_000).toLocaleString("id-ID")}rb`;
+  }
+  return `Rp ${Math.round(value).toLocaleString("id-ID")}`;
+}
+
+export function shortResultUnitLabel(resultKind: string): string {
+  switch (resultKind) {
+    case "messaging":
+      return "WA";
+    case "leads":
+      return "Leads";
+    case "post_engagement":
+      return "Interaksi";
+    case "link_click":
+      return "Klik";
+    case "video_view":
+      return "Views";
+    default:
+      return "hasil";
+  }
+}
+
+function fmtPctId(val: number | null | undefined): string {
+  if (val === null || val === undefined || !Number.isFinite(val)) return "—";
+  return `${val.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+}
+
+function detectFunnelSignal(input: {
+  spend: number;
+  impressions: number;
+  results: number | null;
+  cpr: number | null;
+  ctr: number | null;
+  cvr: number | null;
+  linkClicks: number | null;
+  targetValue: number | null;
+  thresholds: RankingThresholds;
+}): FunnelSignal {
+  const res = input.results ?? 0;
+  const ctr = input.ctr;
+  const cvr = input.cvr;
+  const clicks = input.linkClicks ?? 0;
+
+  if (materialZeroResult(input.results, input.spend, input.impressions, input.thresholds)) {
+    return "material_waste";
+  }
+
+  const isProfitableCpr =
+    input.cpr !== null &&
+    input.cpr > 0 &&
+    (input.targetValue !== null ? input.cpr <= input.targetValue : res >= 5);
+
+  if (
+    clicks >= 30 &&
+    ctr !== null &&
+    ctr < 0.8 &&
+    cvr !== null &&
+    cvr >= 20 &&
+    isProfitableCpr
+  ) {
+    return "golden_offer";
+  }
+
+  if (
+    input.spend >= 100_000 &&
+    ctr !== null &&
+    ((ctr > 1.5 && (cvr ?? 0) < 2) || (ctr >= 1.2 && res === 0))
+  ) {
+    return "traffic_leak";
+  }
+
+  return "normal";
+}
+
+function buildCompactDiagnosisCopy(input: {
+  effectiveStatus: OperationalStatus;
+  funnelSignal: FunnelSignal;
+  category: CampaignRankCategory | AdRankCategory;
+  action: IntelligenceAction;
+  spend: number;
+  results: number | null;
+  cpr: number | null;
+  ctr: number | null;
+  cvr: number | null;
+  target: ResolvedTarget;
+  minResultsForWinner: number;
+}): {
+  diagnosisLabel: string;
+  summaryShort: string;
+  actionLabel: string;
+} {
+  const res = input.results ?? 0;
+  const spendStr = compactRupiah(input.spend);
+  const cprStr = compactRupiah(input.cpr);
+
+  if (input.effectiveStatus !== "ACTIVE") {
+    if (input.action === "REACTIVATION_CANDIDATE") {
+      return {
+        diagnosisLabel: `Kandidat Reaktivasi · ${res} hasil @ ${cprStr}`,
+        summaryShort: `Kandidat Reaktivasi · CPR ${cprStr} berada pada atau di bawah target. Masukkan ke pertimbangan aktivasi manual.`,
+        actionLabel: "Kandidat Reaktivasi",
+      };
+    }
+    return {
+      diagnosisLabel: "Nonaktif (Referensi Historis)",
+      summaryShort: "Nonaktif (Referensi Historis) · Tidak memerlukan tindakan operasional.",
+      actionLabel: "Arsip Historis",
+    };
+  }
+
+  if (input.funnelSignal === "material_waste") {
+    return {
+      diagnosisLabel: `Spend Tanpa Hasil · ${spendStr} (0 konversi)`,
+      summaryShort: `Spend Tanpa Hasil · ${spendStr} (0 konversi) — Hentikan penayangan.`,
+      actionLabel: "Nonaktifkan",
+    };
+  }
+
+  if (input.funnelSignal === "golden_offer") {
+    return {
+      diagnosisLabel: "Konversi Tinggi, CTR Rendah",
+      summaryShort: `Konversi Tinggi, CTR Rendah · CTR ${fmtPctId(input.ctr)} / CVR ${fmtPctId(input.cvr)} — Pertahankan penawaran, uji variasi hook visual.`,
+      actionLabel: "Optimasi",
+    };
+  }
+
+  if (input.funnelSignal === "traffic_leak") {
+    return {
+      diagnosisLabel: "Drop-off Pasca-Klik",
+      summaryShort: `Drop-off Pasca-Klik · CTR ${fmtPctId(input.ctr)} / CVR ${fmtPctId(input.cvr)} — Evaluasi kesesuaian pesan iklan dengan halaman tujuan/WhatsApp.`,
+      actionLabel: "Optimasi",
+    };
+  }
+
+  if (input.action === "SCALE") {
+    return {
+      diagnosisLabel: `Efisien (Di Bawah Target) · ${res} hasil @ ${cprStr}`,
+      summaryShort: `Efisien (Di Bawah Target) · ${res} hasil @ ${cprStr} — Naikkan anggaran bertahap 15–20%.`,
+      actionLabel: "Naikkan Budget",
+    };
+  }
+
+  if (
+    input.category === "INSUFFICIENT_DATA" ||
+    input.category === "GATHERING_DATA" ||
+    res < input.minResultsForWinner
+  ) {
+    return {
+      diagnosisLabel: `Observasi Sampel · ${res}/${input.minResultsForWinner} konversi`,
+      summaryShort: `Observasi Sampel · ${res}/${input.minResultsForWinner} konversi minimum — Tahan perubahan hingga sampel memadai.`,
+      actionLabel: "Observasi",
+    };
+  }
+
+  if (
+    input.action === "PAUSE" ||
+    input.action === "REDUCE_BUDGET" ||
+    input.category === "UNDERPERFORMING" ||
+    input.category === "LOSING" ||
+    input.target.status === "WORSE"
+  ) {
+    const isPause = input.action === "PAUSE";
+    return {
+      diagnosisLabel: `Di Atas Target CPR · ${cprStr}/hasil`,
+      summaryShort: isPause
+        ? `Di Atas Target CPR · ${res} hasil @ ${cprStr} — Hentikan penayangan.`
+        : `Di Atas Target CPR · ${res} hasil @ ${cprStr} — Evaluasi materi iklan dan segmentasi audiens.`,
+      actionLabel: isPause ? "Nonaktifkan" : "Kurangi Budget",
+    };
+  }
+
+  if (input.action === "OPTIMIZE" || input.category === "NEEDS_OPTIMIZATION") {
+    return {
+      diagnosisLabel: `Di Atas Target CPR · ${cprStr}/hasil`,
+      summaryShort: `Di Atas Target CPR · ${res} hasil @ ${cprStr} — Evaluasi materi iklan dan segmentasi audiens.`,
+      actionLabel: "Optimasi",
+    };
+  }
+
+  if (input.target.value !== null && input.target.status !== "TARGET_NOT_CONFIGURED") {
+    return {
+      diagnosisLabel: `Stabil Sesuai Target · ${res} hasil @ ${cprStr}`,
+      summaryShort: `Stabil Sesuai Target · Pertahankan struktur dan pantau frekuensi.`,
+      actionLabel: "Pertahankan",
+    };
+  }
+
+  return {
+    diagnosisLabel: `Performa Stabil · ${res} hasil @ ${cprStr}`,
+    summaryShort: `Performa Stabil · Pertahankan struktur dan pantau frekuensi.`,
+    actionLabel: "Pertahankan",
+  };
+}
+
 function recommendationCopy(action: IntelligenceAction, longPeriod: boolean): string {
   if (action === "REACTIVATION_CANDIDATE") {
-    return "Histori periode ini lebih efisien daripada target. Data ini tidak membuktikan performa jika objek diaktifkan kembali, dan bukan saran memakai anggaran lama.";
+    return "Histori periode ini berada pada atau di bawah target. Masukkan objek ini sebagai kandidat pertimbangan reaktivasi. Aktivasi tetap manual, dan anggaran uji diisi baru karena anggaran lama tidak tersimpan.";
   }
   if (action === "HISTORICAL_REVIEW") return "Tinjau angka periode ini sebagai histori. Jangan perlakukan objek sebagai sedang berjalan.";
   if (action === "KEEP_PAUSED") return "Biarkan dijeda. Sampel pada periode ini belum cukup untuk meninjau aktivasi.";
@@ -855,6 +1115,30 @@ export function buildAccountIntelligence(input: {
           ? "Target campaign belum dikonfigurasi dan tidak ada campaign sejenis sebagai pembanding, jadi label peringkat tidak dipakai."
           : "Target campaign belum dikonfigurasi. Peringkat hanya dibanding campaign dengan jenis hasil yang sama."
         : `Target campaign ${money(target.value || 0)} (${target.status}).`;
+      const funnelSignal = detectFunnelSignal({
+        spend: item.metrics.spend,
+        impressions: item.metrics.impressions,
+        results: item.metrics.results,
+        cpr: item.metrics.cpr,
+        ctr: item.metrics.ctr,
+        cvr: item.metrics.cvr,
+        linkClicks: item.metrics.linkClicks,
+        targetValue: target.value,
+        thresholds,
+      });
+      const compactCopy = buildCompactDiagnosisCopy({
+        effectiveStatus: resolved.effective,
+        funnelSignal,
+        category,
+        action,
+        spend: item.metrics.spend,
+        results: item.metrics.results,
+        cpr: item.metrics.cpr,
+        ctr: item.metrics.ctr,
+        cvr: item.metrics.cvr,
+        target,
+        minResultsForWinner: thresholds.minResultsForWinner,
+      });
       return {
         rank: 0,
         id: item.campaign.id,
@@ -884,6 +1168,10 @@ export function buildAccountIntelligence(input: {
         reason: `${paused ? "Status operasional dijeda. Angka berikut hanya performa di dalam periode, bukan bukti iklan sedang berjalan. " : ""}${cprText}, hasil ${item.metrics.results ?? 0}, belanja ${money(item.metrics.spend)}, CTR tautan ${item.metrics.ctr ?? "tidak tersedia"}%. ${targetText} Skor ${score.total} (CPR ${score.cpr}, volume ${score.volume}, CTR ${score.ctr}, CPC ${score.cpc}, keyakinan ${score.confidence}).`,
         action,
         performanceBasis: basis,
+        funnelSignal,
+        diagnosisLabel: compactCopy.diagnosisLabel,
+        summaryShort: compactCopy.summaryShort,
+        actionLabel: compactCopy.actionLabel,
       };
     })
     .sort((a, b) => b.score.total - a.score.total || (b.results ?? 0) - (a.results ?? 0) || a.id.localeCompare(b.id))
@@ -914,7 +1202,6 @@ export function buildAccountIntelligence(input: {
         adSetStatusKnown: ad.adSetStatusKnown === true,
         metaEffectiveStatus: ad.metaEffectiveStatus,
       });
-      const paused = resolved.effective !== "ACTIVE";
       const action = eligibleAction({
         effective: resolved.effective,
         category,
@@ -925,6 +1212,30 @@ export function buildAccountIntelligence(input: {
       const targetText = target.status === "TARGET_NOT_CONFIGURED"
         ? "Target ad belum dikonfigurasi."
         : `Target ad ${money(target.value || 0)} (${target.status}).`;
+      const funnelSignal = detectFunnelSignal({
+        spend: metrics.spend,
+        impressions: metrics.impressions,
+        results: metrics.results,
+        cpr: metrics.cpr,
+        ctr: metrics.ctr,
+        cvr: metrics.cvr,
+        linkClicks: metrics.linkClicks,
+        targetValue: target.value,
+        thresholds,
+      });
+      const compactCopy = buildCompactDiagnosisCopy({
+        effectiveStatus: resolved.effective,
+        funnelSignal,
+        category,
+        action,
+        spend: metrics.spend,
+        results: metrics.results,
+        cpr: metrics.cpr,
+        ctr: metrics.ctr,
+        cvr: metrics.cvr,
+        target,
+        minResultsForWinner: thresholds.minResultsForWinner,
+      });
       return {
         rank: 0,
         id: ad.id,
@@ -954,6 +1265,10 @@ export function buildAccountIntelligence(input: {
         reason: `${resolved.effective === "PAUSED" ? "Status efektif dijeda. Angka ini histori periode, bukan delivery aktif, dan bukan kelayakan aktivasi. " : ""}${metrics.impressions} impresi menghasilkan ${metrics.linkClicks ?? "tidak tersedia"} klik tautan, CTR ${metrics.ctr ?? "tidak tersedia"}%, CPC ${metrics.cpc === null ? "tidak tersedia" : money(metrics.cpc)}, hasil ${metrics.results ?? 0}, CPR ${metrics.cpr === null ? "tidak tersedia" : money(metrics.cpr)}. ${targetText} Isi creative, audience, dan placement tidak ada pada evidence, jadi tidak dinilai.`,
         action,
         performanceBasis: resolved.effective === "ACTIVE" ? "active_delivery" as const : "historical_paused" as const,
+        funnelSignal,
+        diagnosisLabel: compactCopy.diagnosisLabel,
+        summaryShort: compactCopy.summaryShort,
+        actionLabel: compactCopy.actionLabel,
       };
     })
     .sort((a, b) => b.score.total - a.score.total || (b.results ?? 0) - (a.results ?? 0) || a.id.localeCompare(b.id))
@@ -1064,6 +1379,135 @@ export function buildAccountIntelligence(input: {
     item: `${item.action} · ${item.objectName} (${item.providerId})`,
   }));
 
+  // Build per-objective breakdown (without mixing unlike result kinds)
+  const kindBuckets = new Map<string, ObjectiveKindBreakdownItem>();
+  for (const c of rankedCampaigns) {
+    const existing = kindBuckets.get(c.resultKind) || {
+      kind: c.resultKind,
+      label: c.resultLabel,
+      shortUnit: shortResultUnitLabel(c.resultKind),
+      spend: 0,
+      results: 0,
+      cpr: null,
+      campaignCount: 0,
+    };
+    existing.spend = Math.round((existing.spend + c.spend) * 100) / 100;
+    existing.results += c.results ?? 0;
+    existing.campaignCount += 1;
+    existing.cpr = existing.results > 0 ? Number((existing.spend / existing.results).toFixed(2)) : null;
+    kindBuckets.set(c.resultKind, existing);
+  }
+  const resultBreakdownByKind = Array.from(kindBuckets.values()).sort((a, b) => b.spend - a.spend);
+
+  // Build "Prioritas Tindakan" (strictly ACTIVE entities, ordered by financial impact)
+  // Order: 1) Spend Tanpa Hasil / Material Waste & Pause/Reduce Budget (largest spend first)
+  //        2) Golden Offer & Clickbait Traffic Leak (largest spend first)
+  //        3) Siap Scale (largest spend first)
+  //        4) Optimasi CPR (largest spend first)
+  const priorityCandidates: Array<PriorityActionItem & { sortBucket: number }> = [];
+  for (const item of [...rankedCampaigns, ...rankedAds]) {
+    if (item.effectiveStatus !== "ACTIVE" && item.action !== "REACTIVATION_CANDIDATE") continue;
+    const isAd = "campaignId" in item;
+    const sig = item.funnelSignal ?? "normal";
+    let sortBucket = 99;
+    let priority: PriorityActionItem["priority"] = "MEDIUM";
+
+    if (sig === "material_waste" || item.action === "PAUSE" || item.action === "REDUCE_BUDGET") {
+      sortBucket = 1;
+      priority = "CRITICAL";
+    } else if (sig === "golden_offer" || sig === "traffic_leak") {
+      sortBucket = 2;
+      priority = "HIGH";
+    } else if (item.action === "SCALE" || item.action === "REACTIVATION_CANDIDATE") {
+      sortBucket = 3;
+      priority = "HIGH";
+    } else if (item.action === "OPTIMIZE") {
+      sortBucket = 4;
+      priority = "MEDIUM";
+    } else {
+      continue;
+    }
+
+    priorityCandidates.push({
+      sortBucket,
+      objectId: item.id,
+      providerId: item.providerId,
+      objectLevel: isAd ? "ad" : "campaign",
+      objectName: item.name,
+      parentName: isAd ? item.campaignName : undefined,
+      priority,
+      action: item.action,
+      actionLabel: item.actionLabel || item.action,
+      funnelSignal: sig,
+      spend: item.spend,
+      results: item.results,
+      cpr: item.cpr,
+      summaryShort: item.summaryShort || item.reason,
+      diagnosisLabel: item.diagnosisLabel || item.category,
+    });
+  }
+
+  priorityCandidates.sort((a, b) => a.sortBucket - b.sortBucket || b.spend - a.spend);
+  const priorityActions: PriorityActionItem[] = priorityCandidates
+    .slice(0, 5)
+    .map(({ sortBucket: _bucket, ...rest }) => {
+      void _bucket;
+      return rest;
+    });
+
+  // Account health counts across active vs paused campaigns/ads (mutually exclusive & collectively exhaustive)
+  const activeRankedEntities = rankedCampaigns.length > 0 ? rankedCampaigns : rankedAds;
+  let activeCount = 0;
+  let scaleCount = 0;
+  let wasteCount = 0;
+  let optimizeCount = 0;
+  let holdCount = 0;
+  let historicalCount = 0;
+  let historicalGoodCount = 0;
+  let historicalNeutralCount = 0;
+  let historicalUnderperformingCount = 0;
+
+  for (const e of activeRankedEntities) {
+    if (e.effectiveStatus === "ACTIVE") {
+      activeCount += 1;
+      if (e.funnelSignal === "material_waste" || e.action === "PAUSE" || e.action === "REDUCE_BUDGET") {
+        wasteCount += 1;
+      } else if (e.action === "SCALE") {
+        scaleCount += 1;
+      } else if (
+        e.funnelSignal === "golden_offer" ||
+        e.funnelSignal === "traffic_leak" ||
+        e.action === "OPTIMIZE" ||
+        e.category === "NEEDS_OPTIMIZATION"
+      ) {
+        optimizeCount += 1;
+      } else {
+        holdCount += 1;
+      }
+    } else {
+      historicalCount += 1;
+      if (e.category === "TOP_PERFORMER" || e.category === "EFFICIENT" || e.category === "WINNER") {
+        historicalGoodCount += 1;
+      } else if (e.category === "UNDERPERFORMING" || e.category === "LOSING") {
+        historicalUnderperformingCount += 1;
+      } else {
+        historicalNeutralCount += 1;
+      }
+    }
+  }
+
+  const healthCounts = {
+    activeCount,
+    scaleCount,
+    wasteCount,
+    optimizeCount,
+    holdCount,
+    historicalCount,
+    historicalGoodCount,
+    historicalNeutralCount,
+    historicalUnderperformingCount,
+  };
+
   const inventoryAdStatus = input.ads.map((ad) => resolveOperationalStatus({
     configuredStatus: ad.status,
     campaignStatus: campaignById.get(ad.campaignId)?.status,
@@ -1124,9 +1568,12 @@ export function buildAccountIntelligence(input: {
       total_link_clicks: accountAgg.linkClicks,
       result_label: accountLabel,
       results_comparable: comparable,
+      result_breakdown_by_kind: resultBreakdownByKind,
+      health_counts: healthCounts,
     },
     campaign_rankings: rankedCampaigns,
     ad_rankings: rankedAds,
+    priority_actions: priorityActions,
     budget_analysis: {
       total_spend: totalSpend,
       allocated_budget: null,

@@ -141,4 +141,47 @@ describe("FetchGuard race protection", () => {
     expect([seqA1, seqB].every((s) => !guard.isCurrent(s))).toBe(true);
     expect(guard.isCurrent(seqA2)).toBe(true);
   });
+
+  it("simulates slow Account A (2000ms) followed by fast Account B (200ms) without stale overwrite or loading glitch", async () => {
+    const guard = new FetchGuard();
+    let activeUiAccountId: string | null = null;
+    let activeUiSpend: number | null = null;
+    let isLoading = false;
+
+    // 1. User clicks Account A (slow request)
+    const reqA = guard.begin();
+    isLoading = true;
+
+    // 2. 300ms later, user switches to Account B (fast request)
+    const reqB = guard.begin();
+    expect(reqA.signal.aborted).toBe(true);
+
+    // 3. Account B finishes first
+    const dataB = await getAdsIntelligenceData({
+      organizationId: ORG,
+      dateRange: "all",
+      adAccountId: "act_222",
+    });
+    if (!reqB.signal.aborted && guard.isCurrent(reqB.seq)) {
+      activeUiAccountId = dataB.adAccount?.id ?? null;
+      activeUiSpend = dataB.kpis.totalSpend;
+      isLoading = false;
+    }
+
+    // 4. Account A response arrives late — must be completely ignored
+    const dataA = await getAdsIntelligenceData({
+      organizationId: ORG,
+      dateRange: "all",
+      adAccountId: "act_111",
+    });
+    if (!reqA.signal.aborted && guard.isCurrent(reqA.seq)) {
+      activeUiAccountId = dataA.adAccount?.id ?? null;
+      activeUiSpend = dataA.kpis.totalSpend;
+      isLoading = false;
+    }
+
+    expect(activeUiAccountId).toBe("act_222");
+    expect(activeUiSpend).toBe(999);
+    expect(isLoading).toBe(false);
+  });
 });

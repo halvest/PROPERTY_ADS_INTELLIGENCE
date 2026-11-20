@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateOAuthCsrfState } from "@/lib/security/credential-crypto";
+import { resolveMetaOAuthRedirectUri } from "@/lib/meta/oauth-redirect";
 
 
 /**
@@ -57,15 +58,7 @@ export async function GET(request: NextRequest) {
     }
 
     const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v26.0";
-
-    // Determine authoritative redirect URI
-    let redirectUri = process.env.META_OAUTH_REDIRECT_URI?.trim();
-    if (!redirectUri) {
-      const appBaseUrl =
-        process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-        request.nextUrl.origin;
-      redirectUri = `${appBaseUrl.replace(/\/+$/, "")}/api/auth/meta/callback`;
-    }
+    const redirectUri = resolveMetaOAuthRedirectUri(request);
 
     // Generate signed anti-CSRF state token
     const stateToken = generateOAuthCsrfState({

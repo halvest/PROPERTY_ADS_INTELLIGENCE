@@ -5,6 +5,7 @@ import {
   WhatsAppVerificationStatus,
   BudgetDecisionKey,
 } from "@/app/api/ai/analyze-ad/route";
+import { CTWA_SYSTEM_PROMPT } from "@/lib/ai/ctwa-analysis/prompt";
 import fs from "fs";
 import path from "path";
 
@@ -122,6 +123,14 @@ describe("HASPRO AI: Meta Ads CTWA Property Sales Intelligence", () => {
     expect(costPerChatItem?.isValid).toBe(true);
     expect(costPerChatItem?.rawValue).toBe(costPerChat);
     expect(costPerChatItem?.formattedValue).toBe("Rp29.364 / chat");
+  });
+
+  it("uses the locked CTWA drawer prompt and isolated chat transcript tag", () => {
+    expect(CTWA_SYSTEM_PROMPT.includes("lockedDecision")).toBe(true);
+    expect(CTWA_SYSTEM_PROMPT.includes("<UNTRUSTED_CHAT_TRANSCRIPT>")).toBe(true);
+    expect(CTWA_SYSTEM_PROMPT.includes('"firstFailedFunnelStage"')).toBe(true);
+    expect(CTWA_SYSTEM_PROMPT.includes('"chain_of_thought"')).toBe(false);
+    expect(CTWA_SYSTEM_PROMPT.includes("PAGE_ANALYST")).toBe(false);
   });
 
   // 7. Keputusan Anggaran memiliki 5 opsi eksplisit

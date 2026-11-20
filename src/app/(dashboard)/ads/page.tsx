@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useToast } from "@/components/ui/Toast";
 import type { CampaignDetailData } from "@/components/dashboard/CampaignDetailWorkspace";
@@ -11,14 +10,12 @@ import { CampaignSearchableDropdown } from "@/components/dashboard/CampaignSearc
 import { AIAdsPerformanceAnalyst } from "@/components/dashboard/AIAdsPerformanceAnalyst";
 import { TrendsAndFunnelTab } from "@/components/ads/TrendsAndFunnelTab";
 import { FetchGuard } from "@/lib/ads/fetch-guard";
-import { parseDateRange } from "@/lib/ads/date-utils";
+import { formatDateInTimezone, parseDateRange } from "@/lib/ads/date-utils";
 import { formatOptionalNumber } from "@/lib/ads/display";
 import {
-  formatSmartAdIdentity,
   localizeDeliveryLabel,
   localizeResultLabel,
   localizeResultUnitLabel,
-  resolveAdResultMetric,
   translateMetaTerm,
 } from "@/lib/ads/result-metric";
 import { formatAccountMask, formatDisplayCurrency, syncFreshnessClass } from "@/lib/format/display-currency";
@@ -207,12 +204,12 @@ const ADS_PAGE_DICT = {
     workspaceNavAria: "Navigasi Workspace Iklan",
     tabInventory: "Inventaris & Performa Iklan",
     tabTrends: "Tren & Funnel CTWA",
-    tabAnalyst: "Analis Performa AI",
+    tabAnalyst: "Audit Performa Akun",
     funnelTab: "Funnel Konversi",
     deliveryTab: "Kesehatan Penayangan",
-    scopeCaption: "Metrik KPI di bawah merupakan agregat akun iklan terpilih pada rentang tanggal aktif.",
-    reachLabel: "Jangkauan Unik",
-    reachTooltip: "Jumlah akun unik yang dijangkau pada periode ini.",
+    scopeCaption: "KPI di bawah merupakan agregat akun iklan terpilih, pada periode terpilih (total akun sebelum filter tabel).",
+    reachLabel: "Jangkauan",
+    reachTooltip: "Jumlah akun unik yang dijangkau. Untuk periode lebih dari satu hari, nilai tidak ditampilkan karena data harian tidak dapat dijumlahkan untuk memperoleh jangkauan unik periode tersebut.",
     periodPrefix: "Periode",
     spend: "Total Belanja",
     spendDefaultHint: "Total belanja pada periode terpilih",
@@ -309,7 +306,7 @@ const ADS_PAGE_DICT = {
     workspaceNavAria: "Ads Workspace Navigation",
     tabInventory: "Ad Inventory & Performance",
     tabTrends: "Trends & CTWA Funnel",
-    tabAnalyst: "AI Performance Analyst",
+    tabAnalyst: "Account Performance Audit",
     funnelTab: "Conversion Funnel",
     deliveryTab: "Delivery Health",
     scopeCaption: "KPI metrics below represent the aggregate of the selected ad account for the active date range.",
@@ -413,26 +410,34 @@ export default function AdsIntelligencePage() {
   const [selectedAdAccountId, setSelectedAdAccountId] = useState<string>("");
 
   // Sorting & Pagination State
-  const [sortBy, setSortBy] = useState<
+  const [sortBy] = useState<
     "spend" | "linkClicks" | "linkCtr" | "linkCpc" | "impressions" | "results"
   >("spend");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [sortOrder] = useState<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = useState(1);
 
   // Selected Ad for Detail Drawer
   const [activeDetailAdId, setActiveDetailAdId] = useState<string | null>(null);
 
-  // Network & Reconciliation State
+  // Network & Reconciliation State (Sync state is strictly isolated per adAccountId)
   const [isLoading, setIsLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [diagnosticTab, setDiagnosticTab] = useState<"funnel" | "delivery">("funnel");
-  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [syncingByAccount, setSyncingByAccount] = useState<Record<string, boolean>>({});
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"inventory" | "trends" | "analyst">("inventory");
+  const handleSelectWorkspaceTab = useCallback((nextTab: "inventory" | "trends" | "analyst") => {
+    setActiveWorkspaceTab((prev) => (prev === nextTab ? prev : nextTab));
+  }, []);
   const [apiData, setApiData] = useState<AdsIntelligenceApiResponse["data"] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const fetchGuardRef = useRef(new FetchGuard());
   const adsCacheRef = useRef(new Map<string, AdsIntelligenceApiResponse["data"]>());
   const autoSyncAttemptedAtRef = useRef(new Map<string, number>());
+  const activeAccountIdRef = useRef<string>("");
+
+  const currentEffectiveAccountId = selectedAdAccountId || apiData?.adAccount?.id || "";
+  useEffect(() => {
+    activeAccountIdRef.current = currentEffectiveAccountId;
+  }, [currentEffectiveAccountId]);
+  const isSyncing = Boolean(currentEffectiveAccountId && syncingByAccount[currentEffectiveAccountId]);
 
   // Single guarded fetch path. Starting a fetch aborts the previous one and
   // invalidates its sequence, so a stale response for a previously selected
@@ -475,7 +480,7 @@ export default function AdsIntelligencePage() {
           }
         }
       } catch (err) {
-        if (!guard.isCurrent(seq)) return; // superseded or aborted request
+        if (signal.aborted || !guard.isCurrent(seq)) return; // superseded or aborted request
         setApiData(cached || null);
         setLoadError(cached ? null : locale === "id" ? "Kesalahan jaringan saat memuat data iklan." : "Network error while loading ad data.");
         if (!opts.silent) {
@@ -486,13 +491,11 @@ export default function AdsIntelligencePage() {
           );
         }
       } finally {
-        if (guard.isCurrent(seq)) setIsLoading(false);
+        if (!signal.aborted && guard.isCurrent(seq)) setIsLoading(false);
       }
     },
     [dateRange, selectedCampaignId, campaignStatusFilter, deliveryStatusFilter, objectiveFilter, selectedAdAccountId, addToast, locale]
   );
-
-  const refreshData = useCallback(() => void fetchAds(), [fetchAds]);
 
   // Context changes clear the previous account's data immediately so it is
   // never displayed under the new account's identity while loading.
@@ -509,10 +512,11 @@ export default function AdsIntelligencePage() {
     silent = false,
     requestedRange?: { period: string; since?: string; until?: string }
   ) => {
-    if (isSyncing || !apiData?.canSync || !apiData.adAccount) return;
+    const targetId = selectedAdAccountId || apiData?.adAccount?.id || "";
+    if (!targetId || syncingByAccount[targetId] || !apiData?.canSync || !apiData.adAccount) return;
     const syncPeriod = requestedRange?.period || dateRange;
     if (syncPeriod === "all") return;
-    setIsSyncing(true);
+    setSyncingByAccount((prev) => ({ ...prev, [targetId]: true }));
     try {
       const customRange = requestedRange?.since && requestedRange.until
         ? { since: requestedRange.since, until: requestedRange.until }
@@ -526,22 +530,22 @@ export default function AdsIntelligencePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          targetAdAccountId: selectedAdAccountId || apiData.adAccount.id,
+          targetAdAccountId: targetId,
           ...(datePreset ? { datePreset } : {}),
           ...(syncTimeRange.since && syncTimeRange.until ? { timeRange: syncTimeRange } : {}),
         }),
       });
       const data = await res.json();
+      const isStillActiveAccount = activeAccountIdRef.current === targetId;
       const liveAccountInsight = data.syncResult?.accountInsights?.[0] as {
         reach?: string | number | null;
         frequency?: string | number | null;
         actions?: Array<{ action_type: string; value: string }>;
       } | undefined;
       const fullAccountScope = selectedCampaignId === "all" && campaignStatusFilter === "all" && deliveryStatusFilter === "all" && objectiveFilter === "all";
-      if (liveAccountInsight && fullAccountScope) {
+      if (liveAccountInsight && fullAccountScope && isStillActiveAccount) {
         const reach = liveAccountInsight.reach == null ? null : Number(liveAccountInsight.reach);
         const frequency = liveAccountInsight.frequency == null ? null : Number(liveAccountInsight.frequency);
-        const targetId = selectedAdAccountId || apiData.adAccount.id;
         const applyLiveMetrics = (current: AdsIntelligenceApiResponse["data"]) => ({
           ...current,
           lastSyncedAt: data.status === "success" ? data.syncResult?.syncedAt || current.lastSyncedAt : current.lastSyncedAt,
@@ -580,7 +584,9 @@ export default function AdsIntelligencePage() {
               : `Meta Ads synced: ${count} records processed and saved to the database.`
           );
         }
-        if (!liveAccountInsight || !fullAccountScope) await fetchAds({ silent: true });
+        if ((!liveAccountInsight || !fullAccountScope) && activeAccountIdRef.current === targetId) {
+          await fetchAds({ silent: true });
+        }
       } else if (res.ok && data.status === "partial") {
         const insights = data.syncResult?.insightsSynced ?? 0;
         if (!silent) addToast(
@@ -590,7 +596,9 @@ export default function AdsIntelligencePage() {
             ? `Data akun diperbarui, tetapi sinkronisasi belum lengkap. Insights tersimpan: ${insights}. Coba lagi atau periksa detail koneksi Meta.`
             : `Account data updated, but sync is incomplete. Insights saved: ${insights}. Try again or check Meta connection details.`
         );
-        if (!liveAccountInsight || !fullAccountScope) await fetchAds({ silent: true });
+        if ((!liveAccountInsight || !fullAccountScope) && activeAccountIdRef.current === targetId) {
+          await fetchAds({ silent: true });
+        }
       } else {
         if (!silent) addToast(
           "error",
@@ -605,9 +613,14 @@ export default function AdsIntelligencePage() {
         err instanceof Error ? err.message : "Network error"
       );
     } finally {
-      setIsSyncing(false);
+      setSyncingByAccount((prev) => {
+        if (!prev[targetId]) return prev;
+        const next = { ...prev };
+        delete next[targetId];
+        return next;
+      });
     }
-  }, [isSyncing, apiData, dateRange, selectedAdAccountId, selectedCampaignId, campaignStatusFilter, deliveryStatusFilter, objectiveFilter, fetchAds, addToast, locale]);
+  }, [syncingByAccount, apiData, dateRange, selectedAdAccountId, selectedCampaignId, campaignStatusFilter, deliveryStatusFilter, objectiveFilter, fetchAds, addToast, locale]);
 
   const handleTriggerSync = (range?: { period: string; since?: string; until?: string }) => void runMetaSync(false, range);
 
@@ -737,33 +750,6 @@ export default function AdsIntelligencePage() {
     searchQuery.trim().length > 0 ||
     !showOnlyWithSpend;
 
-  const resetAllFilters = () => {
-    setSelectedCampaignId("all");
-    setCampaignStatusFilter("all");
-    setDeliveryStatusFilter("all");
-    setObjectiveFilter("all");
-    setSearchQuery("");
-    setDateRange("30d");
-    setShowOnlyWithSpend(true);
-    setCurrentPage(1);
-    addToast(
-      "info",
-      locale === "id" ? "Filter Direset" : "Filters Reset",
-      locale === "id"
-        ? "Semua kriteria filter telah dikembalikan ke default."
-        : "All filter criteria have been reset to default."
-    );
-  };
-
-  const handleHeaderSort = (field: typeof sortBy) => {
-    if (sortBy === field) {
-      setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
-    } else {
-      setSortBy(field);
-      setSortOrder("desc");
-    }
-  };
-
   const formatReportDate = useCallback(
     (value: string | null | undefined, includeYear = true) => {
       if (!value) return null;
@@ -807,16 +793,6 @@ export default function AdsIntelligencePage() {
   const campaignHealthClass = activeCampaignCount > 0
     ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
     : "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300";
-  const dropdownFilterCount = [
-    selectedCampaignId !== "all",
-    deliveryStatusFilter !== "all",
-    campaignStatusFilter !== "all",
-    objectiveFilter !== "all",
-  ].filter(Boolean).length;
-  const filterButtonLabel = dropdownFilterCount > 0 ? `${copy.filter} (${dropdownFilterCount})` : copy.filter;
-  const tableShellClass = totalPages > 1
-    ? "overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xs dark:border-zinc-800 dark:bg-zinc-900"
-    : "hidden overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 md:block";
   const averageResultsPerDay = displayedTotalResults / daysCount;
   const oneDecimal = (value: number) => new Intl.NumberFormat(locale === "id" ? "id-ID" : "en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value);
   const t = ADS_PAGE_DICT[uiLocale];
@@ -878,6 +854,7 @@ export default function AdsIntelligencePage() {
           uiLocale
         ),
         spendFormatted: ad.hasInsights ? formatAdCurrency(ad.spend) : "—",
+        spendRaw: ad.hasInsights ? ad.spend : 0,
         resultsFormatted: resultMetricValue !== null ? formatNumber(resultMetricValue) : "—",
         cprFormatted:
           resultMetricCost !== null
@@ -909,14 +886,21 @@ export default function AdsIntelligencePage() {
                 <select
                   value={selectedAdAccountId || adAccount?.id || ""}
                   onChange={(e) => {
-                const nextId = e.target.value;
-                setSelectedAdAccountId(nextId);
+                    const nextId = e.target.value;
+                    activeAccountIdRef.current = nextId;
+                    setSelectedAdAccountId(nextId);
                     setSelectedCampaignId("all");
+                    setCampaignStatusFilter("all");
+                    setDeliveryStatusFilter("all");
+                    setObjectiveFilter("all");
+                    setSearchQuery("");
                     setCurrentPage(1);
                     setActiveDetailAdId(null);
-                const accName =
-                  (apiData?.availableAdAccounts || []).find((acc) => acc.id === nextId)?.name || nextId;
-                addToast("info", t.switchedAccountTitle, t.switchedAccountDesc(accName));
+                    setLoadError(null);
+                    setShowCustomDateRange(false);
+                    const accName =
+                      (apiData?.availableAdAccounts || []).find((acc) => acc.id === nextId)?.name || nextId;
+                    addToast("info", t.switchedAccountTitle, t.switchedAccountDesc(accName));
                   }}
               className="appearance-none h-9 max-w-[18rem] truncate bg-white/80 dark:bg-zinc-900/80 border border-zinc-200 dark:border-white/[0.08] rounded-lg pl-3 pr-8 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-sm cursor-pointer transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
               aria-label={t.selectAccount}
@@ -1028,6 +1012,14 @@ export default function AdsIntelligencePage() {
     </button>
   );
 
+  const todayInAccountTz = useMemo(
+    () => formatDateInTimezone(new Date(), adAccount?.timezone || "Asia/Jakarta"),
+    [adAccount?.timezone]
+  );
+  const isCustomDateInvalid =
+    Boolean(customDateStart && customDateEnd) &&
+    (customDateStart > customDateEnd || customDateEnd > todayInAccountTz);
+
   return (
     <AdsDashboardLayout
       title={t.title}
@@ -1045,7 +1037,7 @@ export default function AdsIntelligencePage() {
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (!customDateStart || !customDateEnd || customDateStart > customDateEnd) return;
+              if (!customDateStart || !customDateEnd || isCustomDateInvalid) return;
               setDateRange(`${customDateStart}:${customDateEnd}`);
               setCurrentPage(1);
               setShowCustomDateRange(false);
@@ -1065,7 +1057,7 @@ export default function AdsIntelligencePage() {
               type="date"
               required
               value={customDateStart}
-              max={customDateEnd || undefined}
+              max={customDateEnd && customDateEnd < todayInAccountTz ? customDateEnd : todayInAccountTz}
               onChange={(event) => setCustomDateStart(event.target.value)}
               className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
             />
@@ -1079,13 +1071,14 @@ export default function AdsIntelligencePage() {
               required
               value={customDateEnd}
               min={customDateStart || undefined}
+              max={todayInAccountTz}
               onChange={(event) => setCustomDateEnd(event.target.value)}
               className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
             />
             </label>
           <button
             type="submit"
-            disabled={!customDateStart || !customDateEnd || customDateStart > customDateEnd}
+            disabled={!customDateStart || !customDateEnd || isCustomDateInvalid}
             className="btn-solar rounded-lg px-4 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
           >
             {t.applyRange}
@@ -1102,7 +1095,7 @@ export default function AdsIntelligencePage() {
               {t.activeRange} {dateRange.replace(":", " – ")}
               </span>
             )}
-            {customDateStart && customDateEnd && customDateStart > customDateEnd && (
+            {isCustomDateInvalid && (
             <span role="alert" className="text-[11px] text-rose-600">
               {t.invalidDateRange}
             </span>
@@ -1127,64 +1120,83 @@ export default function AdsIntelligencePage() {
         </div>
       )}
 
-      {/* Workspace Tabs Navigation (Inventory, Trends, AI Analyst) */}
-      <div
-        className="flex items-center gap-2 border-b border-zinc-200/60 dark:border-white/[0.08] pb-2 overflow-x-auto no-scrollbar"
-        role="tablist"
-        aria-label={t.workspaceNavAria}
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeWorkspaceTab === "inventory"}
-          onClick={() => setActiveWorkspaceTab("inventory")}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-            activeWorkspaceTab === "inventory"
-              ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-800 dark:text-zinc-50 border border-zinc-200/60 dark:border-white/[0.08]"
-              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-          }`}
+      {/* Workspace Tabs Navigation (Zero-Jitter Fixed-Geometry Segmented Control) */}
+      <div className="flex items-center justify-between border-b border-zinc-200/80 dark:border-zinc-800 pb-3">
+        <div
+          className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-zinc-200/80 bg-zinc-100/90 p-1 dark:border-zinc-800 dark:bg-zinc-900"
+          role="tablist"
+          aria-label={t.workspaceNavAria}
         >
-          {t.tabInventory}
-          <span className="rounded-full bg-zinc-100 dark:bg-zinc-700 px-2 py-0.5 text-[10px] font-mono text-zinc-600 dark:text-zinc-300">
-            {processedAds.length}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeWorkspaceTab === "inventory"}
+            onClick={() => handleSelectWorkspaceTab("inventory")}
+            className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3.5 text-xs font-semibold transition-colors duration-150 cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${
+              activeWorkspaceTab === "inventory"
+                ? "border-zinc-200/90 bg-white text-zinc-900 shadow-2xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+                : "border-transparent bg-transparent text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }`}
+          >
+            <svg className="h-3.5 w-3.5 shrink-0 opacity-75" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            <span>{t.tabInventory}</span>
+            <span
+              className={`inline-flex h-5 min-w-[22px] items-center justify-center rounded-md px-1.5 text-[11px] font-mono font-semibold tabular-nums transition-colors duration-150 ${
+                activeWorkspaceTab === "inventory"
+                  ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-200"
+                  : "bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+              }`}
+            >
+              {processedAds.length}
             </span>
-        </button>
+          </button>
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeWorkspaceTab === "trends"}
-          onClick={() => setActiveWorkspaceTab("trends")}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-            activeWorkspaceTab === "trends"
-              ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-800 dark:text-zinc-50 border border-zinc-200/60 dark:border-white/[0.08]"
-              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-          }`}
-        >
-          {t.tabTrends}
-        </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeWorkspaceTab === "trends"}
+            onClick={() => handleSelectWorkspaceTab("trends")}
+            className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3.5 text-xs font-semibold transition-colors duration-150 cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${
+              activeWorkspaceTab === "trends"
+                ? "border-zinc-200/90 bg-white text-zinc-900 shadow-2xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+                : "border-transparent bg-transparent text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }`}
+          >
+            <svg className="h-3.5 w-3.5 shrink-0 opacity-75" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 17l6-6 4 4 8-8M14 7h7v7" />
+            </svg>
+            <span>{t.tabTrends}</span>
+          </button>
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeWorkspaceTab === "analyst"}
-          onClick={() => setActiveWorkspaceTab("analyst")}
-          className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-            activeWorkspaceTab === "analyst"
-              ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-800 dark:text-zinc-50 border border-zinc-200/60 dark:border-white/[0.08]"
-              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-          }`}
-        >
-          {t.tabAnalyst}
-          <span className="rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 px-1.5 py-0.2 text-[9px] font-bold tracking-wider">
-            AI
-            </span>
-        </button>
-            </div>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeWorkspaceTab === "analyst"}
+            onClick={() => handleSelectWorkspaceTab("analyst")}
+            className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3.5 text-xs font-semibold transition-colors duration-150 cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${
+              activeWorkspaceTab === "analyst"
+                ? "border-zinc-200/90 bg-white text-zinc-900 shadow-2xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-50"
+                : "border-transparent bg-transparent text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }`}
+          >
+            <svg className="h-3.5 w-3.5 shrink-0 opacity-75" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18 20V10M12 20V4M6 20v-6" />
+            </svg>
+            <span>{t.tabAnalyst}</span>
+          </button>
+        </div>
+      </div>
 
+      {/* Stable Tab Viewport Container (Prevents Scrollbar & Height Collapse Jitter) */}
+      <div className="min-h-[640px]">
       {/* TAB 1: Inventaris & Performa Iklan */}
       {activeWorkspaceTab === "inventory" && (
-        <div className="space-y-6 animate-in fade-in duration-150">
+      <div
+        role="tabpanel"
+        className="space-y-6 tab-panel-enter"
+      >
           {/* Contextual Notice Bar */}
           {!isLoading && (() => {
             if (apiData?.insightsState === "no_account_selected") {
@@ -1260,7 +1272,7 @@ export default function AdsIntelligencePage() {
             <p>{t.scopeCaption}</p>
             <div className="inline-flex items-center gap-1.5" title={t.reachTooltip}>
               <span className="font-medium text-zinc-600 dark:text-zinc-300">
-                {t.reachLabel}:
+                {locale === "id" ? "Jangkauan" : "Reach"}:
             </span>
               <span className="font-mono font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
                 {formatOptionalNumber(kpis?.totalReach, formatNumber)}
@@ -1393,39 +1405,45 @@ export default function AdsIntelligencePage() {
             onSelectAd={(id) => setActiveDetailAdId(id)}
             isLoading={isLoading}
             activeFilterChips={
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 {/* Dropdown Filters Row */}
                 <div className="relative z-40 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-              {/* 1. Campaign Searchable Dropdown */}
+                  {/* 1. Campaign Searchable Dropdown */}
                   <div className="relative min-w-0">
-              <CampaignSearchableDropdown
-                campaigns={campaigns}
-                selectedCampaignId={selectedCampaignId}
-                className="w-full min-w-0"
-                onSelectCampaign={(id) => {
-                  setSelectedCampaignId(id);
-                  setCurrentPage(1);
-                }}
-              />
+                    <CampaignSearchableDropdown
+                      campaigns={campaigns}
+                      selectedCampaignId={selectedCampaignId}
+                      className="w-full min-w-0"
+                      onSelectCampaign={(id) => {
+                        setSelectedCampaignId(id);
+                        setCurrentPage(1);
+                      }}
+                    />
                   </div>
 
-              {/* 2. Status Penayangan (Delivery) */}
+                  {/* 2. Status Penayangan (Delivery) */}
                   <div className="relative min-w-0">
-                <label className="sr-only" htmlFor="delivery-status-filter">
+                    <label className="sr-only" htmlFor="delivery-status-filter">
                       {t.deliveryFilter}
-                </label>
-                <select
-                  id="delivery-status-filter"
-                  value={deliveryStatusFilter}
-                  onChange={(e) => {
-                    setDeliveryStatusFilter(e.target.value);
-                    setCurrentPage(1);
-                  }}
+                    </label>
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <circle cx="12" cy="12" r="9" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l2.5 2.5" />
+                      </svg>
+                    </span>
+                    <select
+                      id="delivery-status-filter"
+                      value={deliveryStatusFilter}
+                      onChange={(e) => {
+                        setDeliveryStatusFilter(e.target.value);
+                        setCurrentPage(1);
+                      }}
                       title={t.deliveryFilter}
-                      className={`appearance-none h-9 w-full min-w-0 rounded-lg border pl-3 pr-8 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-sm cursor-pointer select-none transition-colors truncate ${
-                    deliveryStatusFilter !== "all"
-                          ? "border-indigo-300 bg-indigo-50/80 text-indigo-900 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200"
-                          : "border-zinc-200 dark:border-white/[0.08] bg-white/80 dark:bg-zinc-900/80 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
+                      className={`appearance-none h-9 w-full min-w-0 rounded-lg border pl-8 pr-8 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-zinc-900/5 shadow-2xs cursor-pointer select-none transition-colors truncate ${
+                        deliveryStatusFilter !== "all"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200/90 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
                       }`}
                     >
                       <option value="all">{t.allDelivery}</option>
@@ -1436,7 +1454,7 @@ export default function AdsIntelligencePage() {
                       <option value="ARCHIVED">{t.archived}</option>
                       <option value="DELETED">{t.deleted}</option>
                       <option value="UNKNOWN">{t.unknown}</option>
-                </select>
+                    </select>
                     <svg
                       className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400"
                       fill="none"
@@ -1446,25 +1464,30 @@ export default function AdsIntelligencePage() {
                     >
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
-              </div>
+                  </div>
 
-              {/* 3. Status Campaign Induk */}
+                  {/* 3. Status Campaign Induk */}
                   <div className="relative min-w-0">
-                <label className="sr-only" htmlFor="campaign-status-filter">
+                    <label className="sr-only" htmlFor="campaign-status-filter">
                       {t.parentFilter}
-                </label>
-                <select
-                  id="campaign-status-filter"
-                  value={campaignStatusFilter}
-                  onChange={(e) => {
-                    setCampaignStatusFilter(e.target.value);
-                    setCurrentPage(1);
-                  }}
+                    </label>
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                      </svg>
+                    </span>
+                    <select
+                      id="campaign-status-filter"
+                      value={campaignStatusFilter}
+                      onChange={(e) => {
+                        setCampaignStatusFilter(e.target.value);
+                        setCurrentPage(1);
+                      }}
                       title={t.parentFilter}
-                      className={`appearance-none h-9 w-full min-w-0 rounded-lg border pl-3 pr-8 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-sm cursor-pointer select-none transition-colors truncate ${
-                    campaignStatusFilter !== "all"
-                          ? "border-indigo-300 bg-indigo-50/80 text-indigo-900 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200"
-                          : "border-zinc-200 dark:border-white/[0.08] bg-white/80 dark:bg-zinc-900/80 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
+                      className={`appearance-none h-9 w-full min-w-0 rounded-lg border pl-8 pr-8 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-zinc-900/5 shadow-2xs cursor-pointer select-none transition-colors truncate ${
+                        campaignStatusFilter !== "all"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200/90 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
                       }`}
                     >
                       <option value="all">{t.allParent}</option>
@@ -1473,7 +1496,7 @@ export default function AdsIntelligencePage() {
                       <option value="ARCHIVED">{t.parentArchived}</option>
                       <option value="DELETED">{t.parentDeleted}</option>
                       <option value="UNKNOWN">{t.parentUnknown}</option>
-                </select>
+                    </select>
                     <svg
                       className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400"
                       fill="none"
@@ -1483,40 +1506,46 @@ export default function AdsIntelligencePage() {
                     >
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
-              </div>
+                  </div>
 
-              {/* 4. Objective */}
+                  {/* 4. Objective */}
                   <div className="relative min-w-0">
-                <label className="sr-only" htmlFor="objective-filter">
+                    <label className="sr-only" htmlFor="objective-filter">
                       {t.objective}
-                </label>
-                <select
-                  id="objective-filter"
-                  value={objectiveFilter}
-                  onChange={(e) => {
-                    setObjectiveFilter(e.target.value);
-                    setCurrentPage(1);
-                  }}
+                    </label>
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400">
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <circle cx="12" cy="12" r="9" />
+                        <circle cx="12" cy="12" r="4" />
+                      </svg>
+                    </span>
+                    <select
+                      id="objective-filter"
+                      value={objectiveFilter}
+                      onChange={(e) => {
+                        setObjectiveFilter(e.target.value);
+                        setCurrentPage(1);
+                      }}
                       title={t.objective}
-                      className={`appearance-none h-9 w-full min-w-0 rounded-lg border pl-3 pr-8 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-sm cursor-pointer select-none transition-colors truncate ${
-                    objectiveFilter !== "all"
-                          ? "border-indigo-300 bg-indigo-50/80 text-indigo-900 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200"
-                          : "border-zinc-200 dark:border-white/[0.08] bg-white/80 dark:bg-zinc-900/80 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
-                  }`}
-                >
+                      className={`appearance-none h-9 w-full min-w-0 rounded-lg border pl-8 pr-8 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-zinc-900/5 shadow-2xs cursor-pointer select-none transition-colors truncate ${
+                        objectiveFilter !== "all"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200/90 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/80"
+                      }`}
+                    >
                       <option value="all">{t.allObjectives}</option>
-                  {[
-                    ...new Set(
-                      campaigns
-                        .map((c) => c.objective)
-                        .filter((obj): obj is string => Boolean(obj))
-                    ),
-                  ].map((obj) => (
-                    <option key={obj} value={obj}>
+                      {[
+                        ...new Set(
+                          campaigns
+                            .map((c) => c.objective)
+                            .filter((obj): obj is string => Boolean(obj))
+                        ),
+                      ].map((obj) => (
+                        <option key={obj} value={obj}>
                           {translateMetaTerm(obj, uiLocale)}
-                    </option>
-                  ))}
-                </select>
+                        </option>
+                      ))}
+                    </select>
                     <svg
                       className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400"
                       fill="none"
@@ -1526,8 +1555,8 @@ export default function AdsIntelligencePage() {
                     >
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
-            </div>
-          </div>
+                  </div>
+                </div>
 
                 {/* Active Filter Chips & Reset All */}
                 {hasActiveFilters && (
@@ -1639,13 +1668,17 @@ export default function AdsIntelligencePage() {
               next: t.next,
             }}
           />
-            </div>
+      </div>
       )}
 
       {/* TAB 2: Tren & Funnel CTWA */}
       {activeWorkspaceTab === "trends" && (
-        <div className="space-y-6 animate-in fade-in duration-150">
+        <div
+          role="tabpanel"
+          className="space-y-6 tab-panel-enter"
+        >
           <TrendsAndFunnelTab
+            key={adAccount?.id || selectedAdAccountId || "default-account"}
             dailyTrend={apiData?.dailyTrend || []}
             campaigns={campaigns}
             ads={apiData?.ads || []}
@@ -1664,17 +1697,17 @@ export default function AdsIntelligencePage() {
             resultLabel={getLocalizedResultLabel(kpis?.resultLabel)}
           />
 
-          <div className="surface-card overflow-hidden rounded-2xl border border-zinc-200/80 bg-white/85 backdrop-blur-xl dark:border-white/[0.08] dark:bg-zinc-900/85">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200/70 px-5 py-3.5 dark:border-white/[0.06]">
+          <div className="surface-card overflow-hidden rounded-2xl border border-zinc-200/80 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200/70 px-5 py-3.5 dark:border-zinc-800">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
                   {t.deliveryTab}
-                            </span>
+                </span>
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${campaignHealthClass}`}>
                   {activeCampaignCount}/{kpis?.totalCampaigns ?? 0}
                 </span>
-                          </div>
-                        </div>
+              </div>
+            </div>
             <DeliveryDiagnosticsPanel
               campaignCounts={{
                 total: kpis?.totalCampaigns ?? 0,
@@ -1695,14 +1728,18 @@ export default function AdsIntelligencePage() {
               classifiedAds={kpis?.classifiedAds ?? 0}
               className="border-0 shadow-none"
             />
-                        </div>
-                        </div>
+          </div>
+        </div>
       )}
 
-      {/* TAB 3: AI Performance Analyst */}
+      {/* TAB 3: Audit Performa Akun */}
       {activeWorkspaceTab === "analyst" && (
-        <div className="space-y-6 animate-in fade-in duration-150">
+        <div
+          role="tabpanel"
+          className="space-y-6 tab-panel-enter"
+        >
           <AIAdsPerformanceAnalyst
+            key={adAccount?.id || selectedAdAccountId || "default-analyst"}
             campaigns={campaigns}
             ads={apiData?.ads || []}
             accountName={adAccount?.name || adAccount?.id}
@@ -1717,6 +1754,7 @@ export default function AdsIntelligencePage() {
           />
         </div>
       )}
+      </div>
 
       {/* Slide-out Ad Detail Drawer */}
       {selectedAd && (

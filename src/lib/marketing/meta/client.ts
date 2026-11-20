@@ -704,7 +704,7 @@ export class MetaMarketingApiClient {
         if (metaCode === 190 || statusCode === 401) {
           throw new MarketingApiError({
             code: "AUTHENTICATION_ERROR",
-            message: `Meta Access Token tidak valid atau telah kedaluwarsa (Code 190): ${sanitizedMsg}`,
+            message: `Meta Access Token tidak valid atau telah kedaluwarsa (Code 190). Silakan hubungkan ulang akun Meta Anda di halaman /connections: ${sanitizedMsg}`,
             metaErrorCode: metaCode ?? 190,
             metaErrorSubcode: metaSubcode,
             statusCode,
@@ -713,11 +713,11 @@ export class MetaMarketingApiClient {
           });
         }
 
-        // Check for Permissions Error (Code 200, 294, etc.)
-        if (metaCode === 200 || metaCode === 294 || statusCode === 403) {
+        // Check for Permissions Error (Code 10, 200, 294, etc.)
+        if (metaCode === 10 || metaCode === 200 || metaCode === 294 || statusCode === 403) {
           throw new MarketingApiError({
             code: "PERMISSION_ERROR",
-            message: `Izin akses Meta Marketing API tidak mencukupi. Pastikan token memiliki izin 'ads_read': ${sanitizedMsg}`,
+            message: `Izin akses akun iklan Meta tidak mencukupi (Code ${metaCode || 403}). Pastikan akun memiliki izin 'ads_read' dan akses ke Ad Account terkait di /connections: ${sanitizedMsg}`,
             metaErrorCode: metaCode,
             metaErrorSubcode: metaSubcode,
             statusCode,
@@ -726,8 +726,9 @@ export class MetaMarketingApiClient {
           });
         }
 
-        // Check for Rate Limit Error (Standard & BUC Codes: 17, 32, 613, 80000, 80003, 80004, or HTTP 429)
+        // Check for Rate Limit Error (Standard & BUC Codes: 4, 17, 32, 613, 80000, 80003, 80004, or HTTP 429)
         const isBucOrRateLimit =
+          metaCode === 4 ||
           metaCode === 17 ||
           metaCode === 32 ||
           metaCode === 613 ||
@@ -739,7 +740,7 @@ export class MetaMarketingApiClient {
         if (isBucOrRateLimit) {
           const rateLimitErr = new MarketingApiError({
             code: "RATE_LIMIT_ERROR",
-            message: `Batas panggilan Meta Marketing API tercapai (Rate Limit Code ${metaCode || 429}): ${sanitizedMsg}`,
+            message: `Batas panggilan Meta Marketing API tercapai (Rate Limit Code ${metaCode || 429}). Data snapshot lokal tetap aman; silakan tunggu beberapa menit sebelum menyinkronkan kembali: ${sanitizedMsg}`,
             metaErrorCode: metaCode,
             metaErrorSubcode: metaSubcode,
             statusCode,

@@ -311,7 +311,13 @@ describe("Audit Section I: 15 Core Test Scenarios for Ads Performance Evaluation
     expect(res.entityStatus).toBe("PAUSED");
     expect(res.headline).toBe("Objek dijeda dengan histori efisiensi di bawah target");
     expect(res.mainReason).not.toMatch(/DILARANG/);
-    expect(res.nextActions[0]?.title).toBe("Audit materi kreatif dan penawaran sebelum replikasi");
+    expect(res.nextActions[0]?.title).toBe("Jangan salin objek yang belanja tanpa hasil");
+    expect(res.nextActions[0]?.why).toContain("Rp 250.000");
+    expect(res.nextActions[0]?.why).toContain("Rp 50.000");
+    expect(res.nextActions[0]?.do).toMatch(/tetap dijeda/);
+    expect(res.nextActions[0]?.do).not.toMatch(/hook tidak dinilai/);
+    expect(res.nextActions[0]?.stop_loss).toContain("Rp 100.000");
+    expect(res.nextActions[0]?.stop_loss).not.toMatch(/per hari/);
   });
 
   it("Objek dijeda tanpa belanja dan tayangan tidak menyuruh akumulasi data", () => {
@@ -391,9 +397,28 @@ describe("Audit Section I: 15 Core Test Scenarios for Ads Performance Evaluation
     });
     expect(res.performanceStatus).toBe("memenuhi_target");
     expect(res.action).toBe("tinjau_reaktivasi");
+    expect(res.headline).toBe("Kandidat pertimbangan reaktivasi");
+    expect(res.nextActions[0]?.title).toBe("Masukkan sebagai kandidat reaktivasi");
+    expect(res.nextActions[0]?.why).toContain("Rp 30.000");
     expect(res.nextActions[0]?.do).not.toMatch(/anggaran harian yang sama/);
     expect(res.periodConfidence).toBe("high");
     expect(res.analysisScope).toBe("campaign");
+  });
+
+  it("CPR di bawah target dengan sampel pendek belum menjadi kandidat reaktivasi", () => {
+    const res = evaluateAdsPerformance({
+      period: "3d",
+      durationDays: 3,
+      spend: 120000,
+      results: 8,
+      targetCpr: 20000,
+      linkClicks: 90,
+      impressions: 6000,
+      entityStatus: "PAUSED",
+    });
+    expect(res.action).toBe("pantau");
+    expect(res.headline).toBe("CPR di bawah target, sampel belum cukup untuk reaktivasi");
+    expect(res.nextActions[0]?.title).toBe("Belum kandidat reaktivasi: sampel masih pendek");
   });
 
   it("Periode 1–3 hari memaksa confidence rendah dan aksi pantau", () => {

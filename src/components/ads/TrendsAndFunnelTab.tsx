@@ -166,9 +166,9 @@ function getMonotoneAreaPath(points: Array<{ x: number; y: number }>, bottomY: n
 
 const DICT = {
   id: {
-    campaignLabel: "1. Kampanye",
-    adsetLabel: "2. Ad Set",
-    adLabel: "3. Iklan (Ad)",
+    campaignLabel: "Kampanye",
+    adsetLabel: "Ad Set",
+    adLabel: "Iklan (Ad)",
     allCampaigns: "Semua Kampanye",
     allAdSets: "Semua Ad Set",
     allAds: "Semua Iklan",
@@ -176,7 +176,7 @@ const DICT = {
     activeView: "Cakupan Analisis:",
     allAccount: "Seluruh Akun Iklan",
     trendTitle: "Tren Performa Harian",
-    trendSub: "Pilih tab metrik di bawah dan arahkan kursor pada grafik untuk menginspeksi rincian harian.",
+    trendSub: "Pilih metrik di bawah dan arahkan kursor pada grafik untuk menginspeksi rincian harian.",
     tabSpendResults: "Belanja vs Hasil",
     tabClicksCtr: "Klik Tautan vs CTR",
     tabImpressionsClicks: "Tayangan vs Interaksi",
@@ -190,8 +190,8 @@ const DICT = {
     linkCpc: "CPC Tautan",
     cpr: "Biaya / Hasil",
     noTrend: "Belum ada data harian pada periode ini.",
-    funnelTitle: "Infografis Funnel Konversi (4 Tahap)",
-    funnelSub: "Klik tahap mana pun untuk membedah rasio konversi, biaya unit, dan efisiensi antar tahap.",
+    funnelTitle: "Arsitektur Funnel Konversi (4 Tahap)",
+    funnelSub: "Klik tahap mana pun untuk menginspeksi rasio konversi, biaya unit, dan efisiensi antar tahap.",
     stage1: "Tayangan (Impressions)",
     stage1Desc: "Jangkauan impresi iklan di layar audiens",
     stage2: "Semua Klik (Interaksi)",
@@ -200,45 +200,45 @@ const DICT = {
     stage3Desc: "Audiens yang menekan tombol CTA menuju WhatsApp / Web",
     stage4: "Hasil Konversi",
     stage4Desc: "Percakapan WhatsApp / prospek terealisasi",
-    bridge1to2: "Daya Tarik Konten (All CTR)",
+    bridge1to2: "Rasio Interaksi (All CTR)",
     bridge2to3: "Rasio Niat Klik Tautan (Intent Ratio)",
     bridge3to4: "Rasio Konversi Pasca-Klik (CVR)",
-    benchmarkTitle: "Indikator Kesehatan & Tolok Ukur Funnel",
-    hookMetricName: "1. Hook Kreatif (Link CTR)",
-    intentMetricName: "2. Ketepatan CTA (Intent Ratio)",
-    cvrMetricName: "3. Konversi Chat/Tujuan (CVR)",
+    benchmarkTitle: "Tolok Ukur Efisiensi Funnel",
+    hookMetricName: "Hook Kreatif (Link CTR)",
+    intentMetricName: "Ketepatan CTA (Intent Ratio)",
+    cvrMetricName: "Konversi Pasca-Klik (CVR)",
     targetLabel: "Target",
     statusOptimal: "Optimal",
     statusWarn: "Perlu Optimasi",
     statusLow: "Di Bawah Target",
-    diagnosisHealthy: "Alur Funnel Optimal — Daya tarik materi iklan (CTR) dan konversi pasca-klik (CVR) berjalan sangat sehat.",
-    diagnosisLowCtr: "Hook Kreatif Perlu Diperkuat — Tayangan sangat tinggi namun Link CTR masih di bawah 1%. Namun audiens yang berinteraksi memiliki niat tinggi menekan tautan CTA.",
-    diagnosisLowCvr: "Evaluasi Tindak Lanjut Pasca-Klik — Klik tautan sudah deras, tetapi rasio konversi menjadi percakapan/hasil masih bisa ditingkatkan.",
+    diagnosisHealthy: "Distribusi Funnel Optimal — Daya tarik materi iklan (CTR) dan konversi pasca-klik (CVR) berada di atas ambang target.",
+    diagnosisLowCtr: "CTR Tautan Di Bawah Target (< 1,0%) — Volume tayangan tinggi namun rasio klik tautan masih rendah. Evaluasi hook visual dan headline.",
+    diagnosisLowCvr: "Drop-off Pasca-Klik — Volume klik tautan memadai, namun rasio konversi menjadi hasil masih di bawah 8%. Evaluasi halaman tujuan atau alur sapaan WhatsApp.",
     DiagnosisNoData: "Belum ada tayangan iklan pada cakupan ini.",
-    breakdownTitle: "Komparasi Infografis per Level Meta Ads",
-    breakdownSub: "Klik kartu untuk memfokuskan grafik di atas, atau gunakan tombol drill-down untuk membedah isi di dalamnya.",
+    breakdownTitle: "Komparasi Performa per Level Meta Ads",
+    breakdownSub: "Klik baris untuk memfokuskan grafik di atas, atau gunakan tombol rincian untuk menelusuri Ad Set dan Iklan.",
     tabCampaign: "Kampanye",
     tabAdSet: "Ad Set",
-    tabAd: "Iklan (Ads)",
-    searchPlaceholder: "Cari nama...",
+    tabAd: "Iklan",
+    searchPlaceholder: "Cari nama kampanye, ad set, atau iklan...",
     sortBySpend: "Urut: Belanja Tertinggi",
     sortByResults: "Urut: Hasil Terbanyak",
     sortByCtr: "Urut: CTR Tertinggi",
-    sortByCpr: "Urut: Biaya/Hasil Termurah",
-    budgetShareLabel: "Porsi Anggaran",
+    sortByCpr: "Urut: Biaya/Hasil Terendah",
+    budgetShareLabel: "Porsi Spend",
     resultShareLabel: "Porsi Hasil",
-    drillToAdSets: "Bedah Ad Set →",
-    drillToAds: "Bedah Iklan →",
+    drillToAdSets: "Lihat Ad Set →",
+    drillToAds: "Lihat Iklan →",
     focusedBadge: "Fokus Aktif",
     clickToFocus: "Klik untuk Fokus",
-    funnelStripTitle: "Alur Mini Funnel:",
+    funnelStripTitle: "Rincian Funnel:",
     prev: "Sebelumnya",
     next: "Berikutnya",
   },
   en: {
-    campaignLabel: "1. Campaign",
-    adsetLabel: "2. Ad Set",
-    adLabel: "3. Ad",
+    campaignLabel: "Campaign",
+    adsetLabel: "Ad Set",
+    adLabel: "Ad",
     allCampaigns: "All Campaigns",
     allAdSets: "All Ad Sets",
     allAds: "All Ads",
@@ -260,7 +260,7 @@ const DICT = {
     linkCpc: "Link CPC",
     cpr: "Cost / Result",
     noTrend: "No daily data available for this period.",
-    funnelTitle: "Conversion Funnel Infographic (4 Stages)",
+    funnelTitle: "Conversion Funnel Architecture (4 Stages)",
     funnelSub: "Click any stage to inspect conversion bridges, unit costs, and stage-to-stage efficiency.",
     stage1: "Impressions",
     stage1Desc: "Total ad views across Feeds, Stories & Reels",
@@ -270,38 +270,38 @@ const DICT = {
     stage3Desc: "High-intent clicks on the CTA button to WhatsApp / Web",
     stage4: "Conversion Results",
     stage4Desc: "Completed WhatsApp chats or leads",
-    bridge1to2: "Content Engagement (All CTR)",
+    bridge1to2: "Engagement Rate (All CTR)",
     bridge2to3: "CTA Click Intent (Link / All Clicks)",
     bridge3to4: "Post-Click Conversion (CVR)",
-    benchmarkTitle: "Funnel Health & Benchmark Gauges",
-    hookMetricName: "1. Creative Hook (Link CTR)",
-    intentMetricName: "2. CTA Intent Ratio",
-    cvrMetricName: "3. Post-Click Conversion (CVR)",
+    benchmarkTitle: "Funnel Efficiency Benchmarks",
+    hookMetricName: "Creative Hook (Link CTR)",
+    intentMetricName: "CTA Intent Ratio",
+    cvrMetricName: "Post-Click Conversion (CVR)",
     targetLabel: "Target",
     statusOptimal: "Optimal",
     statusWarn: "Needs Attention",
     statusLow: "Below Target",
-    diagnosisHealthy: "Healthy Funnel — Both Creative Hook (Link CTR) and Post-Click Conversion (CVR) are performing above benchmark.",
-    diagnosisLowCtr: "Creative Hook Needs Work — High impressions, but Link CTR is below the 1% benchmark. Strengthen the opening visual hook.",
-    diagnosisLowCvr: "Follow-up Needs Attention — Strong link clicks, but conversion to results can be improved.",
+    diagnosisHealthy: "Optimal Funnel Distribution — Both Creative Hook (Link CTR) and Post-Click Conversion (CVR) are performing above benchmark.",
+    diagnosisLowCtr: "Link CTR Below Target (< 1.0%) — High impressions, but link click rate is below benchmark. Evaluate opening visual hook and headline.",
+    diagnosisLowCvr: "Post-Click Drop-off — Strong link clicks, but conversion to results is below 8%. Evaluate destination page or WhatsApp greeting flow.",
     DiagnosisNoData: "No impressions recorded for this scope yet.",
     breakdownTitle: "Performance Comparison by Meta Ads Level",
-    breakdownSub: "Click any card to focus the charts above, or drill down into its child Ad Sets and Ads.",
+    breakdownSub: "Click any row to focus the charts above, or drill down into its child Ad Sets and Ads.",
     tabCampaign: "Campaigns",
     tabAdSet: "Ad Sets",
     tabAd: "Ads",
-    searchPlaceholder: "Search name...",
+    searchPlaceholder: "Search campaign, ad set, or ad name...",
     sortBySpend: "Sort: Highest Spend",
     sortByResults: "Sort: Most Results",
     sortByCtr: "Sort: Highest CTR",
     sortByCpr: "Sort: Lowest Cost/Result",
-    budgetShareLabel: "Budget Share",
+    budgetShareLabel: "Spend Share",
     resultShareLabel: "Results Share",
-    drillToAdSets: "Inspect Ad Sets →",
-    drillToAds: "Inspect Ads →",
+    drillToAdSets: "View Ad Sets →",
+    drillToAds: "View Ads →",
     focusedBadge: "Active Focus",
     clickToFocus: "Click to Focus",
-    funnelStripTitle: "Mini Funnel Flow:",
+    funnelStripTitle: "Funnel Summary:",
     prev: "Previous",
     next: "Next",
   },
@@ -770,28 +770,28 @@ export function TrendsAndFunnelTab({
     const palette =
       chartMode === "spend_results"
         ? {
-            leftColor: "#6366f1",
-            rightColor: "#10b981",
+            leftColor: "#2563eb",
+            rightColor: "#059669",
             leftLabel: t.spend,
             rightLabel: unitLabel,
           }
         : chartMode === "clicks_ctr"
         ? {
-            leftColor: "#8b5cf6",
-            rightColor: "#06b6d4",
+            leftColor: "#7c3aed",
+            rightColor: "#d97706",
             leftLabel: t.linkClicks,
             rightLabel: t.linkCtr,
           }
         : chartMode === "impressions_clicks"
         ? {
-            leftColor: "#3b82f6",
-            rightColor: "#f59e0b",
+            leftColor: "#0284c7",
+            rightColor: "#e11d48",
             leftLabel: t.impressions,
             rightLabel: t.allClicks,
           }
         : {
-            leftColor: "#10b981",
-            rightColor: "#6366f1",
+            leftColor: "#0d9488",
+            rightColor: "#ea580c",
             leftLabel: t.cpr,
             rightLabel: t.linkCpc,
           };
@@ -947,7 +947,7 @@ export function TrendsAndFunnelTab({
   const maxRowClicks = Math.max(1, ...tableRows.map((r) => r.linkClicks));
   const maxRowResults = Math.max(1, ...tableRows.map((r) => r.results));
 
-  // Funnel stages data with tapered SVG widths & bridge connectors
+  // Funnel stages data with restrained executive SaaS styling (Linear / Stripe / Northbeam standard)
   const funnelStages = useMemo(() => {
     return [
       {
@@ -960,10 +960,9 @@ export function TrendsAndFunnelTab({
         unitCostVal: activeScope.cpm !== null ? formatMoney(activeScope.cpm) : "—",
         topWidthPct: 100,
         bottomWidthPct: 78,
-        accentHex: "#6366f1",
-        bgGradient: "from-indigo-600 to-indigo-500",
-        ringClass: "ring-indigo-500/30 border-indigo-500/50 bg-indigo-50/40 dark:bg-indigo-950/25",
-        badgeClass: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20",
+        barClass: "bg-zinc-700 dark:bg-zinc-300",
+        ringClass: "border-zinc-900 bg-zinc-50/80 dark:border-zinc-100 dark:bg-zinc-800/70",
+        badgeClass: "bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-800 dark:text-zinc-300",
         bridgeLabel: null as string | null,
         bridgeRate: null as number | null,
       },
@@ -975,12 +974,11 @@ export function TrendsAndFunnelTab({
         rateBadge: `CTR ${formatPct(activeScope.allCtr)}`,
         unitCostLabel: "CPC All",
         unitCostVal: activeScope.allCpc !== null ? formatMoney(activeScope.allCpc) : "—",
-        topWidthPct: 78,
+        topWidthPct: 74,
         bottomWidthPct: 58,
-        accentHex: "#0ea5e9",
-        bgGradient: "from-sky-500 to-cyan-500",
-        ringClass: "ring-sky-500/30 border-sky-500/50 bg-sky-50/40 dark:bg-sky-950/25",
-        badgeClass: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/20",
+        barClass: "bg-zinc-700 dark:bg-zinc-300",
+        ringClass: "border-zinc-900 bg-zinc-50/80 dark:border-zinc-100 dark:bg-zinc-800/70",
+        badgeClass: "bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-800 dark:text-zinc-300",
         bridgeLabel: t.bridge1to2,
         bridgeRate: activeScope.allCtr,
       },
@@ -992,12 +990,11 @@ export function TrendsAndFunnelTab({
         rateBadge: `Link CTR ${formatPct(activeScope.linkCtr)}`,
         unitCostLabel: "Link CPC",
         unitCostVal: activeScope.linkCpc !== null ? formatMoney(activeScope.linkCpc) : "—",
-        topWidthPct: 58,
+        topWidthPct: 50,
         bottomWidthPct: 38,
-        accentHex: "#8b5cf6",
-        bgGradient: "from-violet-600 to-purple-500",
-        ringClass: "ring-violet-500/30 border-violet-500/50 bg-violet-50/40 dark:bg-violet-950/25",
-        badgeClass: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20",
+        barClass: "bg-indigo-600 dark:bg-indigo-500",
+        ringClass: "border-indigo-600/80 bg-indigo-50/30 dark:border-indigo-400/70 dark:bg-indigo-950/20",
+        badgeClass: "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-600/20 dark:bg-indigo-950/50 dark:text-indigo-300",
         bridgeLabel: t.bridge2to3,
         bridgeRate: activeScope.intentRatio,
       },
@@ -1009,12 +1006,11 @@ export function TrendsAndFunnelTab({
         rateBadge: `CVR ${formatPct(activeScope.cvr)}`,
         unitCostLabel: "CPR",
         unitCostVal: activeScope.cpr !== null ? formatMoney(activeScope.cpr) : "—",
-        topWidthPct: 38,
+        topWidthPct: 28,
         bottomWidthPct: 24,
-        accentHex: "#10b981",
-        bgGradient: "from-emerald-600 to-teal-500",
-        ringClass: "ring-emerald-500/30 border-emerald-500/50 bg-emerald-50/40 dark:bg-emerald-950/25",
-        badgeClass: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20",
+        barClass: "bg-emerald-600 dark:bg-emerald-500",
+        ringClass: "border-emerald-600/80 bg-emerald-50/30 dark:border-emerald-400/70 dark:bg-emerald-950/20",
+        badgeClass: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-950/50 dark:text-emerald-300",
         bridgeLabel: t.bridge3to4,
         bridgeRate: activeScope.cvr,
       },
@@ -1167,8 +1163,8 @@ export function TrendsAndFunnelTab({
           )}
         </div>
 
-        {/* 4 Interactive KPI Metric Selector Tabs */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100 dark:divide-white/[0.06] border-b border-zinc-100 dark:border-white/[0.06] bg-zinc-50/40 dark:bg-zinc-900/40">
+        {/* 4 Interactive KPI Metric Selector Tabs (Color-Synchronized Dual-Axis Cards) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-zinc-200/70 dark:divide-zinc-800 border-b border-zinc-200/80 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
           {(
             [
               {
@@ -1176,44 +1172,48 @@ export function TrendsAndFunnelTab({
                 title: t.tabSpendResults,
                 primaryLabel: t.spend,
                 primaryVal: formatMoney(activeScope.spend),
-                primaryDot: "bg-indigo-500",
+                leftHex: "#2563eb",
                 secondaryLabel: unitLabel,
                 secondaryVal: formatNumber(activeScope.results),
-                secondaryDot: "bg-emerald-500",
-                activeBorder: "border-t-indigo-500",
+                rightHex: "#059669",
+                activeBg: "bg-blue-50/35 dark:bg-blue-950/20",
+                badgeClass: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20 dark:bg-blue-950/60 dark:text-blue-300",
               },
               {
                 id: "clicks_ctr" as const,
                 title: t.tabClicksCtr,
                 primaryLabel: t.linkClicks,
                 primaryVal: formatNumber(activeScope.linkClicks),
-                primaryDot: "bg-violet-500",
+                leftHex: "#7c3aed",
                 secondaryLabel: t.linkCtr,
                 secondaryVal: formatPct(activeScope.linkCtr),
-                secondaryDot: "bg-cyan-500",
-                activeBorder: "border-t-violet-500",
+                rightHex: "#d97706",
+                activeBg: "bg-violet-50/35 dark:bg-violet-950/20",
+                badgeClass: "bg-violet-50 text-violet-700 ring-1 ring-inset ring-violet-600/20 dark:bg-violet-950/60 dark:text-violet-300",
               },
               {
                 id: "impressions_clicks" as const,
                 title: t.tabImpressionsClicks,
                 primaryLabel: t.impressions,
                 primaryVal: formatNumber(activeScope.impressions),
-                primaryDot: "bg-blue-500",
+                leftHex: "#0284c7",
                 secondaryLabel: t.allClicks,
                 secondaryVal: formatNumber(activeScope.allClicks),
-                secondaryDot: "bg-amber-500",
-                activeBorder: "border-t-blue-500",
+                rightHex: "#e11d48",
+                activeBg: "bg-sky-50/35 dark:bg-sky-950/20",
+                badgeClass: "bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-600/20 dark:bg-sky-950/60 dark:text-sky-300",
               },
               {
                 id: "efficiency_cpr" as const,
                 title: t.tabEfficiencyCpr,
                 primaryLabel: t.cpr,
                 primaryVal: activeScope.cpr !== null ? formatMoney(activeScope.cpr) : "—",
-                primaryDot: "bg-emerald-500",
+                leftHex: "#0d9488",
                 secondaryLabel: t.linkCpc,
                 secondaryVal: activeScope.linkCpc !== null ? formatMoney(activeScope.linkCpc) : "—",
-                secondaryDot: "bg-indigo-500",
-                activeBorder: "border-t-emerald-500",
+                rightHex: "#ea580c",
+                activeBg: "bg-teal-50/35 dark:bg-teal-950/20",
+                badgeClass: "bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-600/20 dark:bg-teal-950/60 dark:text-teal-300",
               },
             ] as const
           ).map((tab) => {
@@ -1223,31 +1223,74 @@ export function TrendsAndFunnelTab({
                 key={tab.id}
                 type="button"
                 onClick={() => setChartMode(tab.id)}
-                className={`text-left px-5 py-3.5 transition-all cursor-pointer border-t-2 ${
+                style={{
+                  borderTopColor: isActive ? tab.leftHex : "transparent",
+                }}
+                className={`group text-left px-5 py-4 transition-colors duration-150 cursor-pointer border-t-[3px] focus-visible:outline-none ${
                   isActive
-                    ? `${tab.activeBorder} bg-white dark:bg-zinc-900 shadow-2xs`
-                    : "border-t-transparent hover:bg-white/60 dark:hover:bg-zinc-800/40 opacity-75 hover:opacity-100"
+                    ? `${tab.activeBg} shadow-2xs`
+                    : "hover:bg-white/80 dark:hover:bg-zinc-800/40 opacity-80 hover:opacity-100"
                 }`}
               >
-                <span className="block text-[11px] font-bold text-zinc-500 dark:text-zinc-400 truncate">
-                  {tab.title}
-                </span>
-                <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`text-xs font-semibold truncate ${
+                      isActive
+                        ? "text-zinc-900 dark:text-zinc-50"
+                        : "text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-zinc-200"
+                    }`}
+                  >
+                    {tab.title}
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition-opacity ${
+                      isActive ? `${tab.badgeClass} opacity-100` : "opacity-0 group-hover:opacity-60 text-zinc-400"
+                    }`}
+                  >
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ backgroundColor: tab.leftHex }}
+                    />
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ backgroundColor: tab.rightHex }}
+                    />
+                  </span>
+                </div>
+
+                <div className="mt-2.5 grid grid-cols-2 gap-3 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/80">
+                  {/* Left Axis Metric */}
                   <div className="min-w-0">
-                    <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-zinc-400">
-                      <span className={`h-2 w-2 rounded-full ${tab.primaryDot}`} />
-                      <span>{tab.primaryLabel}</span>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate max-w-full">
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white dark:ring-zinc-900"
+                        style={{ backgroundColor: tab.leftHex }}
+                      />
+                      <span className="truncate">{tab.primaryLabel}</span>
                     </span>
-                    <p className="text-sm sm:text-base font-bold font-mono tabular-nums text-zinc-900 dark:text-zinc-50 truncate">
-                      {tab.primaryVal}
+                    <p
+                      className="mt-0.5 text-sm sm:text-[15px] font-bold font-mono tabular-nums truncate"
+                      style={{ color: isActive ? tab.leftHex : undefined }}
+                    >
+                      <span className={isActive ? "" : "text-zinc-900 dark:text-zinc-100"}>
+                        {tab.primaryVal}
+                      </span>
                     </p>
                   </div>
-                  <div className="text-right shrink-0">
-                    <span className="inline-flex items-center justify-end gap-1.5 text-[10px] font-medium text-zinc-400">
-                      <span className={`h-2 w-2 rounded-full ${tab.secondaryDot}`} />
-                      <span>{tab.secondaryLabel}</span>
+
+                  {/* Right Axis Metric */}
+                  <div className="min-w-0 border-l border-zinc-200/70 dark:border-zinc-800 pl-3">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 dark:text-zinc-400 truncate max-w-full">
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white dark:ring-zinc-900"
+                        style={{ backgroundColor: tab.rightHex }}
+                      />
+                      <span className="truncate">{tab.secondaryLabel}</span>
                     </span>
-                    <p className="text-sm font-bold font-mono tabular-nums text-zinc-700 dark:text-zinc-200">
+                    <p
+                      className="mt-0.5 text-sm sm:text-[15px] font-bold font-mono tabular-nums truncate"
+                      style={{ color: tab.rightHex }}
+                    >
                       {tab.secondaryVal}
                     </p>
                   </div>
@@ -1255,6 +1298,30 @@ export function TrendsAndFunnelTab({
               </button>
             );
           })}
+        </div>
+
+        {/* Active Dual-Axis Legend Strip Above SVG Canvas */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 dark:border-zinc-800/70 bg-white dark:bg-zinc-900 px-6 py-2.5 text-[11px]">
+          <div className="inline-flex items-center gap-2">
+            <span
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: chartData.palette.leftColor }}
+            />
+            <span className="font-semibold text-zinc-700 dark:text-zinc-200">
+              {chartData.palette.leftLabel}
+            </span>
+            <span className="text-zinc-400">(Sumbu Kiri · Garis Area)</span>
+          </div>
+          <div className="inline-flex items-center gap-2">
+            <span
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: chartData.palette.rightColor }}
+            />
+            <span className="font-semibold text-zinc-700 dark:text-zinc-200">
+              {chartData.palette.rightLabel}
+            </span>
+            <span className="text-zinc-400">(Sumbu Kanan · Garis Pembanding)</span>
+          </div>
         </div>
 
         {/* High-Precision Proportional SVG Canvas */}
@@ -1509,14 +1576,14 @@ export function TrendsAndFunnelTab({
           3. NEXT-LEVEL INTERACTIVE FUNNEL INFOGRAPHIC (KIRI) & LEVEL EXPLORER (KANAN)
          ===================================================================== */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-        {/* KIRI (5 KOLOM): INTERACTIVE CONVERSION FUNNEL INFOGRAPHIC */}
-        <div className="xl:col-span-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-white/[0.08] p-5 sm:p-6 shadow-xs space-y-5">
-          <div className="border-b border-zinc-100 dark:border-white/[0.06] pb-4">
+        {/* KIRI (5 KOLOM): EXECUTIVE CONVERSION FUNNEL ARCHITECTURE */}
+        <div className="xl:col-span-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 p-5 sm:p-6 shadow-2xs space-y-5">
+          <div className="border-b border-zinc-100 dark:border-zinc-800 pb-4">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-50">
+              <h3 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                 {t.funnelTitle}
               </h3>
-              <span className="rounded-lg bg-indigo-50 dark:bg-indigo-500/15 px-2.5 py-0.5 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 truncate max-w-[180px]">
+              <span className="rounded-md bg-zinc-100 dark:bg-zinc-800 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 truncate max-w-[180px]">
                 {activeScope.scopeName}
               </span>
             </div>
@@ -1525,7 +1592,7 @@ export function TrendsAndFunnelTab({
             </p>
           </div>
 
-          {/* Interactive 4-Stage Tapered Infographic Pipeline */}
+          {/* Interactive 4-Stage Executive Pipeline */}
           <div className="space-y-1.5">
             {funnelStages.map((st, idx) => {
               const isSelected = activeFunnelStep === st.step;
@@ -1534,36 +1601,40 @@ export function TrendsAndFunnelTab({
                   {/* Conversion Bridge Pill Between Stages */}
                   {idx > 0 && st.bridgeLabel && st.bridgeRate !== null && (
                     <div className="flex items-center justify-center py-0.5">
-                      <div className="inline-flex items-center gap-2 rounded-full border border-zinc-200/80 dark:border-white/10 bg-zinc-50 dark:bg-zinc-800/80 px-3 py-0.5 text-[11px]">
-                        <span className="text-indigo-500 font-bold">↓</span>
+                      <div className="inline-flex items-center gap-2 rounded-md border border-zinc-200/80 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/70 px-2.5 py-0.5 text-[11px]">
+                        <span className="text-zinc-400 font-mono">↓</span>
                         <span className="text-zinc-500 dark:text-zinc-400 font-medium">
                           {st.bridgeLabel}:
                         </span>
-                        <span className="font-mono font-bold text-zinc-900 dark:text-zinc-100">
+                        <span className="font-mono font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
                           {formatPct(st.bridgeRate)}
                         </span>
                       </div>
                     </div>
                   )}
 
-                  {/* Interactive Stage Card + Tapered Visual Ribbon */}
+                  {/* Interactive Stage Card + Left-Aligned Proportional Bar */}
                   <div
                     onClick={() => setActiveFunnelStep(st.step)}
-                    className={`rounded-2xl border p-3.5 transition-all cursor-pointer ${
+                    className={`rounded-xl border p-3.5 transition-all cursor-pointer ${
                       isSelected
-                        ? `${st.ringClass} ring-2 shadow-2xs`
-                        : "border-zinc-200/70 dark:border-white/[0.07] bg-zinc-50/50 dark:bg-zinc-800/35 hover:border-zinc-300 dark:hover:border-white/15"
+                        ? `${st.ringClass} shadow-2xs`
+                        : "border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50/70 dark:hover:bg-zinc-800/40"
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-2.5 min-w-0">
                         <span
-                          className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${st.bgGradient} text-white text-xs font-mono font-bold shadow-2xs`}
+                          className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-xs font-mono font-semibold ${
+                            st.step === 4
+                              ? "bg-emerald-600 text-white"
+                              : "bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-800 dark:text-zinc-300"
+                          }`}
                         >
                           {st.step}
                         </span>
                         <div className="min-w-0">
-                          <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                          <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
                             {st.label}
                           </p>
                           <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
@@ -1573,27 +1644,27 @@ export function TrendsAndFunnelTab({
                       </div>
 
                       <div className="text-right shrink-0">
-                        <p className="text-base font-extrabold font-mono tabular-nums text-zinc-900 dark:text-zinc-50">
+                        <p className="text-base font-bold font-mono tabular-nums text-zinc-900 dark:text-zinc-50">
                           {formatNumber(st.value)}
                         </p>
-                        <div className="mt-0.5 flex items-center justify-end gap-1.5">
+                        <div className="mt-1 flex items-center justify-end gap-1.5">
                           <span
-                            className={`rounded-md border px-1.5 py-0.5 text-[10px] font-mono font-bold ${st.badgeClass}`}
+                            className={`rounded-md px-1.5 py-0.5 text-[10px] font-mono font-semibold tabular-nums ${st.badgeClass}`}
                           >
                             {st.rateBadge}
                           </span>
-                          <span className="rounded-md bg-white dark:bg-zinc-900 border border-zinc-200/70 dark:border-white/10 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-zinc-600 dark:text-zinc-300">
+                          <span className="rounded-md bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200/80 dark:border-zinc-700 px-1.5 py-0.5 text-[10px] font-mono font-medium tabular-nums text-zinc-600 dark:text-zinc-300">
                             {st.unitCostLabel}: {st.unitCostVal}
                           </span>
                         </div>
                       </div>
                     </div>
 
-                    {/* Visual Tapered Funnel Bar */}
-                    <div className="mt-3 flex items-center justify-center">
-                      <div className="w-full h-3.5 rounded-full bg-zinc-200/60 dark:bg-zinc-700/40 p-0.5 flex items-center justify-center overflow-hidden">
+                    {/* Clean Left-Aligned Proportional Progress Track */}
+                    <div className="mt-3">
+                      <div className="w-full h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
                         <div
-                          className={`h-full rounded-full bg-gradient-to-r ${st.bgGradient} transition-all duration-500`}
+                          className={`h-full rounded-full ${st.barClass} transition-all duration-300`}
                           style={{ width: `${st.topWidthPct}%` }}
                         />
                       </div>
@@ -1605,12 +1676,12 @@ export function TrendsAndFunnelTab({
           </div>
 
           {/* 3 Visual Benchmark Gauges (Hook CTR, Intent Ratio, Post-Click CVR) */}
-          <div className="rounded-2xl border border-zinc-200/70 dark:border-white/[0.07] bg-zinc-50/60 dark:bg-zinc-800/40 p-4 space-y-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+          <div className="rounded-xl border border-zinc-200/80 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30 p-4 space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
               {t.benchmarkTitle}
             </p>
 
-            <div className="space-y-2.5">
+            <div className="space-y-3">
               {[
                 {
                   name: t.hookMetricName,
@@ -1670,44 +1741,38 @@ export function TrendsAndFunnelTab({
                 const fillPct = Math.min(100, Math.max(4, (bm.val / bm.maxScale) * 100));
                 const targetPosPct = Math.min(95, (bm.target / bm.maxScale) * 100);
                 return (
-                  <div key={bm.name} className="space-y-1">
+                  <div key={bm.name} className="space-y-1.5">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-zinc-700 dark:text-zinc-200">
+                      <span className="font-medium text-zinc-700 dark:text-zinc-200">
                         {bm.name}
                       </span>
-                      <div className="flex items-center gap-2 font-mono">
-                        <span className="font-bold text-zinc-900 dark:text-zinc-50">
+                      <div className="flex items-center gap-2 font-mono tabular-nums">
+                        <span className="font-semibold text-zinc-900 dark:text-zinc-50">
                           {formatPct(bm.val)}
                         </span>
                         <span className="text-[10px] text-zinc-400">
                           ({t.targetLabel} ≥{formatPct(bm.target)})
                         </span>
                         <span
-                          className={`rounded-md px-1.5 py-0.5 text-[10px] font-sans font-bold ${
+                          className={`rounded-md px-1.5 py-0.5 text-[10px] font-sans font-semibold ${
                             bm.tone === "emerald"
-                              ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-950/50 dark:text-emerald-300"
                               : bm.tone === "amber"
-                              ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                              : "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                              ? "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950/50 dark:text-amber-300"
+                              : "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20 dark:bg-rose-950/50 dark:text-rose-300"
                           }`}
                         >
                           {bm.status}
                         </span>
                       </div>
                     </div>
-                    <div className="relative h-2 w-full rounded-full bg-zinc-200/80 dark:bg-zinc-700/60 overflow-hidden">
+                    <div className="relative h-1.5 w-full rounded-full bg-zinc-200/80 dark:bg-zinc-700/60 overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all duration-500 ${
-                          bm.tone === "emerald"
-                            ? "bg-emerald-500"
-                            : bm.tone === "amber"
-                            ? "bg-amber-500"
-                            : "bg-rose-500"
-                        }`}
+                        className="h-full rounded-full bg-zinc-800 dark:bg-zinc-200 transition-all duration-300"
                         style={{ width: `${fillPct}%` }}
                       />
                       <div
-                        className="absolute top-0 bottom-0 w-0.5 bg-zinc-900 dark:bg-white opacity-60"
+                        className="absolute top-0 bottom-0 w-0.5 bg-indigo-600 dark:bg-indigo-400"
                         style={{ left: `${targetPosPct}%` }}
                         title={`${t.targetLabel}: ${formatPct(bm.target)}`}
                       />
@@ -1718,25 +1783,28 @@ export function TrendsAndFunnelTab({
             </div>
           </div>
 
-          {/* Automated Diagnosis Callout */}
-          <div
-            className={`rounded-xl border p-3.5 text-xs font-medium leading-relaxed ${
-              activeScope.impressions === 0
-                ? "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-white/10 dark:bg-zinc-800/50 dark:text-zinc-300"
+          {/* Executive Diagnosis Callout (Zero Emoji) */}
+          <div className="flex items-start gap-2.5 rounded-xl border border-zinc-200/80 bg-zinc-50/70 p-3.5 text-xs leading-relaxed text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-300">
+            <span
+              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                activeScope.impressions === 0
+                  ? "bg-zinc-400"
+                  : activeScope.linkCtr < 1.0
+                  ? "bg-amber-500"
+                  : activeScope.linkClicks >= 10 && activeScope.cvr < 8
+                  ? "bg-rose-500"
+                  : "bg-emerald-500"
+              }`}
+            />
+            <span>
+              {activeScope.impressions === 0
+                ? t.DiagnosisNoData
                 : activeScope.linkCtr < 1.0
-                ? "border-amber-300/80 bg-amber-50/70 text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200"
+                ? t.diagnosisLowCtr
                 : activeScope.linkClicks >= 10 && activeScope.cvr < 8
-                ? "border-rose-300/80 bg-rose-50/70 text-rose-900 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-200"
-                : "border-emerald-300/80 bg-emerald-50/70 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-200"
-            }`}
-          >
-            {activeScope.impressions === 0
-              ? t.DiagnosisNoData
-              : activeScope.linkCtr < 1.0
-              ? `💡 ${t.diagnosisLowCtr}`
-              : activeScope.linkClicks >= 10 && activeScope.cvr < 8
-              ? `⚠️ ${t.diagnosisLowCvr}`
-              : `✅ ${t.diagnosisHealthy}`}
+                ? t.diagnosisLowCvr
+                : t.diagnosisHealthy}
+            </span>
           </div>
         </div>
 
@@ -1842,25 +1910,25 @@ export function TrendsAndFunnelTab({
                       setSelectedAdId(selectedAdId === row.id ? "all" : row.id);
                     }
                   }}
-                  className={`rounded-2xl border p-4 transition-all cursor-pointer space-y-3.5 ${
+                  className={`rounded-xl border p-4 transition-all cursor-pointer space-y-3.5 ${
                     isSelected
-                      ? "border-indigo-500 bg-indigo-50/35 dark:bg-indigo-950/25 ring-2 ring-indigo-500/25 shadow-xs"
-                      : "border-zinc-200/70 dark:border-white/[0.07] bg-zinc-50/40 dark:bg-zinc-800/35 hover:border-indigo-300 dark:hover:border-white/15"
+                      ? "border-zinc-900 bg-zinc-50/70 dark:border-zinc-100 dark:bg-zinc-800/60 shadow-2xs"
+                      : "border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-50/60 dark:hover:bg-zinc-800/35"
                   }`}
                 >
                   {/* Card Top Header: Rank + Name + Share Pill + Drill-down Button */}
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                      <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 text-[11px] font-mono font-bold">
+                      <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-800 dark:text-zinc-300 text-[11px] font-mono font-semibold tabular-nums">
                         #{rank}
                       </span>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <p className="text-xs sm:text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate">
+                          <p className="text-xs sm:text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
                             {row.name}
                           </p>
                           {isSelected && (
-                            <span className="rounded-md bg-indigo-600 text-white px-2 py-0.5 text-[10px] font-bold shrink-0">
+                            <span className="rounded-md bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 px-2 py-0.5 text-[10px] font-semibold shrink-0">
                               {t.focusedBadge}
                             </span>
                           )}
@@ -1874,7 +1942,7 @@ export function TrendsAndFunnelTab({
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="rounded-lg bg-indigo-500/10 border border-indigo-500/20 px-2 py-1 text-[10px] font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                      <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-mono font-semibold tabular-nums text-zinc-700 ring-1 ring-inset ring-zinc-500/20 dark:bg-zinc-800 dark:text-zinc-300">
                         {formatPct(row.spendShare)} {t.budgetShareLabel}
                       </span>
 
@@ -1889,7 +1957,7 @@ export function TrendsAndFunnelTab({
                             setActiveTabLevel("adset");
                             setPage(1);
                           }}
-                          className="rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 px-2.5 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:border-indigo-400 cursor-pointer"
+                          className="rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-700 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
                         >
                           {t.drillToAdSets}
                         </button>
@@ -1906,7 +1974,7 @@ export function TrendsAndFunnelTab({
                             setActiveTabLevel("ad");
                             setPage(1);
                           }}
-                          className="rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 px-2.5 py-1 text-[11px] font-semibold text-sky-600 dark:text-sky-400 hover:border-sky-400 cursor-pointer"
+                          className="rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-700 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer"
                         >
                           {t.drillToAds}
                         </button>
@@ -1914,101 +1982,101 @@ export function TrendsAndFunnelTab({
                     </div>
                   </div>
 
-                  {/* 3 Infographic Metric Columns with Visual Progress Bars & Sub-Metrics */}
+                  {/* 3 Executive Metric Columns with Restrained Progress Bars */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                     {/* 1. Spend & CPM */}
-                    <div className="rounded-xl bg-white/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-white/[0.06] p-3 space-y-1.5">
+                    <div className="rounded-lg bg-zinc-50/70 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800 p-3 space-y-1.5">
                       <div className="flex items-baseline justify-between gap-1">
-                        <span className="text-[10px] font-bold uppercase text-zinc-400">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                           {t.spend}
                         </span>
-                        <span className="text-[10px] font-mono text-zinc-400">
+                        <span className="text-[10px] font-mono tabular-nums text-zinc-500">
                           CPM {row.cpm !== null ? formatCompactCurrency(row.cpm) : "—"}
                         </span>
                       </div>
-                      <p className="text-sm font-extrabold font-mono text-zinc-900 dark:text-zinc-50">
+                      <p className="text-sm font-bold font-mono tabular-nums text-zinc-900 dark:text-zinc-50">
                         {formatMoney(row.spend)}
                       </p>
-                      <div className="h-2 w-full rounded-full bg-zinc-200/70 dark:bg-zinc-700/50 overflow-hidden">
+                      <div className="h-1.5 w-full rounded-full bg-zinc-200/80 dark:bg-zinc-700/60 overflow-hidden">
                         <div
-                          className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                          className="h-full rounded-full bg-zinc-800 dark:bg-zinc-200 transition-all duration-300"
                           style={{ width: `${spendPct}%` }}
                         />
                       </div>
                     </div>
 
                     {/* 2. Link Clicks, CTR & CPC */}
-                    <div className="rounded-xl bg-white/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-white/[0.06] p-3 space-y-1.5">
+                    <div className="rounded-lg bg-zinc-50/70 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800 p-3 space-y-1.5">
                       <div className="flex items-baseline justify-between gap-1">
-                        <span className="text-[10px] font-bold uppercase text-zinc-400">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                           {t.linkClicks}
                         </span>
-                        <span className="text-[10px] font-mono font-bold text-violet-600 dark:text-violet-400">
+                        <span className="text-[10px] font-mono font-semibold tabular-nums text-zinc-700 dark:text-zinc-300">
                           CTR {formatPct(row.linkCtr)}
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between gap-1">
-                        <p className="text-sm font-extrabold font-mono text-zinc-900 dark:text-zinc-50">
+                        <p className="text-sm font-bold font-mono tabular-nums text-zinc-900 dark:text-zinc-50">
                           {formatNumber(row.linkClicks)}
                         </p>
-                        <span className="text-[10px] font-mono text-zinc-400">
+                        <span className="text-[10px] font-mono tabular-nums text-zinc-500">
                           CPC {row.linkCpc !== null ? formatCompactCurrency(row.linkCpc) : "—"}
                         </span>
                       </div>
-                      <div className="h-2 w-full rounded-full bg-zinc-200/70 dark:bg-zinc-700/50 overflow-hidden">
+                      <div className="h-1.5 w-full rounded-full bg-zinc-200/80 dark:bg-zinc-700/60 overflow-hidden">
                         <div
-                          className="h-full rounded-full bg-violet-500 transition-all duration-500"
+                          className="h-full rounded-full bg-indigo-600 dark:bg-indigo-500 transition-all duration-300"
                           style={{ width: `${clickPct}%` }}
                         />
                       </div>
                     </div>
 
                     {/* 3. Conversion Results, CVR & CPR */}
-                    <div className="rounded-xl bg-white/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-white/[0.06] p-3 space-y-1.5">
+                    <div className="rounded-lg bg-zinc-50/70 dark:bg-zinc-800/40 border border-zinc-200/70 dark:border-zinc-800 p-3 space-y-1.5">
                       <div className="flex items-baseline justify-between gap-1">
-                        <span className="text-[10px] font-bold uppercase text-zinc-400 truncate">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 truncate">
                           {unitLabel}
                         </span>
-                        <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                        <span className="text-[10px] font-mono font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
                           CVR {formatPct(row.cvr)}
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between gap-1">
-                        <p className="text-sm font-extrabold font-mono text-emerald-600 dark:text-emerald-400">
+                        <p className="text-sm font-bold font-mono tabular-nums text-zinc-900 dark:text-zinc-50">
                           {formatNumber(row.results)}
                         </p>
-                        <span className="text-[10px] font-mono text-zinc-500 dark:text-zinc-400">
+                        <span className="text-[10px] font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
                           CPR {row.cpr !== null ? formatCompactCurrency(row.cpr) : "—"}
                         </span>
                       </div>
-                      <div className="h-2 w-full rounded-full bg-zinc-200/70 dark:bg-zinc-700/50 overflow-hidden">
+                      <div className="h-1.5 w-full rounded-full bg-zinc-200/80 dark:bg-zinc-700/60 overflow-hidden">
                         <div
-                          className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                          className="h-full rounded-full bg-emerald-600 dark:bg-emerald-500 transition-all duration-300"
                           style={{ width: `${resultPct}%` }}
                         />
                       </div>
                     </div>
                   </div>
 
-                  {/* Mini Visual Funnel Strip Inside Each Card */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-zinc-100/80 dark:bg-zinc-800/80 px-3 py-2 text-[11px] font-mono">
-                    <span className="font-sans font-semibold text-zinc-500 dark:text-zinc-400">
+                  {/* Clean Monochromatic Funnel Strip Inside Each Card */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200/70 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-800/60 px-3 py-2 text-[11px] font-mono tabular-nums">
+                    <span className="font-sans font-medium text-zinc-500 dark:text-zinc-400">
                       {t.funnelStripTitle}
                     </span>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-zinc-700 dark:text-zinc-200">
-                        <strong>{formatCompactCount(row.impressions)}</strong> Imp
+                    <div className="flex flex-wrap items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
+                      <span>
+                        <strong className="font-semibold text-zinc-900 dark:text-zinc-100">{formatCompactCount(row.impressions)}</strong> Imp
                       </span>
-                      <span className="text-zinc-400">➔</span>
-                      <span className="text-sky-600 dark:text-sky-400">
-                        <strong>{formatCompactCount(row.allClicks)}</strong> All ({formatPct(row.allCtr)})
+                      <span className="text-zinc-400">→</span>
+                      <span>
+                        <strong className="font-semibold text-zinc-900 dark:text-zinc-100">{formatCompactCount(row.allClicks)}</strong> All ({formatPct(row.allCtr)})
                       </span>
-                      <span className="text-zinc-400">➔</span>
-                      <span className="text-violet-600 dark:text-violet-400">
-                        <strong>{formatCompactCount(row.linkClicks)}</strong> Link ({formatPct(row.linkCtr)})
+                      <span className="text-zinc-400">→</span>
+                      <span>
+                        <strong className="font-semibold text-zinc-900 dark:text-zinc-100">{formatCompactCount(row.linkClicks)}</strong> Link ({formatPct(row.linkCtr)})
                       </span>
-                      <span className="text-zinc-400">➔</span>
-                      <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 font-bold text-emerald-700 dark:text-emerald-300">
+                      <span className="text-zinc-400">→</span>
+                      <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-950/50 dark:text-emerald-300">
                         {formatNumber(row.results)} {unitLabel} ({formatPct(row.cvr)})
                       </span>
                     </div>

@@ -143,14 +143,23 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
 
   const db = createAdminClient();
 
-  // 1. Fetch Organization, Ad Account & Integration Connection Status
-  const [orgRes, connectionRes] = await Promise.all([
+  // 1. Fetch Organization, Ad Account, Integration Status & Asset Selection in parallel
+  const [orgRes, connectionRes, tenantAccountsRes, selectionRes] = await Promise.all([
     db.from("organizations").select("id, name").eq("id", organizationId).maybeSingle(),
     db
       .from("integration_connections")
       .select("status, last_synced_at, provider, error_message")
       .eq("organization_id", organizationId)
       .eq("provider", "meta")
+      .maybeSingle(),
+    db
+      .from("ad_accounts")
+      .select("id, provider_account_id, account_name, connection_status, last_synced_at, currency, timezone")
+      .eq("organization_id", organizationId),
+    db
+      .from("meta_asset_selections")
+      .select("ad_account_id")
+      .eq("organization_id", organizationId)
       .maybeSingle(),
   ]);
 
@@ -159,16 +168,10 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
 
   // 1b. Resolve the effective ad account for THIS tenant. Data from two
   // accounts must never be mixed: campaigns are scoped to one account.
-  const { data: tenantAccounts, error: tenantAccountsError } = await db
-    .from("ad_accounts")
-    .select("id, provider_account_id, account_name, connection_status, last_synced_at, currency, timezone")
-    .eq("organization_id", organizationId);
+  const tenantAccounts = tenantAccountsRes.data;
+  const tenantAccountsError = tenantAccountsRes.error;
   if (tenantAccountsError) throw new Error("Gagal memuat akun iklan organisasi ini.");
-  const { data: selectionRow } = await db
-    .from("meta_asset_selections")
-    .select("ad_account_id")
-    .eq("organization_id", organizationId)
-    .maybeSingle();
+  const selectionRow = selectionRes.data;
 
   const norm = (v?: string | null) =>
     v ? (v.startsWith("act_") ? v : `act_${v}`) : "";
@@ -246,8 +249,10 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
   // fallback when Meta did not provide a timezone.
   const timezone = effectiveAccount?.timezone || "UTC";
   const { since, until } = parseDateRange(dateRange, timezone);
-  const queryInsights = () => {
-    let query = db.from("ad_insights").select("*").eq("organization_id", organizationId);
+  const INSIGHT_COLUMNS =
+    "ad_id, adset_id, adset_name, spend, impressions, clicks, reach, link_clicks, conversions, action_breakdown, cost_per_action_type, conversion_action_type, currency, quality_ranking, engagement_rate_ranking, conversion_rate_ranking, date_start, date_stop";
+  const queryInsights = (cols: string = INSIGHT_COLUMNS) => {
+    let query = db.from("ad_insights").select(cols).eq("organization_id", organizationId);
     const scopedAdIds = (dbAds || []).map((ad) => ad.id);
     // Insights are stored against internal ad IDs. Restrict at the query layer
     // to ads belonging to campaigns in the selected account so another
@@ -261,7 +266,32 @@ export async function getAdsIntelligenceData(options: GetAdsIntelligenceOptions)
     return query;
   };
 
-  const { data: rawInsights, error: insError } = await queryInsights();
+  let insightsRes = await queryInsights(INSIGHT_COLUMNS);
+  if (insightsRes.error && (insightsRes.error.code === "PGRST204" || insightsRes.error.code === "42703")) {
+    insightsRes = await queryInsights("*");
+  }
+  interface RawInsightRow {
+    ad_id: string;
+    adset_id?: string | null;
+    adset_name?: string | null;
+    spend?: number | null;
+    impressions?: number | null;
+    clicks?: number | null;
+    reach?: number | null;
+    link_clicks?: number | null;
+    conversions?: number | null;
+    action_breakdown?: unknown;
+    cost_per_action_type?: unknown;
+    conversion_action_type?: string | null;
+    currency?: string | null;
+    quality_ranking?: string | null;
+    engagement_rate_ranking?: string | null;
+    conversion_rate_ranking?: string | null;
+    date_start?: string | null;
+    date_stop?: string | null;
+  }
+  const rawInsights = (insightsRes.data ?? null) as RawInsightRow[] | null;
+  const insError = insightsRes.error;
 
   if (insError) {
     throw new Error(`Gagal memuat data metrik iklan: ${insError.message}`);
@@ -1104,10 +1134,12 @@ export async function getAdDetailById(
     if (accountRow?.timezone) accountTimezone = accountRow.timezone;
   }
   const detailRange = parseDateRange(options?.dateRange, accountTimezone);
-  const queryAdInsights = () => {
+  const DETAIL_INSIGHT_COLUMNS =
+    "ad_id, adset_id, adset_name, spend, impressions, clicks, reach, link_clicks, conversions, action_breakdown, cost_per_action_type, conversion_action_type, currency, quality_ranking, engagement_rate_ranking, conversion_rate_ranking, date_start, date_stop";
+  const queryAdInsights = (cols: string = DETAIL_INSIGHT_COLUMNS) => {
     let query = db
       .from("ad_insights")
-      .select("*")
+      .select(cols)
       .eq("ad_id", ad.id)
       .eq("organization_id", organizationId);
     if (detailRange.since && detailRange.until) {
@@ -1115,7 +1147,26 @@ export async function getAdDetailById(
     }
     return query;
   };
-  const { data: insights, error: insightError } = await queryAdInsights();
+  let insightsRes = await queryAdInsights(DETAIL_INSIGHT_COLUMNS);
+  if (insightsRes.error && (insightsRes.error.code === "PGRST204" || insightsRes.error.code === "42703")) {
+    insightsRes = await queryAdInsights("*");
+  }
+  interface DetailInsightRow {
+    spend?: number | null;
+    impressions?: number | null;
+    clicks?: number | null;
+    reach?: number | null;
+    link_clicks?: number | null;
+    conversions?: number | null;
+    action_breakdown?: unknown;
+    cost_per_action_type?: unknown;
+    conversion_action_type?: string | null;
+    currency?: string | null;
+    date_start?: string | null;
+    date_stop?: string | null;
+  }
+  const insights = (insightsRes.data ?? null) as DetailInsightRow[] | null;
+  const insightError = insightsRes.error;
   if (insightError) return { success: false, error: `Gagal memuat detail metrik: ${insightError.message}`, code: "DB_ERROR" };
 
   // Shared aggregation (AI-02): identical math to the dashboard and AI

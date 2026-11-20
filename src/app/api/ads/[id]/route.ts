@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { resolveSessionTenant } from "@/lib/auth/tenant";
 import { getAdDetailById, type AdDetailResponseData } from "@/lib/ads/service";
 
 export type { AdDetailResponseData };
@@ -22,28 +23,16 @@ export async function GET(
       );
     }
 
+    // 1. Resolve Tenant / Session (supports Cookie & Bearer Token)
+    const authHeader = request.headers.get("authorization");
+    const bearerToken = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : null;
+
     const supabase = await createClient();
+    const { user, organizationId } = await resolveSessionTenant(supabase, bearerToken);
 
-    // 1. Resolve Tenant / Session
-    const {
-      data: { user },
-      error: authErr,
-    } = await supabase.auth.getUser();
-
-    let organizationId: string | null = null;
-    if (user && !authErr) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("organization_id, role")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (profile?.organization_id) {
-        organizationId = profile.organization_id;
-      }
-    }
-
-    if (!organizationId) {
+    if (!user || !organizationId) {
       return NextResponse.json(
         { success: false, error: "Sesi tidak terautentikasi atau organisasi tidak ditemukan", code: "UNAUTHORIZED" },
         { status: 401 }

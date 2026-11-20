@@ -26,13 +26,9 @@ export function AdsDashboardLayout({
 }: AdsDashboardLayoutProps) {
   return (
     <div className="relative min-h-screen w-full pb-20">
-      {/* 1. Atmospheric Ambient Mesh Lighting */}
-      <div className="pointer-events-none fixed top-0 left-1/4 -z-10 h-96 w-96 rounded-full bg-indigo-500/5 dark:bg-indigo-500/10 blur-3xl" />
-      <div className="pointer-events-none fixed top-24 right-1/4 -z-10 h-80 w-80 rounded-full bg-amber-500/5 dark:bg-amber-500/10 blur-3xl" />
-
       <div className="w-full max-w-[1800px] mx-auto px-6 lg:px-8 xl:px-10 space-y-6">
-        {/* 2. Control Bar Header (Natural Document Flow) */}
-        <header className="relative mb-6 flex flex-col gap-4 rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-zinc-200/60 dark:border-white/[0.08] p-5 sm:p-6 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.04)] dark:shadow-[0_4px_24px_-4px_rgba(0,0,0,0.4)] transition-all">
+        {/* Control Bar Header (Natural Document Flow) */}
+        <header className="relative mb-6 flex flex-col gap-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 p-5 sm:p-6 shadow-2xs transition-all">
           <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-3">

@@ -4,20 +4,21 @@ import { z } from "zod";
 import { isMetaModelApiConfigured, maskApiKey, getMetaConfig } from "@/lib/ai/meta/config";
 import { MetaModelApiClient } from "@/lib/ai/meta/client";
 import { createClient } from "@/lib/supabase/server";
+import { resolveSessionTenant } from "@/lib/auth/tenant";
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit";
-import { aggregateAdInsights, type AdInsightRowLike, type AdMetricsAggregate } from "@/lib/ads/aggregation";
+import { aggregateAdInsights, buildZeroFilledDailyTrends, leadsFromRow, messagingFromRow, selectPrimaryResult, type AdInsightRowLike, type AdMetricsAggregate } from "@/lib/ads/aggregation";
 import { parseDateRange } from "@/lib/ads/date-utils";
 import { evaluateAdsPerformance } from "@/lib/ads/performance-evaluator";
-import { sanitizeUntrustedText, wrapUntrustedChatBlock } from "@/lib/ai/sanitize-untrusted-text";
-import { CtwaModelOutputSchema as ModelOutputSchema } from "@/lib/ai/ctwa-analysis/schema";
-import { applyGuardrailsToModelOutput } from "@/lib/ai/ctwa-analysis/guardrails";
+import { sanitizeUntrustedText, wrapUntrustedChatTranscript } from "@/lib/ai/sanitize-untrusted-text";
+import { CtwaDrawerModelSchema, type CtwaDrawerModel } from "@/lib/ai/ctwa-analysis/schema";
+import type { DecisionAction } from "@/lib/ads/performance-evaluator";
 import { effectiveDeliveryStatus } from "@/lib/ai/ctwa-analysis/dynamic-context";
-import { CTWA_SYSTEM_PROMPT, buildCtwaUserPrompt } from "@/lib/ai/ctwa-analysis/prompt";
+import { CTWA_SYSTEM_PROMPT } from "@/lib/ai/ctwa-analysis/prompt";
+import { buildLlmUserPayload, serializeLlmUserPayload } from "@/lib/ai/llm-user-payload";
 import { composeAdCardCopy } from "@/lib/ai/ctwa-analysis/ad-card-copy";
 import { parseModelJson } from "@/lib/ai/parse-model-json";
-import type { CtwaGroundTruthMetrics } from "@/lib/ai/ctwa-analysis/types";
 import { summarizeCrmForAd, type CrmAdSummary } from "@/lib/crm/ad-drawer-crm";
-import { buildCrmAnalysisContext, calendarDayBounds, formatCrmContextForPrompt } from "@/lib/crm/crm-analysis-context";
+import { calendarDayBounds } from "@/lib/crm/crm-analysis-context";
 
 // Request Schema
 const AnalyzeAdRequestSchema = z.object({
@@ -197,6 +198,46 @@ export interface AIAdAnalysisResponse {
 export function formatRupiah(amount: number | null | undefined): string {
   if (amount === null || amount === undefined || Number.isNaN(amount)) return "Tidak dapat dihitung";
   return `Rp${Math.round(amount).toLocaleString("id-ID")}`;
+}
+
+const FUNNEL_STAGE_LABEL: Record<CtwaDrawerModel["additionalDetails"]["firstFailedFunnelStage"], string> = {
+  hook_or_targeting: "Hook atau targeting",
+  click_to_chat_leak: "Kebocoran klik ke chat",
+  lead_qualification_gap: "Kesenjangan kualifikasi prospek",
+  sales_followup_gap: "Tindak lanjut tim sales",
+  healthy_funnel: "Funnel sehat",
+  insufficient_data: "Data belum cukup",
+};
+
+function lockedActionToBudgetDecision(action: DecisionAction): BudgetDecisionKey {
+  switch (action) {
+    case "pertahankan":
+    case "reaktivasi":
+      return "PERTAHANKAN";
+    case "optimasi":
+    case "kurangi":
+      return "KURANGI";
+    case "hentikan_sementara":
+      return "HENTIKAN SEMENTARA";
+    default:
+      return "TAHAN KENAIKAN";
+  }
+}
+
+function lockedActionToRecommended(action: DecisionAction): NonNullable<AIAdAnalysisResponse["recommended_action"]> {
+  switch (action) {
+    case "pertahankan":
+      return "MAINTAIN";
+    case "optimasi":
+    case "kurangi":
+      return "OPTIMIZE";
+    case "hentikan_sementara":
+      return "STOP";
+    case "reaktivasi":
+      return "RE_ACTIVATE";
+    default:
+      return "INVESTIGATE";
+  }
 }
 
 /**
@@ -1161,32 +1202,17 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. Mandatory Session Authentication & Tenant Isolation
+    const authHeader = request.headers.get("authorization");
+    const bearerToken = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : null;
+
     const supabase = await createClient();
-    const {
-      data: { user },
-      error: authErr,
-    } = await supabase.auth.getUser();
+    const { user, organizationId } = await resolveSessionTenant(supabase, bearerToken);
 
-    if (authErr || !user) {
+    if (!user || !organizationId) {
       return NextResponse.json(
-        { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
-        { status: 401 }
-      );
-    }
-
-    const { data: profile } = user
-      ? await supabase
-          .from("profiles")
-          .select("organization_id, role")
-          .eq("id", user.id)
-          .maybeSingle()
-      : { data: null };
-
-    const organizationId = profile?.organization_id;
-
-    if (!organizationId) {
-      return NextResponse.json(
-        { success: false, error: "Sesi tidak terautentikasi", code: "UNAUTHORIZED" },
+        { success: false, error: "Sesi tidak terautentikasi atau organisasi tidak ditemukan", code: "UNAUTHORIZED" },
         { status: 401 }
       );
     }
@@ -1202,6 +1228,9 @@ export async function POST(request: NextRequest) {
       timezone: "Asia/Jakarta",
       label: "Semua data tersimpan",
     };
+    let accountCurrency: string | null = null;
+    let dailySpend: number[] = [];
+    let dailyResults: number[] = [];
 
     // Client-supplied metrics are not ground truth. Every analysis requires a
     // server-verified ad ID within the caller's tenant.
@@ -1220,7 +1249,6 @@ export async function POST(request: NextRequest) {
     let verifiedInboundMessages: number | null = null;
     let crmLeadsCount: number | null = null;
     let crmSummary: CrmAdSummary | null = null;
-    let crmContextBlock: string | null = null;
     let crmSurveysCount = 0;
     let crmClosingsCount = 0;
     let sanitizedChat = "";
@@ -1289,11 +1317,12 @@ export async function POST(request: NextRequest) {
       if (campRow?.ad_account_id) {
         const { data: accRow } = await supabase
           .from("ad_accounts")
-          .select("timezone")
+          .select("timezone, currency")
           .eq("id", campRow.ad_account_id)
           .eq("organization_id", organizationId)
           .maybeSingle();
         if (accRow?.timezone) accountTimezone = accRow.timezone;
+        if (accRow?.currency) accountCurrency = accRow.currency;
       }
       const range = parseDateRange(data.dateRange, accountTimezone);
       const buildInsightsQuery = (columns: string) => {
@@ -1319,6 +1348,16 @@ export async function POST(request: NextRequest) {
 
       const agg: AdMetricsAggregate = aggregateAdInsights(insights || []);
       analysisAggregate = agg;
+      const primaryForTrend = selectPrimaryResult(agg, data.campaignObjective);
+      if (range.since && range.until) {
+        const filled = buildZeroFilledDailyTrends(insights, range.since, range.until, (row) => {
+          if (primaryForTrend.kind === "messaging") return messagingFromRow(row) ?? 0;
+          if (primaryForTrend.kind === "leads") return leadsFromRow(row) ?? 0;
+          return Number(row.conversions) || 0;
+        });
+        dailySpend = filled.spend;
+        dailyResults = filled.results;
+      }
       let calendarDays = agg.days;
       if (range.since && range.until) {
         const span =
@@ -1404,18 +1443,6 @@ export async function POST(request: NextRequest) {
         }
       );
       crmLeadsCount = crmSummary.attributedToAd;
-      crmContextBlock = formatCrmContextForPrompt(buildCrmAnalysisContext(crmResult.error ? null : crmRows, {
-        failed: Boolean(crmResult.error),
-        truncated: !crmResult.error && crmResult.count !== null && crmRows.length < crmResult.count,
-        organizationId,
-        since: range.since,
-        until: range.until,
-        scope: "ad",
-        campaignId: verifiedAd.campaign_id,
-        adId: verifiedAd.id,
-        providerAdSetId: adSetInsight?.adset_id || null,
-        spend: serverSpend,
-      }));
 
       const adConversations = await applyPeriod(
         supabase
@@ -1578,59 +1605,82 @@ export async function POST(request: NextRequest) {
           analysisScope: "ad",
         });
 
-        const groundTruth: CtwaGroundTruthMetrics = {
-          spend: data.metrics.spend,
-          link_ctr: data.metrics.linkCtr ?? null,
-          cpm: data.metrics.cpm ?? null,
-          link_cpc: data.metrics.linkCpc ?? null,
-          messaging_conversations: data.metrics.messagingConversations ?? null,
-          leads: data.metrics.leads ?? null,
-          cost_per_messaging_conversation: data.metrics.costPerMessagingConversation ?? null,
-          cost_per_lead: data.metrics.costPerLead ?? null,
-          unique_reach: data.metrics.reach ?? null,
-          impressions: data.metrics.impressions,
-          link_clicks: data.metrics.linkClicks,
-          all_clicks: data.metrics.allClicks,
-          frequency: analysisAggregate?.frequency ?? null,
-          results_legacy: data.metrics.results ?? null,
-          cost_per_result_legacy: data.metrics.costPerResult ?? null,
-        };
-
         const systemPrompt = CTWA_SYSTEM_PROMPT;
-        const baseUserPrompt = buildCtwaUserPrompt({
-          adName: data.adName,
-          campaignName: data.campaignName || (data.locale === "en" ? "Property Campaign" : "Kampanye Properti"),
-          campaignObjective: data.campaignObjective || null,
-          status: data.status || "ACTIVE",
-          analysisScope: "ad",
-          periodDays: analysisPeriod.days,
-          periodLabel: analysisPeriod.label,
+        const primaryResult = analysisAggregate
+          ? selectPrimaryResult(analysisAggregate, data.campaignObjective)
+          : null;
+        const qualifiedCount = crmSummary && crmSummary.hot !== null && crmSummary.warm !== null
+          ? crmSummary.hot + crmSummary.warm
+          : null;
+        const adResults = primaryResult?.count ?? data.metrics.messagingConversations ?? data.metrics.results;
+        const userPrompt = `${serializeLlmUserPayload(buildLlmUserPayload({
+          locale: data.locale === "en" ? "en" : "id",
+          scope: "ad",
+          since: analysisPeriod.since,
+          until: analysisPeriod.until,
           durationDays: analysisPeriod.days,
           timezone: analysisPeriod.timezone,
-          rowCount: analysisAggregate?.rowCount ?? 0,
+          truncated: false,
+          entityStatus: evalResult.entityStatus,
           dataStatus: evalResult.dataStatus,
-          dataStatusReason: evalResult.dataStatusReason,
-          evaluatorAction: evalResult.action,
+          performanceStatus: evalResult.performanceStatus,
+          lockedAction: evalResult.action,
           targetCpr: null,
-          targetCpql: null,
-          crmProspects: crmLeadsCount,
-          crmAttributionNote: crmSummary?.note,
-          crmContextBlock,
-          verifiedInboundMessages,
-          property: {
-            projectName: data.propertyContext?.projectName,
-            location: data.propertyContext?.location,
-            priceRange: data.propertyContext?.priceRange,
-            propertyType: data.propertyContext?.propertyType,
+          currency: accountCurrency,
+          spend: data.metrics.spend,
+          impressions: data.metrics.impressions,
+          allClicks: data.metrics.allClicks,
+          linkClicks: data.metrics.linkClicks,
+          results: adResults ?? 0,
+          resultKind: primaryResult?.kind === "messaging" ? "messaging_conversations" : primaryResult?.kind || "messaging_conversations",
+          resultLabel: primaryResult?.label || "Percakapan Pesan",
+          cpr: primaryResult?.cost ?? data.metrics.costPerMessagingConversation ?? data.metrics.costPerResult ?? null,
+          linkCtr: data.metrics.linkCtr ?? null,
+          linkCpc: data.metrics.linkCpc ?? null,
+          cpm: data.metrics.cpm ?? null,
+          frequency: analysisAggregate?.frequency ?? null,
+          previousSpend: null,
+          previousResults: null,
+          dailySpend,
+          dailyResults,
+          objectiveGroups: data.campaignObjective ? [data.campaignObjective] : [],
+          crm: {
+            connected: crmSummary?.availability === "available" || crmSummary?.availability === "empty",
+            workspaceTotal: crmSummary?.workspaceTotal ?? null,
+            qualifiedCount,
+            cqpl: qualifiedCount !== null && qualifiedCount > 0 ? data.metrics.spend / qualifiedCount : null,
           },
-          metrics: groundTruth,
-          untrustedChatBlock: wrapUntrustedChatBlock(sanitizedChat),
-          formatMoney: formatRupiah,
-        });
-        const userPrompt =
-          data.locale === "en"
-            ? `${baseUserPrompt}\n\nLANGUAGE INSTRUCTION: Write all narrative text fields (performanceSummary, budgetDecision.reason, keyFindings[].finding/evidence/impact, priorityActions[].action/howToCheck/expectedResult, additionalDetails.funnelEvaluation.firstFailingStage/explanation, facts, hypotheses, unknowns, creativeNotes, chain_of_thought) in clear, professional English. Keep enum keys (such as budgetDecision.decision and recommended_action) strictly in their required schema enum values.`
-            : baseUserPrompt;
+          entities: [
+            {
+              level: "ad",
+              name: data.adName,
+              effectiveStatus: data.status || null,
+              objective: data.campaignObjective || null,
+              spendSharePct: null,
+              spend: data.metrics.spend,
+              results: adResults,
+              cpr: primaryResult?.cost ?? data.metrics.costPerMessagingConversation ?? null,
+              score: null,
+              category: null,
+              eligibleAction: evalResult.action,
+              funnelSignal: null,
+            },
+            ...(data.campaignName ? [{
+              level: "campaign" as const,
+              name: data.campaignName,
+              effectiveStatus: null,
+              objective: data.campaignObjective || null,
+              spendSharePct: null,
+              spend: null,
+              results: null,
+              cpr: null,
+              score: null,
+              category: null,
+              eligibleAction: null,
+              funnelSignal: null,
+            }] : []),
+          ],
+        }))}\n\n${wrapUntrustedChatTranscript(sanitizedChat)}`;
 
         const response = await client.createChatCompletion({
           messages: [
@@ -1683,7 +1733,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const validationResult = ModelOutputSchema.safeParse(parsedJson);
+        const validationResult = CtwaDrawerModelSchema.safeParse(parsedJson);
         if (!validationResult.success) {
           await releaseReservation("schema_validation_error");
           console.error(
@@ -1700,32 +1750,13 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const validData = applyGuardrailsToModelOutput(
-          validationResult.data,
-          {
-            dataStatus: evalResult.dataStatus,
-            durationDays: analysisPeriod.days,
-            hasChatTranscript: sanitizedChat.length > 0,
-            entityStatus: evalResult.entityStatus,
-            analysisScope: "ad",
-            spend: data.metrics.spend,
-            results: data.metrics.messagingConversations ?? data.metrics.results,
-            targetCpr: null,
-            performanceStatus: evalResult.performanceStatus,
-            actualCpr: evalResult.actualCpr,
-          },
-          {
-            spend: groundTruth.spend,
-            link_ctr: groundTruth.link_ctr,
-            cpm: groundTruth.cpm,
-            link_cpc: groundTruth.link_cpc,
-            messaging_conversations: groundTruth.messaging_conversations,
-            leads: groundTruth.leads,
-            cost_per_messaging_conversation: groundTruth.cost_per_messaging_conversation,
-            cost_per_lead: groundTruth.cost_per_lead,
-            unique_reach: groundTruth.unique_reach,
-          }
-        );
+        const modelOutput = validationResult.data;
+        const lockedAction = evalResult.action;
+        const lockedBudgetDecision = lockedActionToBudgetDecision(lockedAction);
+        const stageLabel = FUNNEL_STAGE_LABEL[modelOutput.additionalDetails.firstFailedFunnelStage];
+        const creativeNotes = sanitizedChat.length === 0 && modelOutput.additionalDetails.creativeNotes.length === 0
+          ? null
+          : modelOutput.additionalDetails.creativeNotes.join(" ").trim() || null;
         const dataSourceStatus: SourceDataStatusSection = {
           metaResults:
             data.metrics.results !== null && data.metrics.results !== undefined
@@ -1733,7 +1764,10 @@ export async function POST(request: NextRequest) {
               : "Tidak tersedia",
           crmProspects: crmSummary?.prospectsLine || (crmLeadsCount !== null ? `${crmLeadsCount.toLocaleString("id-ID")} prospek dari CRM` : "Belum tersedia"),
           crmLines: crmSummary?.lines,
-          note: crmSummary ? `${crmSummary.note} Periode: ${analysisPeriod.label}.` : "Pesan tidak dikumpulkan otomatis. Data CRM berasal dari input atau unggahan klien.",
+          note: [
+            modelOutput.sourceDataStatus,
+            crmSummary ? `${crmSummary.note} Periode: ${analysisPeriod.label}.` : "Pesan tidak dikumpulkan otomatis. Data CRM berasal dari input atau unggahan klien.",
+          ].filter(Boolean).join(" "),
         };
 
         // Build 6 Core Metrics mathematically
@@ -1787,35 +1821,61 @@ export async function POST(request: NextRequest) {
           adName: data.adName,
           campaignName: data.campaignName,
           campaignObjective: data.campaignObjective,
-          performanceSummary: cardCopy.summary,
+          performanceSummary: modelOutput.performanceSummary.trim() || cardCopy.summary,
           sourceDataStatus: dataSourceStatus,
-          budgetDecision: { ...validData.budgetDecision, reason: cardCopy.reason },
-          keyFindings: validData.keyFindings,
-          priorityActions: validData.priorityActions,
+          budgetDecision: {
+            decision: lockedBudgetDecision,
+            reason: modelOutput.budgetDecision.reason.trim() || cardCopy.reason,
+          },
+          keyFindings: modelOutput.keyFindings.slice(0, 4).map((finding, index) => ({
+            finding,
+            evidence: modelOutput.additionalDetails.facts[index] || "Angka mengikuti groundTruthMetrics server.",
+            impact: stageLabel,
+            isHypothesis: false,
+          })),
+          priorityActions: modelOutput.priorityActions.slice(0, 4).map((item) => ({
+            action: item.action,
+            howToCheck: item.owner === "sales_team" ? "Pemilik: tim sales" : "Pemilik: pengiklan",
+            expectedResult: item.expectedImpact,
+          })),
           coreMetrics,
           additionalDetails: {
-            ...validData.additionalDetails,
+            funnelEvaluation: {
+              firstFailingStage: stageLabel,
+              explanation: modelOutput.additionalDetails.hypotheses[0] || stageLabel,
+            },
+            facts: modelOutput.additionalDetails.facts,
+            hypotheses: modelOutput.additionalDetails.hypotheses,
+            unknowns: modelOutput.additionalDetails.unknowns,
             allMetrics: allMetricsDetailed,
+            creativeNotes,
           },
-          executiveSummary: cardCopy.summary,
+          executiveSummary: modelOutput.performanceSummary.trim() || cardCopy.summary,
           actionDecision: {
-            priority:
-              validData.budgetDecision.decision === "NAIKKAN"
-                ? "OPTIMALKAN"
-                : validData.budgetDecision.decision === "TAHAN KENAIKAN"
+            priority: lockedBudgetDecision === "HENTIKAN SEMENTARA" || lockedBudgetDecision === "KURANGI"
+              ? "EVALUASI_PENGHENTIAN"
+              : lockedBudgetDecision === "TAHAN KENAIKAN"
                 ? "PANTAU"
-                : validData.budgetDecision.decision === "HENTIKAN SEMENTARA"
-                ? "EVALUASI_PENGHENTIAN"
-                : validData.budgetDecision.decision === "KURANGI"
-                ? "EVALUASI_PENGHENTIAN"
-                : "PERTAHANKAN",
-            priorityLabel: validData.budgetDecision.decision,
-            headline: validData.budgetDecision.decision,
-            justification: cardCopy.reason,
+                : lockedBudgetDecision === "PERTAHANKAN" && lockedAction === "reaktivasi"
+                  ? "OPTIMALKAN"
+                  : lockedBudgetDecision === "PERTAHANKAN"
+                    ? "PERTAHANKAN"
+                    : "PANTAU",
+            priorityLabel: lockedBudgetDecision,
+            headline: lockedAction,
+            justification: modelOutput.budgetDecision.reason.trim() || cardCopy.reason,
           },
-          recommended_action: validData.recommended_action,
-          chain_of_thought: validData.chain_of_thought,
-          context_awareness: validData.context_awareness,
+          recommended_action: lockedActionToRecommended(lockedAction),
+          context_awareness: {
+            analyzed_scope: "Ad",
+            entity_status: evalResult.entityStatus === "ACTIVE"
+              ? "Active"
+              : evalResult.entityStatus === "PAUSED" || evalResult.entityStatus === "ARCHIVED"
+                ? "Paused"
+                : "Unknown",
+            period_confidence: analysisPeriod.days <= 3 ? "Low" : analysisPeriod.days >= 14 ? "High" : "Medium",
+            period_days: analysisPeriod.days,
+          },
         };
 
         if (reservation.reservationId && !(await finishAiAnalysis(user.id, reservation.reservationId, true))) {

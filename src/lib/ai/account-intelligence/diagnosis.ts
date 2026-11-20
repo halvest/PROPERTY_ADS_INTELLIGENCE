@@ -10,6 +10,8 @@ export interface IntelligenceEvidence {
 
 export interface IntelligenceFinding {
   title: string;
+  headline?: string;
+  summaryShort?: string;
   category: "performance" | "comparison" | "creative" | "conversion" | "budget" | "status";
   severity: "critical" | "high" | "medium" | "low";
   certainty: "confirmed" | "hypothesis" | "unknown";
@@ -37,6 +39,7 @@ export interface StrategicRecommendation {
 
 export interface AdvertisingIntelligence {
   executive_summary: string;
+  executive_pulse?: string;
   confidence: {
     data: ConfidenceLevel;
     performance: ConfidenceLevel;
@@ -57,6 +60,19 @@ export interface AdvertisingIntelligence {
 function rupiah(value: number | null): string {
   if (value === null) return "null";
   return `Rp${Math.round(value).toLocaleString("id-ID")}`;
+}
+
+function compactRp(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `Rp ${(value / 1_000_000).toLocaleString("id-ID", { maximumFractionDigits: 1 })}jt`;
+  if (abs >= 1_000) return `Rp ${Math.round(value / 1_000).toLocaleString("id-ID")}rb`;
+  return `Rp ${Math.round(value).toLocaleString("id-ID")}`;
+}
+
+function fmtPct(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return `${value.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
 }
 
 function median(values: number[]): number | null {
@@ -82,6 +98,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   if (meta.all_campaigns_paused) {
     findings.push({
       title: "Seluruh campaign yang teridentifikasi sedang dijeda",
+      headline: "Nonaktif (Referensi Historis) · Tidak memerlukan tindakan operasional.",
+      summaryShort: "Nonaktif (Referensi Historis) · Tidak memerlukan tindakan operasional.",
       category: "status",
       severity: "high",
       certainty: "confirmed",
@@ -99,6 +117,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   if (!summary.results_comparable) {
     findings.push({
       title: "Hasil akun tidak sejenis",
+      headline: "Multi-Objektif · Evaluasi CPR dipisahkan per jenis hasil.",
+      summaryShort: "Multi-Objektif · Evaluasi CPR dipisahkan per jenis hasil.",
       category: "conversion",
       severity: "high",
       certainty: "confirmed",
@@ -113,6 +133,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   if (report.campaign_rankings.some((item) => item.target.status === "TARGET_NOT_CONFIGURED")) {
     findings.push({
       title: "Sebagian target CPR belum diatur",
+      headline: "Target CPR Belum Diisi · Atur target agar batas efisiensi aktif.",
+      summaryShort: "Target CPR Belum Diisi · Atur target agar batas efisiensi aktif.",
       category: "performance",
       severity: "medium",
       certainty: "confirmed",
@@ -127,6 +149,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   if (report.comparison.status === "COMPARISON_DATA_UNAVAILABLE") {
     findings.push({
       title: "Perbandingan periode tidak tersedia",
+      headline: "Tanpa Pembanding Periode Lalu · Evaluasi berbasis target & peer saat ini.",
+      summaryShort: "Tanpa Pembanding Periode Lalu · Evaluasi berbasis target & peer saat ini.",
       category: "comparison",
       severity: "low",
       certainty: "unknown",
@@ -141,6 +165,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   if (concentration) {
     findings.push({
       title: "Belanja terkonsentrasi",
+      headline: `Konsentrasi Anggaran · ${concentration.share_pct}% pada ${concentration.campaign_name} — Siapkan kampanye cadangan.`,
+      summaryShort: `Konsentrasi Anggaran · ${concentration.share_pct}% pada ${concentration.campaign_name} — Siapkan kampanye cadangan.`,
       category: "budget",
       severity: "medium",
       certainty: "confirmed",
@@ -158,6 +184,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   for (const wasted of report.budget_analysis.wasted_spend_campaigns.slice(0, 2)) {
     findings.push({
       title: `${wasted.name} berbelanja tanpa hasil`,
+      headline: `Spend Tanpa Hasil · ${compactRp(wasted.spend)} (0 konversi) pada ${wasted.name} — Hentikan penayangan.`,
+      summaryShort: `Spend Tanpa Hasil · ${compactRp(wasted.spend)} (0 konversi) — Hentikan penayangan.`,
       category: "performance",
       severity: "high",
       certainty: "confirmed",
@@ -195,7 +223,7 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
       ctr !== null &&
       ctr < 0.8 &&
       cvr !== null &&
-      cvr > 20 &&
+      cvr >= 20 &&
       linkClicks >= 30 &&
       isProfitableCpr
     );
@@ -209,6 +237,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
         : 0);
     findings.push({
       title: `Creative Bottleneck (Golden Offer): ${goldenOfferEntity.name}`,
+      headline: `Konversi Tinggi, CTR Rendah · CTR ${fmtPct(goldenOfferEntity.ctr)} / CVR ${fmtPct(resolvedCvr)} — Pertahankan penawaran, uji variasi hook visual.`,
+      summaryShort: `Konversi Tinggi, CTR Rendah · CTR ${fmtPct(goldenOfferEntity.ctr)} / CVR ${fmtPct(resolvedCvr)} — Pertahankan penawaran, uji variasi hook visual.`,
       category: "creative",
       severity: "medium",
       certainty: "confirmed",
@@ -227,6 +257,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   } else if (summary.average_ctr !== null && summary.average_ctr < 0.8 && summary.total_impressions >= 1000) {
     findings.push({
       title: "CTR tautan akun rendah",
+      headline: `CTR Akun Rendah (Hipotesis) · CTR ${fmtPct(summary.average_ctr)} — Uji variasi hook visual atau penawaran.`,
+      summaryShort: `CTR Akun Rendah (Hipotesis) · CTR ${fmtPct(summary.average_ctr)} — Uji variasi hook visual atau penawaran.`,
       category: "creative",
       severity: "medium",
       certainty: "hypothesis",
@@ -267,6 +299,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
         : 0);
     findings.push({
       title: `${trafficLeakEntity.name} mendapat klik tanpa hasil (Traffic Leak)`,
+      headline: `Drop-off Pasca-Klik · CTR ${fmtPct(trafficLeakEntity.ctr)} / CVR ${fmtPct(resolvedCvr)} — Evaluasi kesesuaian pesan iklan dengan halaman tujuan/WhatsApp.`,
+      summaryShort: `Drop-off Pasca-Klik · CTR ${fmtPct(trafficLeakEntity.ctr)} / CVR ${fmtPct(resolvedCvr)} — Evaluasi kesesuaian pesan iklan dengan halaman tujuan/WhatsApp.`,
       category: "conversion",
       severity: "high",
       certainty: "hypothesis",
@@ -299,6 +333,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   if (fatigued) {
     findings.push({
       title: "Indikasi fatigue berbasis performa",
+      headline: `Indikasi Jenuh · Frekuensi ${fatigued.frequency}x / CTR ${fmtPct(fatigued.ctr)} → Siapkan materi visual segar.`,
+      summaryShort: `Indikasi Jenuh · Frekuensi ${fatigued.frequency}x / CTR ${fmtPct(fatigued.ctr)} → Siapkan materi visual segar.`,
       category: "creative",
       severity: "medium",
       certainty: "hypothesis",
@@ -380,8 +416,20 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
     findings[0] ? findings[0].observation : "Belum ada temuan tambahan di luar ringkasan metrik.",
   ].join(" ");
 
+  const hc = summary.health_counts;
+  const executive_pulse = meta.all_campaigns_paused
+    ? "Nonaktif (Referensi Historis) · Tidak memerlukan tindakan operasional."
+    : !summary.results_comparable
+      ? "Multi-Objektif · Evaluasi CPR dipisahkan per jenis hasil."
+      : `${compactRp(summary.total_spend)} · ${summary.total_results ?? 0} hasil @ ${compactRp(summary.blended_cpr)} — ${
+          hc
+            ? `${hc.scaleCount} Efisien · ${hc.optimizeCount} Optimasi · ${hc.wasteCount} Kritis · ${hc.holdCount} Observasi`
+            : "Pantau performa aktif"
+        }.`;
+
   return {
     executive_summary,
+    executive_pulse,
     confidence: {
       data: meta.data_confidence,
       performance,

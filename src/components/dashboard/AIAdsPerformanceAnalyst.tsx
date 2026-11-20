@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useMemo, useSyncExternalStore } from "react";
+import React, { useState, useEffect, useRef, useMemo, useSyncExternalStore } from "react";
 import type { PerformanceAnalysisOutput } from "@/app/api/ai/analyze-performance/route";
 import type { CampaignDetailData } from "@/components/dashboard/CampaignDetailWorkspace";
 import type { RealAdRow } from "@/app/(dashboard)/ads/page";
@@ -8,10 +8,9 @@ import { useToast } from "@/components/ui/Toast";
 import { useAiQuota } from "@/hooks/useAiQuota";
 import { IdempotencyKeyManager } from "@/lib/ai/idempotency-key";
 import { formatDisplayCurrency, type DisplayLocale } from "@/lib/format/display-currency";
-import { AccountIntelligenceReportView } from "@/components/dashboard/AccountIntelligenceReport";
-import { accountReportSupersedesLegacyDecision } from "@/lib/ai/account-intelligence/status";
 import { cqplForScope } from "@/lib/crm/crm-analysis-context";
 import { useI18n } from "@/lib/i18n/I18nProvider";
+import { createClient } from "@/lib/supabase/client";
 
 interface AIAdsPerformanceAnalystProps {
   campaigns: CampaignDetailData[];
@@ -233,9 +232,23 @@ export function AIAdsPerformanceAnalyst({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Concurrency guard
+  // Concurrency & account-switch race guard
   const isAnalyzingRef = useRef(false);
+  const analysisReqSeqRef = useRef(0);
+  const analysisAbortRef = useRef<AbortController | null>(null);
+  const activeAccountIdRef = useRef<string | null>(adAccountId || null);
   const idempotencyRef = useRef(new IdempotencyKeyManager());
+
+  // Abort any in-flight analysis when switching Ad Accounts or unmounting
+  useEffect(() => {
+    activeAccountIdRef.current = adAccountId || null;
+    return () => {
+      analysisReqSeqRef.current += 1;
+      analysisAbortRef.current?.abort();
+      analysisAbortRef.current = null;
+      isAnalyzingRef.current = false;
+    };
+  }, [adAccountId]);
 
   const saveTargetCpr = (val: number | null) => {
     try {
@@ -326,72 +339,6 @@ export function AIAdsPerformanceAnalyst({
     return locale === "id" ? "Seluruh Akun" : "All Accounts";
   }, [scope, effectiveCampaignId, effectiveAdId, campaigns, ads, accountName, locale]);
 
-  // Live Scope Preview Metrics (authentic data from current props)
-  const liveScopePreview = useMemo(() => {
-    if (scope === "campaign") {
-      const cmp = campaigns.find((c) => c.id === effectiveCampaignId);
-      const spend = cmp?.spend ?? 0;
-      const impressions = cmp?.impressions ?? 0;
-      const linkClicks = cmp?.linkClicks ?? 0;
-      const results = cmp?.results ?? 0;
-      const cpr = cmp?.costPerResult ?? (results > 0 ? spend / results : null);
-      const ctr = cmp?.linkCtr ?? (impressions > 0 ? (linkClicks / impressions) * 100 : 0);
-      const cvr = linkClicks > 0 ? (results / linkClicks) * 100 : 0;
-      return {
-        spend,
-        impressions,
-        linkClicks,
-        results,
-        cpr,
-        ctr,
-        cvr,
-        status: cmp?.status || "UNKNOWN",
-        subLabel: cmp ? `${cmp.activeAdsCount}/${cmp.totalAdsCount} Ads` : "—",
-      };
-    }
-    if (scope === "ad") {
-      const ad = ads.find((a) => a.id === effectiveAdId);
-      const spend = ad?.spend ?? 0;
-      const impressions = ad?.impressions ?? 0;
-      const linkClicks = ad?.linkClicks ?? 0;
-      const results = ad?.results ?? 0;
-      const cpr = ad?.costPerResult ?? (results > 0 ? spend / results : null);
-      const ctr = ad?.linkCtr ?? (impressions > 0 ? (linkClicks / impressions) * 100 : 0);
-      const cvr = linkClicks > 0 ? (results / linkClicks) * 100 : 0;
-      return {
-        spend,
-        impressions,
-        linkClicks,
-        results,
-        cpr,
-        ctr,
-        cvr,
-        status: ad?.deliveryStatus === "DELIVERING" ? "ACTIVE" : ad?.adSettingStatus || "PAUSED",
-        subLabel: ad ? cleanEntityName(ad.campaignName) : "—",
-      };
-    }
-    // Account scope
-    const spend = campaigns.reduce((acc, c) => acc + (c.spend || 0), 0);
-    const impressions = campaigns.reduce((acc, c) => acc + (c.impressions || 0), 0);
-    const linkClicks = campaigns.reduce((acc, c) => acc + (c.linkClicks || 0), 0);
-    const results = campaigns.reduce((acc, c) => acc + (c.results || 0), 0);
-    const cpr = results > 0 ? spend / results : null;
-    const ctr = impressions > 0 ? (linkClicks / impressions) * 100 : 0;
-    const cvr = linkClicks > 0 ? (results / linkClicks) * 100 : 0;
-    const activeCampaignCount = campaigns.filter((c) => c.status === "ACTIVE").length;
-    return {
-      spend,
-      impressions,
-      linkClicks,
-      results,
-      cpr,
-      ctr,
-      cvr,
-      status: activeCampaignCount > 0 ? "ACTIVE" : "PAUSED",
-      subLabel: `${campaigns.length} Campaigns · ${ads.length} Ads`,
-    };
-  }, [scope, campaigns, ads, effectiveCampaignId, effectiveAdId]);
-
   const periodText = useMemo(() => {
     switch (period) {
       case "1d":
@@ -436,6 +383,11 @@ export function AIAdsPerformanceAnalyst({
       return;
     }
     isAnalyzingRef.current = true;
+    analysisAbortRef.current?.abort();
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
+    const reqSeq = ++analysisReqSeqRef.current;
+    const requestedAccountId = adAccountId || null;
     setIsLoading(true);
     setError(null);
 
@@ -443,39 +395,100 @@ export function AIAdsPerformanceAnalyst({
 
     try {
       const analysisContext = `analyze-performance:${scope}:${targetId || "account"}:${period}:${customSince || ""}:${customUntil || ""}:${adAccountId || ""}`;
-      const res = await fetch("/api/ai/analyze-performance", {
+      const supabase = createClient();
+
+      let currentSessionToken: string | null = null;
+      try {
+        let { data: { session } } = await supabase.auth.getSession();
+        if (!session || (session.expires_at && session.expires_at * 1000 < Date.now() + 60_000)) {
+          const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+          if (!refreshErr && refreshData?.session) {
+            session = refreshData.session;
+          }
+        }
+        currentSessionToken = session?.access_token || null;
+      } catch {
+        // Fallback to cookie
+      }
+
+      const buildHeaders = (token: string | null) => {
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyRef.current.keyFor(analysisContext),
+        };
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+        }
+        return headers;
+      };
+
+      const requestPayload = {
+        scope,
+        period,
+        dateRange: currentDateRange || undefined,
+        targetId,
+        adAccountId: adAccountId || undefined,
+        customSince: period === "custom" && customSince ? customSince : undefined,
+        customUntil: period === "custom" && customUntil ? customUntil : undefined,
+        targetCpr: targetCpr || undefined,
+        locale,
+      };
+
+      let res = await fetch("/api/ai/analyze-performance", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyRef.current.keyFor(analysisContext) },
-        body: JSON.stringify({
-          scope,
-          period,
-          dateRange: currentDateRange || undefined,
-          targetId,
-          adAccountId: adAccountId || undefined,
-          customSince: period === "custom" && customSince ? customSince : undefined,
-          customUntil: period === "custom" && customUntil ? customUntil : undefined,
-          targetCpr: targetCpr || undefined,
-          locale,
-        }),
+        headers: buildHeaders(currentSessionToken),
+        signal: controller.signal,
+        body: JSON.stringify(requestPayload),
       });
+
+      if (res.status === 401) {
+        try {
+          const { data: retryRefresh, error: retryRefreshErr } = await supabase.auth.refreshSession();
+          if (!retryRefreshErr && retryRefresh?.session) {
+            currentSessionToken = retryRefresh.session.access_token;
+            res = await fetch("/api/ai/analyze-performance", {
+              method: "POST",
+              headers: buildHeaders(currentSessionToken),
+              signal: controller.signal,
+              body: JSON.stringify(requestPayload),
+            });
+          }
+        } catch {
+          // If refresh fails, proceed to 401 handler
+        }
+      }
+
+      if (reqSeq !== analysisReqSeqRef.current || activeAccountIdRef.current !== requestedAccountId) {
+        return;
+      }
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || (locale === "id" ? "Gagal memproses analisis performa iklan." : "Failed to process ad performance analysis."));
+        if (res.status === 401) {
+          throw new Error(
+            locale === "id"
+              ? "Sesi login Anda telah berakhir. Silakan masuk kembali untuk melanjutkan analisis."
+              : "Your session has expired. Please sign in again to continue."
+          );
+        }
+        throw new Error(errJson.error || (locale === "id" ? "Gagal memproses evaluasi performa iklan." : "Failed to process ad performance evaluation."));
       }
 
       const json = await res.json();
+      if (reqSeq !== analysisReqSeqRef.current || activeAccountIdRef.current !== requestedAccountId) {
+        return;
+      }
       if (json.success && json.data) {
         idempotencyRef.current.complete(analysisContext);
         setAnalysis(json.data);
-        setAnalysisAccountId(adAccountId || null);
+        setAnalysisAccountId(requestedAccountId);
         setLastAnalyzedScopeContext(currentSelectionLabel);
         addToast(
           "success",
-          locale === "id" ? "Analisis Selesai" : "Analysis Complete",
+          locale === "id" ? "Analisis AI Selesai" : "AI Analysis Complete",
           locale === "id"
-            ? `Evaluasi performa untuk ${currentSelectionLabel} berhasil diperbarui.`
-            : `Performance evaluation for ${currentSelectionLabel} has been updated.`
+            ? `Analisis performa AI untuk ${currentSelectionLabel} berhasil diperbarui.`
+            : `AI performance analysis for ${currentSelectionLabel} has been updated.`
         );
         setError(null);
         void refreshQuota();
@@ -483,21 +496,26 @@ export function AIAdsPerformanceAnalyst({
         throw new Error(locale === "id" ? "Format respons tidak valid." : "Invalid response format.");
       }
     } catch (err) {
+      if (controller.signal.aborted || reqSeq !== analysisReqSeqRef.current) {
+        return;
+      }
       setError(
         err instanceof Error
           ? err.message
           : locale === "id"
-          ? "Terjadi kesalahan saat memproses analisis. Data iklan tetap aman."
-          : "An error occurred while processing analysis. Ad data remains safe."
+          ? "Terjadi kesalahan saat memproses evaluasi. Data iklan tetap aman."
+          : "An error occurred while processing evaluation. Ad data remains safe."
       );
       addToast(
         "error",
-        locale === "id" ? "Gagal Analisis Performa" : "Analysis Failed",
-        err instanceof Error ? err.message : (locale === "id" ? "Terjadi kesalahan saat memproses analisis." : "An error occurred while processing analysis.")
+        locale === "id" ? "Gagal Evaluasi Performa" : "Evaluation Failed",
+        err instanceof Error ? err.message : (locale === "id" ? "Terjadi kesalahan saat memproses evaluasi." : "An error occurred while processing evaluation.")
       );
     } finally {
-      setIsLoading(false);
-      isAnalyzingRef.current = false;
+      if (reqSeq === analysisReqSeqRef.current) {
+        setIsLoading(false);
+        isAnalyzingRef.current = false;
+      }
       void refreshQuota();
     }
   };
@@ -595,15 +613,26 @@ export function AIAdsPerformanceAnalyst({
   const activeVerdictBadgeText = analysis ? verdictBadgeText[analysis.verdict.status] : activeActionStyle.badgeText;
   const pausedEntity = analysis?.evaluator?.entity_status === "PAUSED" || analysis?.evaluator?.entity_status === "ARCHIVED";
   const spendValue = analysis?.metrics.find((metric) => metric.key === "spend")?.value ?? 0;
-  const primaryBadgeText = !pausedEntity
-    ? activeVerdictBadgeText
-    : analysis?.evaluator?.action === "reaktivasi"
-      ? locale === "id" ? "AKTIFKAN KEMBALI" : "RE-ACTIVATE"
-      : analysis?.evaluator?.action === "tinjau_reaktivasi"
-      ? locale === "id" ? "TINJAU HISTORI" : "REVIEW HISTORY"
-      : analysis?.evaluator?.action === "pantau" || spendValue === 0
-        ? locale === "id" ? "DIJEDA (TANPA DATA)" : "PAUSED (NO DATA)"
-        : locale === "id" ? "EVALUASI ULANG" : "RE-EVALUATE";
+  const primaryBadgeText =
+    scope === "account"
+      ? analysis?.verdict.status === "scale"
+        ? locale === "id" ? "PORTOFOLIO EFISIEN" : "EFFICIENT PORTFOLIO"
+        : analysis?.verdict.status === "optimize"
+        ? locale === "id" ? "OPTIMASI PORTOFOLIO" : "OPTIMIZE PORTFOLIO"
+        : analysis?.verdict.status === "stop"
+        ? locale === "id" ? "REALOKASI ANGGARAN" : "REALLOCATE BUDGET"
+        : locale === "id" ? "PORTOFOLIO STABIL" : "STABLE PORTFOLIO"
+      : !pausedEntity
+        ? activeVerdictBadgeText
+        : analysis?.evaluator?.action === "reaktivasi"
+          ? locale === "id" ? "AKTIFKAN KEMBALI" : "RE-ACTIVATE"
+          : analysis?.evaluator?.action === "tinjau_reaktivasi"
+          ? analysis?.evaluator?.performance_status === "memenuhi_target"
+            ? locale === "id" ? "KANDIDAT REAKTIVASI" : "REACTIVATION CANDIDATE"
+            : locale === "id" ? "TINJAU HISTORI" : "REVIEW HISTORY"
+          : analysis?.evaluator?.action === "pantau" || spendValue === 0
+            ? locale === "id" ? "DIJEDA (TANPA DATA)" : "PAUSED (NO DATA)"
+            : locale === "id" ? "EVALUASI ULANG" : "RE-EVALUATE";
 
   const dataStatus = analysis?.evaluator?.data_status || "terbatas";
   const dataStatusStyleMap: Record<string, { label: string; bg: string; dot: string }> = {
@@ -644,51 +673,37 @@ export function AIAdsPerformanceAnalyst({
   };
   const activePerformanceStatusStyle = performanceStatusStyleMap[performanceStatus] || performanceStatusStyleMap.belum_dapat_dinilai;
 
-  const intlLocale = locale === "id" ? "id-ID" : "en-US";
-  const cprComparisonRatio =
-    targetCpr && liveScopePreview.cpr && liveScopePreview.cpr > 0
-      ? Math.min(100, Math.round((targetCpr / liveScopePreview.cpr) * 100))
-      : null;
-  const isPreviewCprHealthy =
-    targetCpr !== null && liveScopePreview.cpr !== null && liveScopePreview.cpr <= targetCpr;
-
   return (
     <section
-      aria-label="AI Ads Performance Analyst"
+      aria-label="Account Performance Audit"
       className="w-full min-w-0 space-y-5"
     >
       {/* ================================================================= */}
       {/* COMMAND CENTER & INTERACTIVE SCOPE SELECTOR                       */}
       {/* ================================================================= */}
-      <div className="surface-card relative overflow-hidden rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-6">
-        {/* Ambient Solar & Indigo Glow */}
-        <div
-          className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-gradient-to-br from-amber-400/15 via-indigo-500/5 to-transparent blur-3xl dark:from-amber-400/15 dark:via-indigo-500/10"
-          aria-hidden="true"
-        />
-
-        {/* Top Header Row: Title, Solar Badge & Period Context */}
+      <div className="surface-card relative overflow-hidden rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-6">
+        {/* Top Header Row: Title, Evaluation Badge & Period Context */}
         <div className="relative mb-5 flex flex-col gap-3 border-b border-zinc-100 pb-5 dark:border-zinc-800/80 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3.5">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-500/10 text-amber-600 ring-1 ring-amber-500/25 dark:from-amber-400/15 dark:to-orange-500/10 dark:text-amber-400 dark:ring-amber-400/25 shadow-2xs">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/10 via-purple-500/10 to-amber-500/10 text-indigo-600 ring-1 ring-inset ring-indigo-500/20 dark:bg-indigo-950/40 dark:text-indigo-400 dark:ring-indigo-400/20">
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
               </svg>
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base sm:text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  {locale === "id" ? "Analisis Performa AI" : "AI Ads Performance Analyst"}
+                <h2 className="text-base sm:text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                  {locale === "id" ? "Audit Performa Akun" : "Account Performance Audit"}
                 </h2>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-amber-600/20 dark:bg-amber-950/60 dark:text-amber-300 dark:ring-amber-400/20">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  Solar Intelligence
+                <span className="inline-flex items-center gap-1.5 rounded-md bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-700 ring-1 ring-inset ring-indigo-600/20 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-400/25">
+                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                  {locale === "id" ? "Analisis AI & Engine v2.1" : "AI Intelligence & v2.1 Engine"}
                 </span>
               </div>
               <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                 {locale === "id"
-                  ? "Ringkasan eksekutif, evaluasi metrik terhadap target CPR, dan rekomendasi taktis berbasis data Meta Ads."
-                  : "Executive summary, metric evaluations against target CPR, and tactical recommendations based on selected ad data."}
+                  ? "Ringkasan eksekutif cerdas AI, evaluasi metrik terhadap target CPR, dan playbook tindakan berbasis snapshot Meta Ads."
+                  : "AI executive summary, metric evaluations against target CPR, and tactical action playbook based on Meta Ads snapshot."}
               </p>
             </div>
           </div>
@@ -998,12 +1013,9 @@ export function AIAdsPerformanceAnalyst({
           {/* Action Bar: Sync Status & Analyze CTA */}
           <div className="flex flex-col gap-3 rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-3.5 dark:border-zinc-800 dark:bg-zinc-800/50 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap items-center gap-2.5 text-xs text-zinc-500 dark:text-zinc-400">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
-              </span>
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />
               <span>
-                {locale === "id" ? "Snapshot data Meta: " : "Meta data snapshot: "}
+                {locale === "id" ? "Snapshot Meta Ads: " : "Meta Ads snapshot: "}
                 <time
                   dateTime={lastSyncedAt || undefined}
                   title={lastSyncedAt ? new Date(lastSyncedAt).toLocaleString(locale === "id" ? "id-ID" : "en-US", { timeZone: timezone || "Asia/Jakarta" }) : undefined}
@@ -1036,21 +1048,23 @@ export function AIAdsPerformanceAnalyst({
               type="button"
               onClick={runPerformanceAnalysis}
               disabled={isLoading || quota?.remaining === 0 || (period === "custom" && (!customSince || !customUntil))}
-              title={quota?.remaining === 0 ? (locale === "id" ? "Kuota analisis habis — lihat Pengaturan" : "Analysis quota exhausted — see Settings") : undefined}
-              className="btn-solar relative inline-flex min-h-11 w-full sm:w-auto shrink-0 items-center justify-center gap-2 rounded-xl px-6 py-2.5 text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:cursor-wait disabled:opacity-60 cursor-pointer"
+              title={quota?.remaining === 0 ? (locale === "id" ? "Kuota evaluasi habis — lihat Pengaturan" : "Evaluation quota exhausted — see Settings") : undefined}
+              className="relative inline-flex min-h-10 w-full sm:w-auto shrink-0 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 transition-all disabled:cursor-wait disabled:opacity-60 cursor-pointer"
             >
               {isLoading ? (
                 <>
-                  <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                  <svg className="h-4 w-4 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v8H4z" />
                   </svg>
-                  <span>{locale === "id" ? "AI Sedang Menganalisis..." : "AI is analyzing..."}</span>
+                  <span>{locale === "id" ? "Memproses Analisis AI..." : "Processing AI Analysis..."}</span>
                 </>
               ) : (
                 <>
-                  <span className="text-base" aria-hidden="true">✨</span>
-                  <span>{analysis ? locale === "id" ? "Analisis Ulang" : "Re-analyze" : locale === "id" ? "Analisis Performa" : "Analyze Performance"}</span>
+                  <svg className="h-4 w-4 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                  <span>{analysis ? (locale === "id" ? "Analisis Ulang AI" : "Re-run AI Analysis") : (locale === "id" ? "Jalankan Analisis AI" : "Run AI Analysis")}</span>
                 </>
               )}
             </button>
@@ -1060,8 +1074,8 @@ export function AIAdsPerformanceAnalyst({
             <div className="flex flex-col gap-2 rounded-xl border border-amber-200/90 bg-amber-50/90 px-4 py-2.5 text-xs font-medium text-amber-900 shadow-2xs dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
               <span>
                 {locale === "id"
-                  ? `Cakupan berubah ke "${currentSelectionLabel}". Klik Analisis Ulang untuk memperbarui diagnosis AI.`
-                  : `Scope changed to "${currentSelectionLabel}". Click Re-analyze to refresh AI diagnosis.`}
+                  ? `Cakupan berubah ke "${currentSelectionLabel}". Klik Analisis Ulang AI untuk memperbarui memo analisis.`
+                  : `Scope changed to "${currentSelectionLabel}". Click Re-run AI Analysis to refresh analysis memo.`}
               </span>
               <button
                 type="button"
@@ -1075,186 +1089,23 @@ export function AIAdsPerformanceAnalyst({
         </div>
       </div>
 
-      {/* ================================================================= */}
-      {/* PRE-ANALYSIS LIVE TELEMETRY PREVIEW (When !analysis && !isLoading)*/}
-      {/* ================================================================= */}
-      {!isLoading && !analysis && (
-        <div className="rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-6">
-          <div className="flex flex-col gap-2 border-b border-zinc-100 pb-4 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-500/10 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                  {locale === "id" ? "Pratinjau Data Cakupan" : "Live Scope Telemetry"}
-                </span>
-                <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                  {liveScopePreview.subLabel}
-                </span>
-              </div>
-              <h3 className="mt-1 text-base font-bold text-zinc-900 dark:text-zinc-50">
-                {activeTargetName}
-              </h3>
-            </div>
-
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              {locale === "id"
-                ? "Siap dianalisis · Tekan tombol ✨ Analisis Performa di atas"
-                : "Ready for evaluation · Click ✨ Analyze Performance above"}
-            </div>
-          </div>
-
-          {/* 4 Live Preview Infographic Cards */}
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {/* 1. Spend */}
-            <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/50 p-3.5 dark:border-zinc-800 dark:bg-zinc-800/40">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                {locale === "id" ? "Total Belanja (Spend)" : "Total Spend"}
-              </span>
-              <p className="mt-1.5 font-mono text-xl font-bold tabular-nums text-zinc-900 dark:text-zinc-50">
-                {formatAccountMoney(liveScopePreview.spend, accountCurrency, locale)}
-              </p>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                {new Intl.NumberFormat(intlLocale).format(liveScopePreview.impressions)} {locale === "id" ? "Impresi" : "Impressions"}
-              </p>
-            </div>
-
-            {/* 2. Link Clicks & CTR */}
-            <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/50 p-3.5 dark:border-zinc-800 dark:bg-zinc-800/40">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                  {locale === "id" ? "Klik Tautan & CTR" : "Link Clicks & CTR"}
-                </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-bold ${
-                    liveScopePreview.ctr >= 1
-                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                      : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                  }`}
-                >
-                  CTR {liveScopePreview.ctr.toFixed(2)}%
-                </span>
-              </div>
-              <p className="mt-1.5 font-mono text-xl font-bold tabular-nums text-zinc-900 dark:text-zinc-50">
-                {new Intl.NumberFormat(intlLocale).format(liveScopePreview.linkClicks)}
-              </p>
-              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
-                <div
-                  className={`h-full rounded-full ${liveScopePreview.ctr >= 1 ? "bg-emerald-500" : "bg-amber-500"}`}
-                  style={{ width: `${Math.min(100, Math.max(6, (liveScopePreview.ctr / 2) * 100))}%` }}
-                />
-              </div>
-            </div>
-
-            {/* 3. Conversion Results */}
-            <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/50 p-3.5 dark:border-zinc-800 dark:bg-zinc-800/40">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                  {locale === "id" ? "Hasil Konversi" : "Conversion Results"}
-                </span>
-                <span className="rounded-full bg-indigo-500/10 px-2 py-0.5 font-mono text-[10px] font-bold text-indigo-600 dark:text-indigo-300">
-                  CVR {liveScopePreview.cvr.toFixed(1)}%
-                </span>
-              </div>
-              <p className="mt-1.5 font-mono text-xl font-bold tabular-nums text-zinc-900 dark:text-zinc-50">
-                {new Intl.NumberFormat(intlLocale).format(liveScopePreview.results)}
-              </p>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                {locale === "id" ? "Konversi dari klik tautan" : "Conversions from link clicks"}
-              </p>
-            </div>
-
-            {/* 4. Actual CPR vs Target CPR */}
-            <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/50 p-3.5 dark:border-zinc-800 dark:bg-zinc-800/40">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-                  {locale === "id" ? "CPR Aktual vs Target" : "Actual vs Target CPR"}
-                </span>
-                {targetCpr && liveScopePreview.cpr !== null && (
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                      isPreviewCprHealthy
-                        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                        : "bg-rose-500/15 text-rose-700 dark:text-rose-300"
-                    }`}
-                  >
-                    {isPreviewCprHealthy
-                      ? locale === "id" ? "Sesuai Target ✓" : "On Target ✓"
-                      : locale === "id" ? "Di Atas Target" : "Above Target"}
-                  </span>
-                )}
-              </div>
-              <p className="mt-1.5 font-mono text-xl font-bold tabular-nums text-zinc-900 dark:text-zinc-50">
-                {liveScopePreview.cpr !== null
-                  ? formatAccountMoney(liveScopePreview.cpr, accountCurrency, locale)
-                  : "—"}
-              </p>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                {targetCpr
-                  ? `Target: ${formatAccountMoney(targetCpr, accountCurrency, locale)}`
-                  : locale === "id" ? "Target CPR belum diatur" : "Target CPR not set"}
-              </p>
-              {cprComparisonRatio !== null && (
-                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
-                  <div
-                    className={`h-full rounded-full ${isPreviewCprHealthy ? "bg-emerald-500" : "bg-rose-500"}`}
-                    style={{ width: `${Math.max(10, cprComparisonRatio)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 3-Pillar AI Blueprint Strip */}
-          <div className="mt-4 grid grid-cols-1 gap-2.5 border-t border-zinc-100 pt-4 text-xs dark:border-zinc-800 sm:grid-cols-3">
-            <div className="flex items-start gap-2.5 rounded-xl bg-zinc-50/70 p-3 dark:bg-zinc-800/30">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 font-mono text-[11px] font-bold text-amber-600 dark:text-amber-400">
-                01
-              </span>
-              <div>
-                <p className="font-semibold text-zinc-800 dark:text-zinc-200">
-                  {locale === "id" ? "Keputusan Eksekutif & Validitas Data" : "Executive Decision & Data Validity"}
-                </p>
-                <p className="mt-0.5 text-[11px] text-zinc-500">
-                  {locale === "id" ? "Rekomendasi Scale, Maintain, Optimize, atau Pause." : "Clear Scale, Maintain, Optimize, or Pause verdict."}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-2.5 rounded-xl bg-zinc-50/70 p-3 dark:bg-zinc-800/30">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-indigo-500/15 font-mono text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
-                02
-              </span>
-              <div>
-                <p className="font-semibold text-zinc-800 dark:text-zinc-200">
-                  {locale === "id" ? "Audit Funnel & Sinyal Diagnostik" : "Funnel Audit & Diagnostic Signals"}
-                </p>
-                <p className="mt-0.5 text-[11px] text-zinc-500">
-                  {locale === "id" ? "Deteksi kebocoran CTR, kejenuhan audiens, & anomali CPR." : "Pinpoints CTR drop-offs, creative fatigue, & CPR anomalies."}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-2.5 rounded-xl bg-zinc-50/70 p-3 dark:bg-zinc-800/30">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 font-mono text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
-                03
-              </span>
-              <div>
-                <p className="font-semibold text-zinc-800 dark:text-zinc-200">
-                  {locale === "id" ? "Playbook Taktis & Batas Stop-Loss" : "Tactical Playbook & Stop-Loss Caps"}
-                </p>
-                <p className="mt-0.5 text-[11px] text-zinc-500">
-                  {locale === "id" ? "Langkah eksekusi konkret beserta batas aman anggaran." : "Step-by-step actions with strict budget guardrails."}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Error Banner */}
       {error && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50/80 p-3.5 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
-          <span className="font-bold">
-            {locale === "id" ? "Gagal Menganalisis:" : "Analysis Failed:"}
-          </span>{" "}
-          {error}
+        <div className="rounded-xl border border-rose-200 bg-rose-50/80 p-3.5 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <span className="font-bold">
+              {locale === "id" ? "Gagal Menganalisis:" : "Analysis Failed:"}
+            </span>{" "}
+            {error}
+          </div>
+          {(error.includes("Sesi") || error.includes("sesi") || error.includes("session") || error.includes("masuk kembali") || error.includes("sign in")) && (
+            <a
+              href={`/login?redirect=${encodeURIComponent("/ads")}`}
+              className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100/80 dark:border-rose-800 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-950"
+            >
+              <span>{locale === "id" ? "Masuk Kembali" : "Sign In Again"}</span>
+            </a>
+          )}
         </div>
       )}
 
@@ -1278,19 +1129,11 @@ export function AIAdsPerformanceAnalyst({
         </div>
       )}
 
-      {/* Main Analysis Output (4 Blocks) */}
+      {/* Main Analysis Output (4 Pure AI Blocks: Rangkuman + Evaluasi Metrik + Insight Diagnostik + Rekomendasi Taktis) */}
       {!isLoading && analysis && (
         <div className="space-y-5">
-          {scope === "account" && analysis.account_intelligence && (
-            <AccountIntelligenceReportView
-              report={analysis.account_intelligence}
-              currency={accountCurrency}
-              locale={locale === "en" ? "en" : "id"}
-            />
-          )}
-          {!accountReportSupersedesLegacyDecision(scope, Boolean(analysis.account_intelligence)) && <>
           {/* ======================================================== */}
-          {/* BLOK 1 — VERDICT & DECISION CARD (Section E, F, H)       */}
+          {/* BLOK 1 — RANGKUMAN & KEPUTUSAN EKSEKUTIF AI              */}
           {/* ======================================================== */}
           <div
             className={`relative overflow-hidden rounded-2xl border border-zinc-200 border-t-4 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-6 ${activeActionStyle.borderColor}`}
@@ -1300,9 +1143,15 @@ export function AIAdsPerformanceAnalyst({
               aria-hidden="true"
             />
 
-            {/* Top Row: 3 Distinct Decision Outputs + Context Metadata */}
+            {/* Top Row: AI Badge, 3 Distinct Decision Outputs + Context Metadata */}
             <div className="relative flex flex-col gap-3 border-b border-zinc-100 pb-3.5 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800">
               <div className="flex flex-wrap items-center gap-2">
+                {/* AI Badge */}
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 border border-indigo-500/30 px-3 py-1 text-xs font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                  {locale === "id" ? "Rangkuman Eksekutif AI" : "AI Executive Summary"}
+                </span>
+
                 {/* 1. Action Prescribed */}
                 <span className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1 text-xs font-bold tracking-[0.06em] ${activeActionStyle.badgeBg}`}>
                   <span className={`h-2 w-2 rounded-full ${activeActionStyle.badgeDot}`} />
@@ -1336,25 +1185,51 @@ export function AIAdsPerformanceAnalyst({
                 </span>
                 <span>·</span>
                 <span className="font-mono">{analysis.evaluator?.timezone || timezone || "Asia/Jakarta"}</span>
-                {analysis.context_awareness && (
+                {scope === "account" && analysis.account_intelligence ? (
+                  <>
+                    <span>·</span>
+                    <span className="rounded-md bg-zinc-100 px-2 py-0.5 font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                      {locale === "id"
+                        ? `${analysis.account_intelligence.campaign_rankings.length} Kampanye Beraktivitas · ${analysis.account_intelligence.ad_rankings.length} Iklan`
+                        : `${analysis.account_intelligence.campaign_rankings.length} Active Campaigns · ${analysis.account_intelligence.ad_rankings.length} Ads`}
+                    </span>
+                  </>
+                ) : scope === "campaign" && analysis.campaign_breakdown ? (
+                  <>
+                    <span>·</span>
+                    <span className="rounded-md bg-zinc-100 px-2 py-0.5 font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                      {locale === "id"
+                        ? `${analysis.campaign_breakdown.totalAdSets} Ad Set · ${analysis.campaign_breakdown.totalAds} Materi Iklan`
+                        : `${analysis.campaign_breakdown.totalAdSets} Ad Sets · ${analysis.campaign_breakdown.totalAds} Ads`}
+                    </span>
+                  </>
+                ) : analysis.context_awareness ? (
                   <>
                     <span>·</span>
                     <span className="rounded-md bg-zinc-100 px-2 py-0.5 font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                       {analysis.context_awareness.analyzed_scope} · {analysis.context_awareness.entity_status} · {locale === "id" ? "keyakinan" : "confidence"} {analysis.context_awareness.period_confidence}
                     </span>
                   </>
-                )}
+                ) : null}
               </div>
             </div>
 
-            {/* Headline and Subtext */}
-            <div className="relative mt-4 space-y-2">
+            {/* Headline, Subtext & Executive Rationale */}
+            <div className="relative mt-4 space-y-2.5">
               <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50 leading-snug">
                 {analysis.verdict.headline}
               </h2>
               <p className="max-w-4xl text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
                 {analysis.verdict.subtext}
               </p>
+              {analysis.verdict.confidence?.reason && (
+                <div className="mt-2 rounded-xl border border-zinc-200/80 bg-zinc-50/70 px-3.5 py-2.5 text-xs leading-relaxed text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-300">
+                  <span className="font-bold text-zinc-900 dark:text-zinc-100">
+                    {locale === "id" ? "Dasar Evaluasi AI: " : "AI Evaluation Basis: "}
+                  </span>
+                  {analysis.verdict.confidence.reason}
+                </div>
+              )}
             </div>
 
             {/* Metadata Bar: Learning Status & Tracking Status */}
@@ -1391,7 +1266,7 @@ export function AIAdsPerformanceAnalyst({
           </div>
 
           {/* ======================================================== */}
-          {/* BLOK 2 — METRIK UTAMA (Grid 4 Kartu)                    */}
+          {/* BLOK 2 — EVALUASI METRIK UTAMA (Grid 4 Kartu)            */}
           {/* ======================================================== */}
           <div className="space-y-3.5">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1473,7 +1348,7 @@ export function AIAdsPerformanceAnalyst({
               })}
             </div>
 
-            {analysis.crm_context && (
+            {analysis.crm_context && (analysis.crm_context.totalRecords.value ?? 0) > 0 && (
               <div className="rounded-2xl border border-zinc-200/90 bg-white p-4 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-5">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
@@ -1503,6 +1378,542 @@ export function AIAdsPerformanceAnalyst({
                     ? `Prospek Kualifikasi = Hot + Warm. Cold tidak dihitung. Langsung ${analysis.crm_context.attribution.directAd.value ?? "tidak tersedia"} · kampanye ${analysis.crm_context.attribution.campaign.value ?? "tidak tersedia"}. Angka kampanye bukan hasil satu iklan.`
                     : `Qualified Lead = Hot + Warm. Cold is excluded. Direct ad ${analysis.crm_context.attribution.directAd.value ?? "unavailable"} · campaign ${analysis.crm_context.attribution.campaign.value ?? "unavailable"}. Campaign total is not a single ad's result.`}
                 </p>
+              </div>
+            )}
+
+            {/* ======================================================== */}
+            {/* BLOK 2B (ACCOUNT SCOPE) — PERANKINGAN ANTAR CAMPAIGN     */}
+            {/* ======================================================== */}
+            {scope === "account" && analysis.account_intelligence && (
+              <div className="rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-6 space-y-4">
+                {(() => {
+                  const rankedCampaigns = analysis.account_intelligence.campaign_rankings;
+                  const efficientCmpCount = rankedCampaigns.filter(
+                    (c) => c.category === "TOP_PERFORMER" || c.category === "EFFICIENT" || c.target.status === "ON_TARGET"
+                  ).length;
+                  const optimizeCmpCount = rankedCampaigns.filter(
+                    (c) => c.category === "STABLE" || c.category === "NEEDS_OPTIMIZATION"
+                  ).length;
+                  const underCmpCount = rankedCampaigns.filter((c) => c.category === "UNDERPERFORMING").length;
+
+                  return (
+                    <>
+                      <div className="flex flex-col gap-3 border-b border-zinc-100 pb-4 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 rounded-md bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-700 ring-1 ring-inset ring-indigo-600/20 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-400/25">
+                              <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                              {locale === "id" ? "Perankingan Kinerja Portofolio AI" : "AI Portfolio Performance Ranking"}
+                            </span>
+                            <span className="font-mono text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+                              {rankedCampaigns.length} {locale === "id" ? "Kampanye Beraktivitas" : "Active Campaigns"}
+                            </span>
+                          </div>
+                          <h3 className="mt-1.5 text-base font-bold text-zinc-900 dark:text-zinc-50">
+                            {locale === "id"
+                              ? "Perankingan Antar Campaign Berdasarkan Performa & Efisiensi"
+                              : "Campaign Performance & Efficiency Ranking"}
+                          </h3>
+                          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                            {locale === "id"
+                              ? "Urutan peringkat kampanye berdasarkan skor kinerja (0–100), efisiensi CPR terhadap target, volume hasil konversi, dan kualitas trafik (CTR)."
+                              : "Campaigns ranked by performance score (0–100), CPR efficiency against target, conversion volume, and traffic quality (CTR)."}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-emerald-700 ring-1 ring-inset ring-emerald-500/20 dark:text-emerald-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                            {efficientCmpCount} {locale === "id" ? "Efisien" : "Efficient"}
+                          </span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-1 text-amber-700 ring-1 ring-inset ring-amber-500/20 dark:text-amber-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                            {optimizeCmpCount} {locale === "id" ? "Perlu Optimasi" : "Needs Optimization"}
+                          </span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2.5 py-1 text-rose-700 ring-1 ring-inset ring-rose-500/20 dark:text-rose-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                            {underCmpCount} {locale === "id" ? "Tidak Efisien" : "Inefficient"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {rankedCampaigns.length === 0 ? (
+                        <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/50 p-6 text-center text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-800/30 dark:text-zinc-400">
+                          {locale === "id"
+                            ? "Belum ada kampanye dengan aktivitas tayangan atau belanja pada periode tanggal ini."
+                            : "No campaigns recorded delivery or spend during this date period."}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {rankedCampaigns.map((cmp, idx) => {
+                            const rankNum = idx + 1;
+                            const effStyle =
+                              cmp.category === "TOP_PERFORMER"
+                                ? {
+                                    label: locale === "id" ? "Sangat Efisien · Top Performer" : "Top Performer",
+                                    badge: "bg-emerald-500/15 text-emerald-700 ring-1 ring-inset ring-emerald-600/25 dark:text-emerald-300",
+                                    rankBg: "bg-emerald-600 text-white",
+                                    border: "border-emerald-500/30 bg-emerald-50/20 dark:border-emerald-500/20 dark:bg-emerald-950/10",
+                                  }
+                                : cmp.category === "EFFICIENT"
+                                ? {
+                                    label: locale === "id" ? "Efisien" : "Efficient",
+                                    badge: "bg-teal-500/15 text-teal-700 ring-1 ring-inset ring-teal-600/25 dark:text-teal-300",
+                                    rankBg: "bg-teal-600 text-white",
+                                    border: "border-zinc-200/90 bg-zinc-50/30 dark:border-zinc-800 dark:bg-zinc-800/25",
+                                  }
+                                : cmp.category === "STABLE"
+                                ? {
+                                    label: locale === "id" ? "Stabil" : "Stable",
+                                    badge: "bg-sky-500/15 text-sky-700 ring-1 ring-inset ring-sky-600/25 dark:text-sky-300",
+                                    rankBg: "bg-zinc-800 text-white dark:bg-zinc-200 dark:text-zinc-900",
+                                    border: "border-zinc-200/90 bg-zinc-50/30 dark:border-zinc-800 dark:bg-zinc-800/25",
+                                  }
+                                : cmp.category === "NEEDS_OPTIMIZATION"
+                                ? {
+                                    label: locale === "id" ? "Perlu Optimasi" : "Needs Optimization",
+                                    badge: "bg-amber-500/15 text-amber-700 ring-1 ring-inset ring-amber-600/25 dark:text-amber-300",
+                                    rankBg: "bg-amber-600 text-white",
+                                    border: "border-amber-500/25 bg-amber-50/15 dark:border-amber-500/20 dark:bg-amber-950/10",
+                                  }
+                                : cmp.category === "UNDERPERFORMING"
+                                ? {
+                                    label: locale === "id" ? "Tidak Efisien / Kritis" : "Underperforming",
+                                    badge: "bg-rose-500/15 text-rose-700 ring-1 ring-inset ring-rose-600/25 dark:text-rose-300",
+                                    rankBg: "bg-rose-600 text-white",
+                                    border: "border-rose-500/25 bg-rose-50/15 dark:border-rose-500/20 dark:bg-rose-950/10",
+                                  }
+                                : {
+                                    label: locale === "id" ? "Data Terbatas" : "Limited Data",
+                                    badge: "bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+                                    rankBg: "bg-zinc-500 text-white",
+                                    border: "border-zinc-200/80 bg-zinc-50/20 dark:border-zinc-800 dark:bg-zinc-800/20",
+                                  };
+
+                            const actionPill =
+                              cmp.action === "SCALE"
+                                ? locale === "id" ? "Rekomendasi: Tambah Budget" : "Action: Scale Budget"
+                                : cmp.action === "MAINTAIN"
+                                ? locale === "id" ? "Rekomendasi: Pertahankan" : "Action: Maintain"
+                                : cmp.action === "OPTIMIZE"
+                                ? locale === "id" ? "Rekomendasi: Optimasi" : "Action: Optimize"
+                                : cmp.action === "REDUCE_BUDGET"
+                                ? locale === "id" ? "Rekomendasi: Kurangi Budget" : "Action: Reduce Budget"
+                                : cmp.action === "PAUSE"
+                                ? locale === "id" ? "Rekomendasi: Evaluasi / Jeda" : "Action: Pause / Evaluate"
+                                : locale === "id" ? "Referensi Historis" : "Historical Reference";
+
+                            const cprDeltaVsTarget =
+                              targetCpr && targetCpr > 0 && cmp.cpr !== null
+                                ? Math.round(((cmp.cpr - targetCpr) / targetCpr) * 100)
+                                : null;
+
+                            return (
+                              <div
+                                key={cmp.id}
+                                className={`rounded-xl border p-4 transition-all ${effStyle.border}`}
+                              >
+                                {/* Campaign Top Bar: Rank, Name, Efficiency Label, Score, Action */}
+                                <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                                    <span className={`inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-lg px-2 font-mono text-xs font-bold ${effStyle.rankBg}`}>
+                                      #{rankNum}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                                          {cleanEntityName(cmp.name)}
+                                        </h4>
+                                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${effStyle.badge}`}>
+                                          {effStyle.label}
+                                        </span>
+                                        <span className="inline-flex items-center rounded-md bg-zinc-100 px-2 py-0.5 font-mono text-[10px] font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                                          {locale === "id" ? `Skor Kinerja ${cmp.score.total}/100` : `Score ${cmp.score.total}/100`}
+                                        </span>
+                                      </div>
+                                      <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                                        {cmp.resultLabel} · {cmp.effectiveStatus === "ACTIVE" ? (locale === "id" ? "Status: Aktif Tayang" : "Status: Active") : (locale === "id" ? "Status: Dijeda" : "Status: Paused")}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                                    <span className="rounded-lg border border-zinc-200/80 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+                                      {actionPill}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setScope("campaign");
+                                        setSelectedCampaignId(cmp.id);
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-900/60 transition-colors cursor-pointer"
+                                    >
+                                      <span>{locale === "id" ? "Bedah Ad Set & Iklan →" : "Inspect Ad Sets & Ads →"}</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* 4 Key Metrics Grid per Campaign */}
+                                <div className="mt-3.5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                                  <div className="rounded-lg border border-zinc-200/60 bg-white/80 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/80">
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                      {locale === "id" ? "Belanja & Porsi Akun" : "Spend & Account Share"}
+                                    </span>
+                                    <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                      {formatAccountMoney(cmp.spend, accountCurrency, locale)}
+                                    </p>
+                                    <p className="mt-0.5 text-[10px] text-zinc-500">
+                                      {(cmp.spendSharePct ?? 0).toFixed(1)}% {locale === "id" ? "dari total belanja akun" : "of total account spend"}
+                                    </p>
+                                  </div>
+
+                                  <div className="rounded-lg border border-zinc-200/60 bg-white/80 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/80">
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                      {cmp.resultLabel}
+                                    </span>
+                                    <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                      {(cmp.results ?? 0).toLocaleString(locale === "en" ? "en-US" : "id-ID")}
+                                    </p>
+                                    <p className="mt-0.5 text-[10px] text-zinc-500">
+                                      {(analysis.account_intelligence?.account_summary.total_results ?? 0) > 0 && cmp.results
+                                        ? `${((cmp.results / (analysis.account_intelligence?.account_summary.total_results || 1)) * 100).toFixed(1)}% ${locale === "id" ? "kontribusi hasil" : "result share"}`
+                                        : locale === "id" ? "Hasil konversi tercatat" : "Recorded conversions"}
+                                    </p>
+                                  </div>
+
+                                  <div className="rounded-lg border border-zinc-200/60 bg-white/80 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/80">
+                                    <div className="flex items-center justify-between gap-1">
+                                      <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                                        {locale === "id" ? "CPR vs Target" : "CPR vs Target"}
+                                      </span>
+                                      {cprDeltaVsTarget !== null && (
+                                        <span className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${cprDeltaVsTarget <= 0 ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : "bg-rose-500/15 text-rose-700 dark:text-rose-300"}`}>
+                                          {cprDeltaVsTarget <= 0
+                                            ? `${Math.abs(cprDeltaVsTarget)}% ${locale === "id" ? "lebih hemat" : "below target"}`
+                                            : `+${cprDeltaVsTarget}% ${locale === "id" ? "di atas target" : "above target"}`}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                      {cmp.cpr !== null ? formatAccountMoney(cmp.cpr, accountCurrency, locale) : "—"}
+                                    </p>
+                                    <p className="mt-0.5 text-[10px] text-zinc-500">
+                                      {targetCpr
+                                        ? `Target: ${formatAccountMoney(targetCpr, accountCurrency, locale)}`
+                                        : locale === "id" ? "Target CPR belum diatur" : "Target CPR not set"}
+                                    </p>
+                                  </div>
+
+                                  <div className="rounded-lg border border-zinc-200/60 bg-white/80 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/80">
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                      {locale === "id" ? "CTR Tautan & CPC" : "Link CTR & CPC"}
+                                    </span>
+                                    <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                      {cmp.ctr !== null ? `${cmp.ctr.toFixed(2)}%` : "—"}
+                                    </p>
+                                    <p className="mt-0.5 text-[10px] text-zinc-500">
+                                      CPC: {cmp.cpc !== null ? formatAccountMoney(cmp.cpc, accountCurrency, locale) : "—"}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* AI Campaign Diagnosis Summary */}
+                                <div className="mt-3 rounded-lg bg-white/70 px-3 py-2 text-xs leading-relaxed text-zinc-700 ring-1 ring-inset ring-zinc-200/70 dark:bg-zinc-900/60 dark:text-zinc-300 dark:ring-zinc-800">
+                                  <span className="font-bold text-zinc-900 dark:text-zinc-100">
+                                    {locale === "id" ? "Analisis AI Kampanye: " : "AI Campaign Diagnosis: "}
+                                  </span>
+                                  {cmp.reason}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* ======================================================== */}
+            {/* BLOK 2B (CAMPAIGN SCOPE) — PERANKINGAN AD SET & IKLAN    */}
+            {/* ======================================================== */}
+            {scope === "campaign" && analysis.campaign_breakdown && (
+              <div className="space-y-4">
+                {/* 1. AD SET RANKING INSIDE CAMPAIGN */}
+                <div className="rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-6 space-y-4">
+                  <div className="flex flex-col gap-2 border-b border-zinc-100 pb-3.5 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-md bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-700 ring-1 ring-inset ring-indigo-600/20 dark:bg-indigo-950/50 dark:text-indigo-300 dark:ring-indigo-400/25">
+                          {locale === "id" ? "Level 1 · Evaluasi Ad Set" : "Level 1 · Ad Set Evaluation"}
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-zinc-500">
+                          {analysis.campaign_breakdown.totalAdSets} Ad Set
+                        </span>
+                      </div>
+                      <h3 className="mt-1 text-base font-bold text-zinc-900 dark:text-zinc-50">
+                        {locale === "id"
+                          ? `Perankingan & Kinerja Ad Set dalam Kampanye "${analysis.campaign_breakdown.campaignName}"`
+                          : `Ad Set Performance Ranking in "${analysis.campaign_breakdown.campaignName}"`}
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {analysis.campaign_breakdown.adset_rankings.map((adset) => {
+                      const badgeTone =
+                        adset.category === "TOP_PERFORMER" || adset.category === "EFFICIENT"
+                          ? "bg-emerald-500/15 text-emerald-700 ring-1 ring-inset ring-emerald-600/25 dark:text-emerald-300"
+                          : adset.category === "STABLE"
+                          ? "bg-sky-500/15 text-sky-700 ring-1 ring-inset ring-sky-600/25 dark:text-sky-300"
+                          : adset.category === "NEEDS_OPTIMIZATION"
+                          ? "bg-amber-500/15 text-amber-700 ring-1 ring-inset ring-amber-600/25 dark:text-amber-300"
+                          : adset.category === "UNDERPERFORMING"
+                          ? "bg-rose-500/15 text-rose-700 ring-1 ring-inset ring-rose-600/25 dark:text-rose-300"
+                          : "bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
+
+                      return (
+                        <div
+                          key={adset.id}
+                          className="rounded-xl border border-zinc-200/80 bg-zinc-50/40 p-4 dark:border-zinc-800 dark:bg-zinc-800/30"
+                        >
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-md bg-zinc-900 px-1.5 font-mono text-xs font-bold text-white dark:bg-zinc-100 dark:text-zinc-900">
+                                #{adset.rank}
+                              </span>
+                              <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                                {adset.name}
+                              </h4>
+                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase ${badgeTone}`}>
+                                {adset.efficiencyLabel}
+                              </span>
+                              <span className="rounded-md bg-zinc-100 px-2 py-0.5 font-mono text-[10px] font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                                {locale === "id" ? `Skor ${adset.score}/100` : `Score ${adset.score}/100`}
+                              </span>
+                            </div>
+                            <span className="rounded-lg border border-zinc-200/80 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 self-start sm:self-auto">
+                              {adset.actionLabel} · {adset.adsCount} {locale === "id" ? "Materi Iklan" : "Ads"}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {locale === "id" ? "Belanja Ad Set" : "Ad Set Spend"}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {formatAccountMoney(adset.spend, accountCurrency, locale)}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                {adset.spendSharePct}% {locale === "id" ? "porsi kampanye" : "campaign share"}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {adset.resultLabel}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {adset.results.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                {adset.linkClicks.toLocaleString(locale === "en" ? "en-US" : "id-ID")} {locale === "id" ? "klik tautan" : "link clicks"}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {locale === "id" ? "CPR Ad Set vs Target" : "Ad Set CPR vs Target"}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {adset.cpr !== null ? formatAccountMoney(adset.cpr, accountCurrency, locale) : "—"}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                {adset.cprVsTargetPct !== null
+                                  ? adset.cprVsTargetPct <= 0
+                                    ? `${Math.abs(adset.cprVsTargetPct)}% ${locale === "id" ? "lebih hemat dari target" : "below target"}`
+                                    : `+${adset.cprVsTargetPct}% ${locale === "id" ? "di atas target" : "above target"}`
+                                  : locale === "id" ? "Evaluasi biaya hasil" : "Cost evaluation"}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {locale === "id" ? "CTR Tautan & CPC" : "Link CTR & CPC"}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {adset.ctr !== null ? `${adset.ctr.toFixed(2)}%` : "—"}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                CPC: {adset.cpc !== null ? formatAccountMoney(adset.cpc, accountCurrency, locale) : "—"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <p className="mt-2.5 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                            <strong className="text-zinc-900 dark:text-zinc-100">
+                              {locale === "id" ? "Diagnosis AI Ad Set: " : "AI Ad Set Diagnosis: "}
+                            </strong>
+                            {adset.diagnosis}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. AD CREATIVES RANKING INSIDE CAMPAIGN */}
+                <div className="rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 sm:p-6 space-y-4">
+                  <div className="flex flex-col gap-3 border-b border-zinc-100 pb-3.5 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:text-amber-300">
+                          {locale === "id" ? "Level 2 · Perankingan Materi Iklan (Ads)" : "Level 2 · Ad Creatives Ranking"}
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-zinc-500">
+                          {analysis.campaign_breakdown.totalAds} {locale === "id" ? "Materi Iklan" : "Ads"}
+                        </span>
+                      </div>
+                      <h3 className="mt-1 text-base font-bold text-zinc-900 dark:text-zinc-50">
+                        {locale === "id"
+                          ? "Perankingan Antar Materi Iklan (Ads) Berdasarkan Performa & Efisiensi"
+                          : "Ad Creatives Ranking by Performance & Efficiency"}
+                      </h3>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-emerald-700 dark:text-emerald-300">
+                        {analysis.campaign_breakdown.efficientAdsCount} {locale === "id" ? "Efisien" : "Efficient"}
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-1 text-amber-700 dark:text-amber-300">
+                        {analysis.campaign_breakdown.optimizeAdsCount} {locale === "id" ? "Perlu Optimasi" : "Needs Optimization"}
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2.5 py-1 text-rose-700 dark:text-rose-300">
+                        {analysis.campaign_breakdown.underperformingAdsCount} {locale === "id" ? "Tidak Efisien" : "Inefficient"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {analysis.campaign_breakdown.ad_rankings.map((adItem) => {
+                      const badgeTone =
+                        adItem.category === "TOP_PERFORMER" || adItem.category === "EFFICIENT"
+                          ? "bg-emerald-500/15 text-emerald-700 ring-1 ring-inset ring-emerald-600/25 dark:text-emerald-300"
+                          : adItem.category === "STABLE"
+                          ? "bg-sky-500/15 text-sky-700 ring-1 ring-inset ring-sky-600/25 dark:text-sky-300"
+                          : adItem.category === "NEEDS_OPTIMIZATION"
+                          ? "bg-amber-500/15 text-amber-700 ring-1 ring-inset ring-amber-600/25 dark:text-amber-300"
+                          : adItem.category === "UNDERPERFORMING"
+                          ? "bg-rose-500/15 text-rose-700 ring-1 ring-inset ring-rose-600/25 dark:text-rose-300"
+                          : "bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
+
+                      return (
+                        <div
+                          key={adItem.id}
+                          className="rounded-xl border border-zinc-200/80 bg-zinc-50/40 p-4 dark:border-zinc-800 dark:bg-zinc-800/30"
+                        >
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex flex-wrap items-center gap-2 min-w-0">
+                              <span className="inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-md bg-zinc-900 px-1.5 font-mono text-xs font-bold text-white dark:bg-zinc-100 dark:text-zinc-900">
+                                #{adItem.rank}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                                    {adItem.name}
+                                  </h4>
+                                  <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase ${badgeTone}`}>
+                                    {adItem.efficiencyLabel}
+                                  </span>
+                                  <span className="rounded-md bg-zinc-100 px-2 py-0.5 font-mono text-[10px] font-bold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                                    {locale === "id" ? `Skor ${adItem.score}/100` : `Score ${adItem.score}/100`}
+                                  </span>
+                                </div>
+                                <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                                  Ad Set: <strong className="font-semibold text-zinc-700 dark:text-zinc-300">{adItem.adsetName}</strong> · {adItem.effectiveStatus === "ACTIVE" ? (locale === "id" ? "Status: Aktif" : "Status: Active") : (locale === "id" ? "Status: Dijeda" : "Status: Paused")}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                              <span className="rounded-lg border border-zinc-200/80 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+                                {adItem.actionLabel}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setScope("ad");
+                                  setSelectedAdId(adItem.id);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:bg-amber-500/25 dark:text-amber-300 transition-colors cursor-pointer"
+                              >
+                                <span>{locale === "id" ? "Audit Materi Ini →" : "Audit This Ad →"}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {locale === "id" ? "Belanja Iklan" : "Ad Spend"}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {formatAccountMoney(adItem.spend, accountCurrency, locale)}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                {adItem.spendSharePct.toFixed(1)}% {locale === "id" ? "porsi kampanye" : "campaign share"}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {adItem.resultLabel}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {adItem.results.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                {adItem.linkClicks.toLocaleString(locale === "en" ? "en-US" : "id-ID")} {locale === "id" ? "klik tautan" : "link clicks"}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {locale === "id" ? "CPR Iklan vs Target" : "Ad CPR vs Target"}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {adItem.cpr !== null ? formatAccountMoney(adItem.cpr, accountCurrency, locale) : "—"}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                {adItem.cprVsTargetPct !== null
+                                  ? adItem.cprVsTargetPct <= 0
+                                    ? `${Math.abs(adItem.cprVsTargetPct)}% ${locale === "id" ? "lebih hemat dari target" : "below target"}`
+                                    : `+${adItem.cprVsTargetPct}% ${locale === "id" ? "di atas target" : "above target"}`
+                                  : locale === "id" ? "Evaluasi biaya hasil" : "Cost evaluation"}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                                {locale === "id" ? "CTR Tautan & CPC" : "Link CTR & CPC"}
+                              </span>
+                              <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                                {adItem.ctr !== null ? `${adItem.ctr.toFixed(2)}%` : "—"}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-zinc-500">
+                                CPC: {adItem.cpc !== null ? formatAccountMoney(adItem.cpc, accountCurrency, locale) : "—"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <p className="mt-2.5 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                            <strong className="text-zinc-900 dark:text-zinc-100">
+                              {locale === "id" ? "Analisis AI Materi Iklan: " : "AI Ad Diagnosis: "}
+                            </strong>
+                            {adItem.diagnosis}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1556,11 +1967,12 @@ export function AIAdsPerformanceAnalyst({
             <div className="space-y-3.5 rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 lg:col-span-5">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 pb-3 dark:border-zinc-800">
                 <div>
-                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                    {locale === "id" ? "Sinyal Diagnostik Utama" : "Key Diagnostic Signals"}
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+                    <span>{locale === "id" ? "Sinyal Diagnostik Funnel & Anomali (AI)" : "AI Funnel & Diagnostic Signals"}</span>
                   </h3>
                   <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                    {locale === "id" ? "Temuan anomali & indikator kesehatan iklan" : "Anomaly detection & ad health indicators"}
+                    {locale === "id" ? "Temuan anomali & indikator kesehatan iklan cerdas" : "Smart anomaly detection & ad health indicators"}
                   </p>
                 </div>
                 <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 font-mono text-[11px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
@@ -1621,8 +2033,9 @@ export function AIAdsPerformanceAnalyst({
             <div className="space-y-3.5 rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900 lg:col-span-7">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 pb-3 dark:border-zinc-800">
                 <div>
-                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                    {locale === "id" ? "Playbook Tindakan Taktis" : "Tactical Action Playbook"}
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-amber-500" />
+                    <span>{locale === "id" ? "Playbook Tindakan Taktis (AI)" : "AI Tactical Action Playbook"}</span>
                   </h3>
                   <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                     {locale === "id" ? "Langkah eksekusi konkret beserta batas aman (stop-loss)" : "Concrete execution steps with strict stop-loss guardrails"}
@@ -1707,7 +2120,6 @@ export function AIAdsPerformanceAnalyst({
               </div>
             </div>
           </div>
-          </>}
 
           {/* ======================================================== */}
           {/* FOOTER & DISCLOSURE                                     */}
@@ -1715,8 +2127,8 @@ export function AIAdsPerformanceAnalyst({
           <div className="text-[11px] text-zinc-400 flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
             <span>
               {locale === "id"
-                ? `Sumber: Snapshot Meta Insights · Diperbarui ${new Date(analysis.meta.generated_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: timezone || "Asia/Jakarta" })} WIB · Mesin: ${analysis.meta.engine === "llm" ? "AI + Evaluasi Deterministik" : "Evaluasi Aturan Deterministik"}`
-                : `Source: Meta Insights Snapshot · Updated ${new Date(analysis.meta.generated_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: timezone || "Asia/Jakarta" })} · Engine: ${analysis.meta.engine === "llm" ? "AI + Deterministic Evaluation" : "Deterministic Rule-Based Evaluation"}`}
+                ? `Diperbarui ${new Date(analysis.meta.generated_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: timezone || "Asia/Jakarta" })} WIB · Snapshot Meta Ads`
+                : `Updated ${new Date(analysis.meta.generated_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: timezone || "Asia/Jakarta" })} · Meta Ads Snapshot`}
             </span>
 
             <button

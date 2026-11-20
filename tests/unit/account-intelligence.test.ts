@@ -86,10 +86,11 @@ describe("account intelligence", () => {
     });
     expect(report.campaign_rankings[0].performanceBasis).toBe("historical_paused");
     expect(report.campaign_rankings[0].effectiveStatus).toBe("PAUSED");
-    expect(report.campaign_rankings[0].action).toBe("HISTORICAL_REVIEW");
+    expect(report.campaign_rankings[0].action).toBe("REACTIVATION_CANDIDATE");
+    expect(report.campaign_rankings[0].actionLabel).toBe("Kandidat Reaktivasi");
     expect(report.campaign_rankings[0].reason).toContain("bukan bukti iklan sedang berjalan");
-    expect(report.recommendations.some((item) => item.action === "MONITOR" || item.action === "SCALE" || item.action === "REACTIVATION_CANDIDATE")).toBe(false);
-    expect(report.historical_reviews.every((item) => item.action !== "REACTIVATION_CANDIDATE")).toBe(true);
+    expect(report.recommendations.some((item) => item.action === "MONITOR" || item.action === "SCALE")).toBe(false);
+    expect(report.historical_reviews.some((item) => item.action === "REACTIVATION_CANDIDATE")).toBe(true);
   });
 
   it("refuses a one-result sample as a winner and keeps zero-result CPR empty", () => {
@@ -664,6 +665,148 @@ describe("account intelligence", () => {
           w.includes("Terdeteksi selisih pembelanjaan antara level Iklan dan Kampanye")
         )
       ).toBe(false);
+    });
+
+    it("FASE 2 & 3: generates Padat Daging summaryShort, diagnosisLabel, actionLabel, and active-only priority_actions sorted by spend impact", () => {
+      const report = buildAccountIntelligence({
+        accountName: "Padat Daging Test",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-14",
+        durationDays: 14,
+        accountCampaignTargetCpr: 15_000,
+        campaigns: [
+          { id: "c-waste", providerId: "1", name: "Camp Boncos", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+          { id: "c-gold", providerId: "2", name: "Camp Golden", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+          { id: "c-scale", providerId: "3", name: "Camp Scale", status: "ACTIVE", objective: "OUTCOME_ENGAGEMENT" },
+          { id: "c-paused", providerId: "4", name: "Camp Paused", status: "PAUSED", objective: "OUTCOME_ENGAGEMENT" },
+        ],
+        ads: [
+          { id: "a-waste", providerId: "a1", name: "Ad Boncos", status: "ACTIVE", campaignId: "c-waste" },
+          { id: "a-gold", providerId: "a2", name: "Ad Golden", status: "ACTIVE", campaignId: "c-gold" },
+          { id: "a-scale", providerId: "a3", name: "Ad Scale", status: "ACTIVE", campaignId: "c-scale" },
+          { id: "a-paused", providerId: "a4", name: "Ad Paused", status: "PAUSED", campaignId: "c-paused" },
+        ],
+        insights: [
+          { ...insight("a-waste", 185_000, 5_000, 0), link_clicks: 12 },
+          { ...insight("a-gold", 150_000, 10_000, 15), link_clicks: 45 }, // CTR 0.45% (<0.8%), CVR 33.3% (>=20%), CPR 10k <= 15k
+          { ...insight("a-scale", 300_000, 15_000, 30), link_clicks: 300 }, // CTR 2.0%, CVR 10%, 30 results @ 10k
+          { ...insight("a-paused", 500_000, 20_000, 60), link_clicks: 400 },
+        ],
+      });
+
+      const wasteAd = report.ad_rankings.find((a) => a.id === "a-waste");
+      expect(wasteAd?.funnelSignal).toBe("material_waste");
+      expect(wasteAd?.actionLabel).toBe("Nonaktifkan");
+      expect(wasteAd?.summaryShort).toContain("Spend Tanpa Hasil");
+      expect(wasteAd?.summaryShort).toContain("0 konversi");
+
+      const goldAd = report.ad_rankings.find((a) => a.id === "a-gold");
+      expect(goldAd?.funnelSignal).toBe("golden_offer");
+      expect(goldAd?.actionLabel).toBe("Optimasi");
+      expect(goldAd?.summaryShort).toContain("Konversi Tinggi, CTR Rendah");
+
+      const pausedCamp = report.campaign_rankings.find((c) => c.id === "c-paused");
+      expect(pausedCamp?.action).toBe("REACTIVATION_CANDIDATE");
+      expect(pausedCamp?.actionLabel).toBe("Kandidat Reaktivasi");
+      expect(pausedCamp?.summaryShort).toContain("Kandidat Reaktivasi");
+
+      const priorityActions = report.priority_actions ?? [];
+      expect(priorityActions.length).toBeGreaterThan(0);
+      expect(priorityActions.some((p) => p.action === "REACTIVATION_CANDIDATE" && (p.objectId === "c-paused" || p.objectId === "a-paused"))).toBe(true);
+      expect(priorityActions[0].priority).toBe("CRITICAL");
+
+      // Active health counts must partition all 3 active campaigns (1 Efisien, 1 Optimasi, 1 Kritis, 0 Observasi) + 1 Historical
+      const hc = report.account_summary.health_counts!;
+      expect(hc.activeCount).toBe(3);
+      expect(hc.scaleCount).toBe(1);
+      expect(hc.optimizeCount).toBe(1);
+      expect(hc.wasteCount).toBe(1);
+      expect(hc.holdCount).toBe(0);
+      expect(hc.scaleCount + hc.optimizeCount + hc.wasteCount + hc.holdCount).toBe(hc.activeCount);
+      expect(hc.historicalCount).toBe(1);
+      expect(hc.historicalGoodCount).toBe(1);
+    });
+
+    it("computes historical reference breakdown when all campaigns are PAUSED (activeCount === 0 && historicalCount > 0)", () => {
+      const allPausedReport = buildAccountIntelligence({
+        accountName: "All Paused Account",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-30",
+        durationDays: 30,
+        accountCampaignTargetCpr: 15_000,
+        campaigns: [
+          { id: "c-p1", providerId: "1", name: "ASC Video Bangunjiwo 19/10", status: "PAUSED", objective: "MESSAGES" },
+          { id: "c-p2", providerId: "2", name: "Paused High CPR", status: "PAUSED", objective: "MESSAGES" },
+        ],
+        ads: [
+          { id: "a-p1", providerId: "a1", name: "video", status: "PAUSED", campaignId: "c-p1" },
+          { id: "a-p2", providerId: "a2", name: "image", status: "PAUSED", campaignId: "c-p2" },
+        ],
+        insights: [
+          { ...insight("a-p1", 399_151, 18_063, 55), link_clicks: 139 },
+          { ...insight("a-p2", 250_000, 9_000, 5), link_clicks: 80 },
+        ],
+      });
+
+      const hc = allPausedReport.account_summary.health_counts!;
+      expect(hc.activeCount).toBe(0);
+      expect(hc.historicalCount).toBe(2);
+      expect(hc.historicalGoodCount).toBe(1);
+      expect(
+        hc.historicalGoodCount + hc.historicalNeutralCount + hc.historicalUnderperformingCount
+      ).toBe(hc.historicalCount);
+      expect(allPausedReport.campaign_rankings.every((c) => c.performanceBasis === "historical_paused")).toBe(true);
+    });
+
+    it("FASE 4 QA: guarantees zero NaN, Infinity, Rp NaN, or Invalid Date across empty, zero-spend, all-paused, and multi-objective edge cases", () => {
+      const emptyReport = buildAccountIntelligence({
+        accountName: "Empty Brand New Account",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-30",
+        durationDays: 30,
+        campaigns: [],
+        ads: [],
+        insights: [],
+      });
+
+      const mixedPausedReport = buildAccountIntelligence({
+        accountName: "Mixed & Paused Edge Case",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-30",
+        durationDays: 30,
+        campaigns: [
+          { id: "c1", providerId: "1", name: "C1 Messaging", status: "ACTIVE", objective: "MESSAGES" },
+          { id: "c2", providerId: "2", name: "C2 Paused Leads", status: "PAUSED", objective: "OUTCOME_LEADS" },
+          { id: "c3", providerId: "3", name: "C3 Zero Spend", status: "ACTIVE", objective: "MESSAGES" },
+        ],
+        ads: [
+          { id: "a1", providerId: "a1", name: "A1 Messaging", status: "ACTIVE", campaignId: "c1" },
+          { id: "a2", providerId: "a2", name: "A2 Paused Leads", status: "PAUSED", campaignId: "c2" },
+          { id: "a3", providerId: "a3", name: "A3 Zero", status: "ACTIVE", campaignId: "c3" },
+        ],
+        insights: [
+          { ...insight("a1", 80_000, 2_000, 5), link_clicks: 40 },
+          {
+            ...insight("a2", 120_000, 1_500, 4),
+            link_clicks: 30,
+            action_breakdown: { lead: 4 },
+            conversion_action_type: "lead",
+          },
+          { ...insight("a3", 0, 0, 0), link_clicks: 0 },
+        ],
+      });
+
+      for (const rep of [emptyReport, mixedPausedReport]) {
+        const serialized = JSON.stringify(rep);
+        expect(serialized.includes("NaN")).toBe(false);
+        expect(serialized.includes("Infinity")).toBe(false);
+        expect(serialized.includes("Invalid Date")).toBe(false);
+        expect(serialized.includes("Rp NaN")).toBe(false);
+      }
+
+      expect(mixedPausedReport.account_summary.results_comparable).toBe(false);
+      expect(mixedPausedReport.account_summary.blended_cpr).toBeNull();
+      expect(mixedPausedReport.account_summary.total_results).toBeNull();
     });
   });
 });

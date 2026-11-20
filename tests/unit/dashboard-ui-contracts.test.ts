@@ -26,6 +26,10 @@ describe("Phase 4: Client Security & Domain Contract Invariants", () => {
     expect(appFiles.length).toBeGreaterThan(0);
 
     appFiles.forEach((filePath) => {
+      // API routes run strictly in Node server environment, not client components
+      if (filePath.includes(path.sep + "api" + path.sep)) {
+        return;
+      }
       const content = fs.readFileSync(filePath, "utf-8");
       // Check for illegal client imports of admin
       const hasIllegalAdminImport =

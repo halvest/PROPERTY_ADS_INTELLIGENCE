@@ -88,6 +88,64 @@ export const CtwaModelOutputSchema = z.object({
 
 export type CtwaModelOutput = z.infer<typeof CtwaModelOutputSchema>;
 
+export const LockedDecisionSchema = z.enum([
+  "pantau",
+  "periksa_tracking",
+  "optimasi",
+  "pertahankan",
+  "kurangi",
+  "hentikan_sementara",
+  "reaktivasi",
+  "tinjau_reaktivasi",
+]);
+
+export const CtwaDrawerModelSchema = z.object({
+  performanceSummary: z.string(),
+  sourceDataStatus: z.string(),
+  budgetDecision: z.object({
+    decision: LockedDecisionSchema,
+    reason: z.string(),
+  }),
+  coreMetrics: z
+    .array(
+      z.object({
+        key: z.enum(["spend", "results", "cpr", "link_ctr", "cvr", "cqpl"]),
+        label: z.string(),
+        value: z.string(),
+        context: z.string(),
+      })
+    )
+    .max(6)
+    .default([]),
+  keyFindings: z.array(z.string()).max(4).default([]),
+  priorityActions: z
+    .array(
+      z.object({
+        owner: z.enum(["advertiser", "sales_team"]),
+        action: z.string(),
+        expectedImpact: z.string(),
+      })
+    )
+    .max(4)
+    .default([]),
+  additionalDetails: z.object({
+    firstFailedFunnelStage: z.enum([
+      "hook_or_targeting",
+      "click_to_chat_leak",
+      "lead_qualification_gap",
+      "sales_followup_gap",
+      "healthy_funnel",
+      "insufficient_data",
+    ]),
+    facts: z.array(z.string()).default([]),
+    hypotheses: z.array(z.string()).default([]),
+    unknowns: z.array(z.string()).default([]),
+    creativeNotes: z.array(z.string()).default([]),
+  }),
+});
+
+export type CtwaDrawerModel = z.infer<typeof CtwaDrawerModelSchema>;
+
 export const ACTION_TO_BUDGET_DECISION = {
   SCALE: "NAIKKAN",
   MAINTAIN: "PERTAHANKAN",

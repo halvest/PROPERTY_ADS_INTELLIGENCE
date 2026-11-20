@@ -15,7 +15,7 @@ const CallbackSchema = z.object({
   code: z.string().trim().min(1, "Authorization code is required"),
   phoneNumberId: z.string().trim().min(1, "phoneNumberId is required"),
   wabaId: z.string().trim().min(1, "wabaId is required"),
-  integrationMode: z.enum(["coexistence", "cloud_api"]).optional().default("coexistence"),
+  integrationMode: z.literal("coexistence").optional().default("coexistence"),
   salesMemberId: z.string().uuid().optional(),
 });
 

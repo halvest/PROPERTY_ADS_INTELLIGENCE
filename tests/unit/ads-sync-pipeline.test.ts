@@ -163,4 +163,121 @@ describe("Marketing sync pipeline", () => {
     ).rejects.toMatchObject({ code: "SYNC_IN_PROGRESS" });
     expect(MarketingApiError).toBeDefined();
   });
+
+  it("preserves historical data additively (non-destructive) and returns partial status when some insight rows are invalid or truncated", async () => {
+    let deleteCalled = false;
+    const upsertedTables: string[] = [];
+    const mockDb = {
+      from: (table: string) => ({
+        select: () => {
+          const chain: Record<string, unknown> = {};
+          chain.eq = () => chain;
+          chain.in = () => chain;
+          chain.limit = async () => ({ data: [], error: null });
+          chain.maybeSingle = async () => ({ data: null, error: null });
+          chain.then = (resolve: (v: { data: unknown; error: null }) => void) => {
+            if (table === "campaigns") {
+              resolve({ data: [{ id: "uuid-cmp-1", provider_campaign_id: "cmp_1" }], error: null });
+            } else if (table === "ads") {
+              resolve({ data: [{ id: "uuid-ad-1", provider_ad_id: "ad_1" }], error: null });
+            } else {
+              resolve({ data: [], error: null });
+            }
+          };
+          return chain;
+        },
+        insert: () => ({ select: () => ({ single: async () => ({ data: { id: "job-99" }, error: null }) }) }),
+        update: () => ({ eq: () => ({ eq: async () => ({ error: null }) }) }),
+        delete: () => {
+          deleteCalled = true;
+          return { eq: async () => ({ error: null }) };
+        },
+        upsert: () => {
+          upsertedTables.push(table);
+          return {
+            select: () => ({ single: async () => ({ data: { id: "uuid-acc-1" }, error: null }) }),
+            error: null,
+          };
+        },
+      }),
+    };
+
+    const mockClient = {
+      getAdAccount: async () => ({
+        id: "act_111",
+        name: "Account 111",
+        currency: "IDR",
+        timezone_name: "Asia/Jakarta",
+        account_status: 1,
+      }),
+      getCampaigns: async () => [{ id: "cmp_1", name: "Camp 1", status: "ACTIVE", objective: "MESSAGES" }],
+      getAds: async () => [{ id: "ad_1", name: "Ad 1", status: "ACTIVE", campaign_id: "cmp_1" }],
+      getAdInsights: async () => [
+        // 1 valid row
+        {
+          ad_id: "ad_1",
+          campaign_id: "cmp_1",
+          spend: "150000",
+          impressions: "2500",
+          clicks: "80",
+          date_start: "2026-10-05",
+          date_stop: "2026-10-05",
+        },
+        // 1 invalid row missing date_start (must be quarantined without wiping valid rows)
+        {
+          ad_id: "ad_1",
+          campaign_id: "cmp_1",
+          spend: "50000",
+          impressions: "500",
+          clicks: "10",
+          date_start: "",
+          date_stop: "2026-10-06",
+        },
+      ],
+    };
+
+    const result = await executeMarketingSync({
+      organizationId: "org-1",
+      targetAdAccountId: "act_111",
+      timeRange: { since: "2026-10-01", until: "2026-10-07" },
+      client: mockClient as never,
+      supabaseClient: mockDb as never,
+    });
+
+    expect(deleteCalled).toBe(false);
+    expect(result.status).toBe("partial");
+    expect(result.syncDetails?.insightsValid).toBe(1);
+    expect(result.syncDetails?.insightsInvalid).toBe(1);
+    expect(upsertedTables).toContain("ad_insights");
+  });
+
+  it("maps Meta error codes 190 (token expired), 4 (app rate limit), and 10 (permission denied) to actionable Indonesian errors", async () => {
+    const makeErrorClient = (status: number, code: number, message: string) =>
+      new MetaMarketingApiClient({
+        accessToken: "token-xyz",
+        adAccountId: "act_111",
+        maxRetries: 0,
+        fetchFn: vi.fn(async () => ({
+          ok: false,
+          status,
+          headers: new Headers({ "content-type": "application/json" }),
+          text: async () => JSON.stringify({ error: { message, code } }),
+        })) as unknown as typeof fetch,
+      });
+
+    await expect(makeErrorClient(401, 190, "Session has expired").getAdAccount()).rejects.toMatchObject({
+      code: "AUTHENTICATION_ERROR",
+      metaErrorCode: 190,
+    });
+
+    await expect(makeErrorClient(429, 4, "Application request limit reached").getAdAccount()).rejects.toMatchObject({
+      code: "RATE_LIMIT_ERROR",
+      metaErrorCode: 4,
+    });
+
+    await expect(makeErrorClient(403, 10, "Application does not have permission").getAdAccount()).rejects.toMatchObject({
+      code: "PERMISSION_ERROR",
+      metaErrorCode: 10,
+    });
+  });
 });

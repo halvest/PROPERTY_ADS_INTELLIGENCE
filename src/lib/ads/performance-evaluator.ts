@@ -453,7 +453,9 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
   const slaMet = meetsPerformanceSla(performanceStatus, actualCpr, effectiveTargetCpr);
   const doubleBurn = spentBeyondDoubleTarget(spend, effectiveTargetCpr, results);
   const noDelivery = spend === 0 && impressions === 0;
-  let pausedScenario: "none" | "idle" | "efficient" | "inefficient" | "review" = "none";
+  let pausedScenario: "none" | "idle" | "efficient" | "early_efficient" | "inefficient" | "review" = "none";
+  const reactivationReady =
+    slaMet && (results ?? 0) >= 5 && durationDays >= 7 && dataStatus === "cukup";
 
   if (paused) {
     if (noDelivery) {
@@ -464,10 +466,14 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
       pausedScenario = "review";
       action = "tinjau_reaktivasi";
       mainReason = "Objek sedang dijeda. Target CPR belum diatur, jadi histori tidak disebut sesuai target dan bukan perintah aktivasi. Anggaran harian tidak tersimpan di snapshot.";
-    } else if (slaMet && (results ?? 0) >= 5 && durationDays >= 14 && dataStatus === "cukup") {
+    } else if (reactivationReady) {
       pausedScenario = "efficient";
       action = "tinjau_reaktivasi";
-      mainReason = "Histori biaya per hasil berada pada atau di bawah target. Ini hanya kelayakan peninjauan, bukan perintah menyalakan kembali dan bukan saran memakai anggaran lama.";
+      mainReason = `Histori ${durationDays} hari: ${results} hasil, belanja ${formatRupiah(spend)}, CPR ${formatRupiah(actualCpr || 0)} terhadap target ${formatRupiah(effectiveTargetCpr)}. Objek ini kandidat pertimbangan reaktivasi. Aktivasi tetap manual, dan anggaran uji diisi baru.`;
+    } else if (slaMet) {
+      pausedScenario = "early_efficient";
+      action = "pantau";
+      mainReason = `CPR histori ${formatRupiah(actualCpr || 0)} berada pada atau di bawah target ${formatRupiah(effectiveTargetCpr)}, tetapi ${results ?? 0} hasil pada ${durationDays} hari belum cukup. Kandidat reaktivasi butuh minimal 5 hasil dan jendela 7 hari dengan data memadai.`;
     } else {
       pausedScenario = "inefficient";
       action = "optimasi";
@@ -524,7 +530,10 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
     headline = "Tidak ada penayangan aktif pada periode ini";
     subtext = mainReason;
   } else if (pausedScenario === "efficient") {
-    headline = "Histori layak ditinjau, bukan perintah aktivasi";
+    headline = "Kandidat pertimbangan reaktivasi";
+    subtext = mainReason;
+  } else if (pausedScenario === "early_efficient") {
+    headline = "CPR di bawah target, sampel belum cukup untuk reaktivasi";
     subtext = mainReason;
   } else if (pausedScenario === "review") {
     headline = "Objek dijeda dan target belum diatur";
@@ -578,24 +587,59 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
       stop_loss: "Stop-loss numerik tidak dihitung karena target CPR belum diatur.",
     });
   } else if (pausedScenario === "inefficient") {
+    const linkCtr = impressions > 0 ? (linkClicks / impressions) * 100 : null;
+    const resultCount = results ?? 0;
+    const gapPct =
+      actualCpr !== null && effectiveTargetCpr
+        ? ((actualCpr - effectiveTargetCpr) / effectiveTargetCpr) * 100
+        : null;
+    const ctrClause =
+      linkCtr === null
+        ? "CTR tautan tidak dapat dihitung karena tayangan nol."
+        : `CTR tautan histori ${formatIdPercent(linkCtr)} dari ${new Intl.NumberFormat("id-ID").format(impressions)} tayangan.`;
+    const history =
+      resultCount === 0
+        ? `Histori ${durationDays} hari mencatat belanja ${formatRupiah(spend)} dan ${new Intl.NumberFormat("id-ID").format(linkClicks)} klik tautan tanpa hasil Meta. Target CPR ${formatRupiah(effectiveTargetCpr || 0)}. CPR tidak dihitung karena hasilnya nol.`
+        : `Histori ${durationDays} hari: ${new Intl.NumberFormat("id-ID").format(resultCount)} hasil dari belanja ${formatRupiah(spend)}. CPR ${formatRupiah(actualCpr || 0)} berada ${formatIdPercent(gapPct || 0)} di atas target ${formatRupiah(effectiveTargetCpr || 0)}.`;
+    let title = "Jangan duplikasi histori yang kalah dari target";
+    let execution: string;
+    if (resultCount === 0 && linkCtr !== null && linkCtr >= 1.2) {
+      title = "Jangan salin objek yang belanja tanpa hasil";
+      execution = `Biarkan objek tetap dijeda. ${ctrClause} Klik sudah masuk tetapi hasil tidak tercatat: di Ads Manager buka pratinjau tujuan iklan ini dan pastikan sapaan WhatsApp, formulir, atau halaman menanyakan harga, DP, dan lokasi. Buat draf baru di luar objek ini; jangan pakai Duplicate.`;
+    } else if (resultCount === 0) {
+      title = "Jangan salin objek yang belanja tanpa hasil";
+      execution = `Biarkan objek tetap dijeda. ${ctrClause} Di Ads Manager buka iklan dengan belanja terbesar pada objek ini, ganti kalimat pembuka serta filter harga dan lokasi pada draf baru, lalu jangan hidupkan salinan dari iklan ini.`;
+    } else if (linkCtr !== null && linkCtr < 0.8) {
+      title = "Jangan salin iklan dengan CTR tautan lemah";
+      execution = `Biarkan objek tetap dijeda. ${ctrClause} Di Ads Manager urutkan iklan pada objek ini menurut belanja. Siapkan draf baru untuk iklan yang CTR tautannya di bawah 0,80% dan CPR-nya di atas ${formatRupiah(effectiveTargetCpr || 0)}. Jangan hidupkan iklan lama.`;
+    } else if (linkCtr !== null && linkCtr >= 1.2) {
+      title = "Periksa tujuan iklan sebelum membuat salinan";
+      execution = `Biarkan objek tetap dijeda. ${ctrClause} Hasil tidak mengikuti klik: di Ads Manager uji pratinjau tujuan dan perbaiki pertanyaan harga, DP, serta lokasi pada draf baru. Jangan duplikasi iklan yang CPR-nya ${formatRupiah(actualCpr || 0)}.`;
+    } else {
+      execution = `Biarkan objek tetap dijeda. ${ctrClause} Di Ads Manager urutkan iklan pada objek ini menurut CPR. Iklan di atas ${formatRupiah(effectiveTargetCpr || 0)} tetap dijeda. Salinan hanya boleh memakai iklan lain pada objek yang sama bila CPR-nya di bawah target.`;
+    }
     nextActions.push({
       priority: "high",
-      title: "Audit materi kreatif dan penawaran sebelum replikasi",
-      why: "Riwayat penayangan sebelumnya belum mencapai target efisiensi biaya per hasil.",
-      do: "Bandingkan biaya per hasil dengan target yang sudah diatur. Isi visual tidak ada pada laporan ini, jadi hook tidak dinilai.",
-      stop_loss: "Batasi anggaran uji coba awal maksimal 1x–2x target CPR per hari saat menayangkan materi baru.",
+      title,
+      why: history,
+      do: execution,
+      stop_loss: `Jangan menghidupkan objek ini dari laporan. Jika draf baru diuji manual, hentikan uji saat belanja menyentuh ${formatRupiah((effectiveTargetCpr || 0) * 2)} tanpa hasil baru. Laporan ini tidak menyimpan anggaran harian.`,
+    });
+  } else if (pausedScenario === "early_efficient") {
+    nextActions.push({
+      priority: "medium",
+      title: "Belum kandidat reaktivasi: sampel masih pendek",
+      why: mainReason,
+      do: "Biarkan objek dijeda. Ulangi tinjauan setelah terkumpul minimal 5 hasil pada jendela 7 hari. Jangan aktifkan hanya dari potongan periode ini.",
+      stop_loss: `Jika tetap diuji manual, hentikan uji saat belanja menyentuh ${formatRupiah((effectiveTargetCpr || 0) * 2)} tanpa hasil baru.`,
     });
   } else if (pausedScenario === "efficient") {
     nextActions.push({
-      priority: "medium",
-      title: "Tinjau histori sebelum membahas aktivasi",
-      why: effectiveTargetCpr
-        ? "Rekam jejak biaya per hasil berada pada atau di bawah target yang dikonfigurasi."
-        : "Target CPR belum diatur, jadi efisiensi tidak dapat dinyatakan.",
-      do: "Jangan menyalakan objek dari laporan ini. Anggaran harian tidak tersimpan, jadi anggaran lama tidak disarankan.",
-      stop_loss: effectiveTargetCpr
-        ? "Jika nanti diuji manual, hentikan uji saat belanja melewati 2x target CPR tanpa hasil baru."
-        : "Stop-loss numerik tidak dihitung karena target CPR belum diatur.",
+      priority: "high",
+      title: "Masukkan sebagai kandidat reaktivasi",
+      why: mainReason,
+      do: "Di Ads Manager, tandai objek ini sebagai kandidat reaktivasi. Sebelum menyalakan secara manual, buka pratinjau tujuan iklan dan pastikan WhatsApp, formulir, atau halaman masih berjalan. Isi anggaran uji baru di Ads Manager. Laporan ini tidak menyimpan anggaran lama.",
+      stop_loss: `Jika diaktifkan manual, hentikan uji saat belanja menyentuh ${formatRupiah((effectiveTargetCpr || 0) * 2)} tanpa hasil baru.`,
     });
   } else if (action === "periksa_tracking") {
     nextActions.push({

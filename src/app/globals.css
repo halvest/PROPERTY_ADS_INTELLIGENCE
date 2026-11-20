@@ -591,3 +591,30 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* Stable scrollbar gutter & zero-jitter tab switching utilities */
+html {
+  scrollbar-gutter: stable;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes tab-panel-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.tab-panel-enter {
+  animation: tab-panel-fade 120ms ease-out forwards;
+}

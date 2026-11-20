@@ -665,11 +665,15 @@ export async function executeMarketingSync(
             }
           }
 
-          // C. Resolve internal campaign UUIDs for Ads
-          const { data: dbCampaigns } = await db
+          // C. Resolve internal campaign UUIDs for Ads (scoped to active ad account when available)
+          let campaignsLookupQuery = db
             .from("campaigns")
             .select("id, provider_campaign_id")
             .eq("organization_id", organizationId);
+          if (internalAdAccountId && typeof (campaignsLookupQuery as { eq?: unknown }).eq === "function") {
+            campaignsLookupQuery = campaignsLookupQuery.eq("ad_account_id", internalAdAccountId);
+          }
+          const { data: dbCampaigns } = await campaignsLookupQuery;
 
           const campaignIdMap = new Map<string, string>();
           dbCampaigns?.forEach((c: { provider_campaign_id: string; id: string }) =>
@@ -743,11 +747,19 @@ export async function executeMarketingSync(
             }
           }
 
-          // E. Resolve internal ad UUIDs for Insights
-          const { data: dbAds } = await db
+          // E. Resolve internal ad UUIDs for Insights (scoped to this account's campaigns when available)
+          let adsLookupQuery = db
             .from("ads")
             .select("id, provider_ad_id")
             .eq("organization_id", organizationId);
+          const resolvedCampaignUuids = Array.from(campaignIdMap.values());
+          if (
+            resolvedCampaignUuids.length > 0 &&
+            typeof (adsLookupQuery as { in?: unknown }).in === "function"
+          ) {
+            adsLookupQuery = adsLookupQuery.in("campaign_id", resolvedCampaignUuids);
+          }
+          const { data: dbAds } = await adsLookupQuery;
 
           const adIdMap = new Map<string, string>();
           dbAds?.forEach((a: { provider_ad_id: string; id: string }) =>
@@ -833,15 +845,25 @@ export async function executeMarketingSync(
                 // is missing the optional conversion metadata migration.
                 const missingSchemaColumn = insErr.code === "PGRST204" || insErr.code === "42703";
                 if (missingSchemaColumn) {
-                  const coreInsightRows = chunk.map(
-                    ({
-                      action_breakdown: _breakdown,
-                      cost_per_action_type: _actionCosts,
-                      conversion_action_type: _conversionType,
-                      mapping_version: _mappingVersion,
-                      ...coreRow
-                    }) => coreRow
-                  );
+                  const coreInsightRows = chunk.map((row) => ({
+                    organization_id: row.organization_id,
+                    ad_id: row.ad_id,
+                    date_start: row.date_start,
+                    date_stop: row.date_stop,
+                    level: row.level,
+                    spend: row.spend,
+                    impressions: row.impressions,
+                    clicks: row.clicks,
+                    reach: row.reach,
+                    link_clicks: row.link_clicks,
+                    conversions: row.conversions,
+                    adset_id: row.adset_id,
+                    adset_name: row.adset_name,
+                    attribution_setting: row.attribution_setting,
+                    currency: row.currency,
+                    source: row.source,
+                    fetched_at: row.fetched_at,
+                  }));
                   const { error: coreInsightError } = await db
                     .from("ad_insights")
                     .upsert(coreInsightRows, {

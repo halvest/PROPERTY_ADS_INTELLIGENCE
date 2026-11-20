@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { verifyOAuthCsrfState, encryptAccessToken } from "@/lib/security/credential-crypto";
 import { persistMetaUserToken } from "@/lib/marketing/meta/token-storage";
+import { resolveMetaOAuthRedirectUri } from "@/lib/meta/oauth-redirect";
 
 interface MetaTokenResponse {
   access_token?: string;
@@ -139,13 +140,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(settingsUrl);
     }
 
-    let redirectUri = process.env.META_OAUTH_REDIRECT_URI?.trim();
-    if (!redirectUri) {
-      const appBaseUrl =
-        process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-        request.nextUrl.origin;
-      redirectUri = `${appBaseUrl.replace(/\/+$/, "")}/api/auth/meta/callback`;
-    }
+    const redirectUri = resolveMetaOAuthRedirectUri(request);
 
     // 5. Exchange code for short-lived access token
     const tokenExchangeUrl = new URL(`https://graph.facebook.com/${apiVersion}/oauth/access_token`);

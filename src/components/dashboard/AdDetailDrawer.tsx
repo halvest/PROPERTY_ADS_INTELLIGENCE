@@ -22,6 +22,7 @@ import {
 import { formatDisplayCurrency } from "@/lib/format/display-currency";
 import { composeAdCardCopy } from "@/lib/ai/ctwa-analysis/ad-card-copy";
 import type { TranslationDictionary } from "@/lib/i18n/types";
+import { createClient } from "@/lib/supabase/client";
 
 function X({ className = "h-4 w-4" }: { className?: string }) {
   return (
@@ -73,7 +74,7 @@ function Check({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
-function Sparkles({ className = "h-4 w-4" }: { className?: string }) {
+function BarChartIcon({ className = "h-4 w-4" }: { className?: string }) {
   return (
     <svg
       className={className}
@@ -85,7 +86,7 @@ function Sparkles({ className = "h-4 w-4" }: { className?: string }) {
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M13 10V3L4 14h7v7l9-11h-7z"
+        d="M18 20V10M12 20V4M6 20v-6"
       />
     </svg>
   );
@@ -779,10 +780,22 @@ export function AdDetailDrawer({
       setIsDetailLoading(true);
       setDetailError(null);
       try {
+        const headers: Record<string, string> = {};
+        try {
+          const supabase = createClient();
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            headers["Authorization"] = `Bearer ${session.access_token}`;
+          }
+        } catch {
+          // Fallback to cookie-only
+        }
+
         const res = await fetch(
           dateRange
             ? `/api/ads/${ad.id}?dateRange=${encodeURIComponent(dateRange)}`
-            : `/api/ads/${ad.id}`
+            : `/api/ads/${ad.id}`,
+          { headers }
         );
         if (!res.ok) {
           const errJson = await res.json().catch(() => ({}));
@@ -826,58 +839,109 @@ export function AdDetailDrawer({
 
     try {
       const analysisContext = `analyze-ad:${ad.id}:${dateRange || "all"}:${uiLocale}`;
-      const res = await fetch("/api/ai/analyze-ad", {
-        method: "POST",
-        headers: {
+      const supabase = createClient();
+
+      // Proactively verify session and refresh if expired or expiring soon (< 60s)
+      let currentSessionToken: string | null = null;
+      try {
+        let { data: { session } } = await supabase.auth.getSession();
+        if (!session || (session.expires_at && session.expires_at * 1000 < Date.now() + 60_000)) {
+          const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+          if (!refreshErr && refreshData?.session) {
+            session = refreshData.session;
+          }
+        }
+        currentSessionToken = session?.access_token || null;
+      } catch {
+        // Fallback to existing cookie state
+      }
+
+      const bodyPayload = {
+        adId: ad.id,
+        adName: serverDetail?.ad.name || ad.adName,
+        campaignName: serverDetail?.campaign.name || ad.campaignName,
+        campaignObjective:
+          serverDetail?.campaign.objective || ad.campaignObjective,
+        status: serverDetail?.delivery.deliveryStatus || ad.deliveryStatus,
+        dateRange: dateRange || undefined,
+        locale: uiLocale,
+        metrics: {
+          spend: serverDetail?.metrics.spend ?? ad.spend,
+          impressions: serverDetail?.metrics.impressions ?? ad.impressions,
+          reach: serverDetail?.metrics.reach ?? ad.reach,
+          linkClicks:
+            serverDetail?.metrics.linkClicks ?? ad.linkClicks ?? 0,
+          allClicks: serverDetail?.metrics.allClicks ?? ad.allClicks,
+          linkCtr: serverDetail?.metrics.linkCtr ?? ad.linkCtr,
+          allCtr: serverDetail?.metrics.allCtr ?? ad.allCtr,
+          linkCpc: serverDetail?.metrics.linkCpc ?? ad.linkCpc,
+          allCpc: serverDetail?.metrics.allCpc ?? ad.allCpc,
+          cpm: serverDetail?.metrics.cpm ?? ad.cpm,
+          results: serverDetail?.metrics.results ?? ad.results ?? 0,
+          resultType:
+            serverDetail?.metrics.resultLabel || ad.resultLabel || "Hasil",
+          resultsTrackingStatus: (
+            serverDetail?.metrics.resultActionTypes ||
+            ad.resultActionTypes ||
+            []
+          ).some((action) =>
+            action.includes("messaging_conversation_started")
+          )
+            ? "TERVERIFIKASI ADA"
+            : "BELUM TERVERIFIKASI",
+          costPerResult:
+            serverDetail?.metrics.costPerResult ?? ad.costPerResult,
+        },
+      };
+
+      const buildHeaders = (token: string | null) => {
+        const headers: Record<string, string> = {
           "Content-Type": "application/json",
           "Idempotency-Key": idempotencyRef.current.keyFor(analysisContext),
-        },
-        body: JSON.stringify({
-          adId: ad.id,
-          adName: serverDetail?.ad.name || ad.adName,
-          campaignName: serverDetail?.campaign.name || ad.campaignName,
-          campaignObjective:
-            serverDetail?.campaign.objective || ad.campaignObjective,
-          status: serverDetail?.delivery.deliveryStatus || ad.deliveryStatus,
-          dateRange: dateRange || undefined,
-          locale: uiLocale,
-          metrics: {
-            spend: serverDetail?.metrics.spend ?? ad.spend,
-            impressions: serverDetail?.metrics.impressions ?? ad.impressions,
-            reach: serverDetail?.metrics.reach ?? ad.reach,
-            linkClicks:
-              serverDetail?.metrics.linkClicks ?? ad.linkClicks ?? 0,
-            allClicks: serverDetail?.metrics.allClicks ?? ad.allClicks,
-            linkCtr: serverDetail?.metrics.linkCtr ?? ad.linkCtr,
-            allCtr: serverDetail?.metrics.allCtr ?? ad.allCtr,
-            linkCpc: serverDetail?.metrics.linkCpc ?? ad.linkCpc,
-            allCpc: serverDetail?.metrics.allCpc ?? ad.allCpc,
-            cpm: serverDetail?.metrics.cpm ?? ad.cpm,
-            results: serverDetail?.metrics.results ?? ad.results ?? 0,
-            resultType:
-              serverDetail?.metrics.resultLabel || ad.resultLabel || "Hasil",
-            resultsTrackingStatus: (
-              serverDetail?.metrics.resultActionTypes ||
-              ad.resultActionTypes ||
-              []
-            ).some((action) =>
-              action.includes("messaging_conversation_started")
-            )
-              ? "TERVERIFIKASI ADA"
-              : "BELUM TERVERIFIKASI",
-            costPerResult:
-              serverDetail?.metrics.costPerResult ?? ad.costPerResult,
-          },
-        }),
+        };
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+        }
+        return headers;
+      };
+
+      let res = await fetch("/api/ai/analyze-ad", {
+        method: "POST",
+        headers: buildHeaders(currentSessionToken),
+        body: JSON.stringify(bodyPayload),
       });
+
+      // If rejected with 401 Unauthorized, automatically attempt a reactive session refresh and retry once
+      if (res.status === 401) {
+        try {
+          const { data: retryRefresh, error: retryRefreshErr } = await supabase.auth.refreshSession();
+          if (!retryRefreshErr && retryRefresh?.session) {
+            currentSessionToken = retryRefresh.session.access_token;
+            res = await fetch("/api/ai/analyze-ad", {
+              method: "POST",
+              headers: buildHeaders(currentSessionToken),
+              body: JSON.stringify(bodyPayload),
+            });
+          }
+        } catch {
+          // If refresh fails, proceed to 401 handler below
+        }
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          throw new Error(
+            uiLocale === "id"
+              ? "Sesi login Anda telah berakhir. Silakan masuk kembali untuk melanjutkan analisis."
+              : "Your session has expired. Please sign in again to continue analysis."
+          );
+        }
         throw new Error(
           err.error ||
             (uiLocale === "id"
-              ? "Gagal menghubungi layanan AI"
-              : "Failed to reach AI service")
+              ? "Gagal menghubungi layanan evaluasi performa"
+              : "Failed to reach performance evaluation service")
         );
       }
 
@@ -901,8 +965,8 @@ export function AdDetailDrawer({
       } else {
         throw new Error(
           locale === "id"
-            ? "Format respons analisis AI tidak valid. Silakan coba kembali."
-            : "Invalid AI analysis response format. Please try again."
+            ? "Format respons evaluasi performa tidak valid. Silakan coba kembali."
+            : "Invalid performance evaluation response format. Please try again."
         );
       }
     } catch (err) {
@@ -1832,7 +1896,7 @@ export function AdDetailDrawer({
                   <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-900 dark:text-zinc-100">
-                        <Sparkles className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                        <BarChartIcon className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
                         <span>{t.aiSectionTitle}</span>
                       </h3>
 
@@ -1939,7 +2003,7 @@ export function AdDetailDrawer({
                       </>
                     ) : (
                       <>
-                        <Sparkles className="h-4 w-4" />
+                        <BarChartIcon className="h-4 w-4" />
                         <span>{t.aiStartAnalysisButton}</span>
                       </>
                     )}
@@ -2284,7 +2348,7 @@ export function AdDetailDrawer({
                       </p>
                     </div>
                   </div>
-                  <div className="pt-1">
+                  <div className="pt-1 flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={runAiAnalysis}
@@ -2294,6 +2358,14 @@ export function AdDetailDrawer({
                       <RefreshCw className="h-3.5 w-3.5" />
                       <span>{t.aiRetryButton}</span>
                     </button>
+                    {(aiError.includes("Sesi") || aiError.includes("sesi") || aiError.includes("session") || aiError.includes("masuk kembali") || aiError.includes("sign in")) && (
+                      <a
+                        href={`/login?redirect=${encodeURIComponent("/ads")}`}
+                        className="inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-100/80 dark:border-rose-800 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-950"
+                      >
+                        <span>{locale === "id" ? "Masuk Kembali" : "Sign In Again"}</span>
+                      </a>
+                    )}
                   </div>
                 </section>
               )}
@@ -2616,7 +2688,7 @@ export function AdDetailDrawer({
                           </div>
                           <div className="space-y-3">
                             {aiAnalysis.keyFindings
-                              .slice(0, 3)
+                              .slice(0, 4)
                               .map((f, idx) => (
                                 <div
                                   key={idx}
@@ -2674,7 +2746,7 @@ export function AdDetailDrawer({
                           </div>
                           <div className="space-y-3">
                             {aiAnalysis.priorityActions
-                              .slice(0, 3)
+                              .slice(0, 4)
                               .map((act, idx) => (
                                 <div
                                   key={idx}

@@ -102,16 +102,20 @@ describe("AI Ads Performance Analyst & Data Recovery Audit", () => {
   });
 
   it("normalizes rupiah spacing and english percent decimals", () => {
-    expect(normalizeIndonesianLlmCopy("Belanja Rp 150.000 dengan CTR 1.25%.")).toBe("Belanja Rp150.000 dengan CTR 1,25%.");
+    expect(normalizeIndonesianLlmCopy("Belanja Rp150.000 dengan CTR 1.25%.")).toBe("Belanja Rp 150.000 dengan CTR 1,25%.");
+    expect(normalizeIndonesianLlmCopy("Belanja Rp 150.000 dengan CTR 1,25%.")).toBe("Belanja Rp 150.000 dengan CTR 1,25%.");
   });
 
   describe("4. Prompt Separation & JSON Schema Disambiguation (P0 Fix)", () => {
     it("ensures PAGE_ANALYST_SYSTEM_PROMPT has pure ModelResponseSchema and no CTWA root schema", async () => {
       const { PAGE_ANALYST_SYSTEM_PROMPT } = await import("@/lib/ai/ctwa-analysis/prompt");
-      // Must contain verdict at root schema
-      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"verdict": {')).toBe(true);
+      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"executive_verdict": {')).toBe(true);
+      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"data_warnings": [')).toBe(true);
       expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"watchouts": [')).toBe(true);
-      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"actions": [')).toBe(true);
+      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"playbook": [')).toBe(true);
+      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"unknowns": [')).toBe(true);
+      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"actions": [')).toBe(false);
+      expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"verdict": {')).toBe(false);
 
       // Must NOT ask for CTWA root fields in its output JSON
       expect(PAGE_ANALYST_SYSTEM_PROMPT.includes('"buyer_intent_score":')).toBe(false);

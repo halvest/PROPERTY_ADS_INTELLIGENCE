@@ -187,8 +187,8 @@ export const dataDeletion: LegalDocument = {
               en: "Email support@hdcreative.cloud with subject \"Data Deletion Request — <Workspace Name>\" from the workspace Owner/Admin email.",
             },
             {
-              id: "Jika Anda menghapus integrasi aplikasi langsung dari pengaturan Meta Facebook, Meta akan memanggil endpoint otomatis Data Deletion Callback kami dan menampilkan kode konfirmasi penghapusan Anda.",
-              en: "If you remove the app directly from Meta Facebook settings, Meta triggers our automated Data Deletion Callback and provides a confirmation code for tracking.",
+              id: "Jika Anda menghapus aplikasi dari pengaturan Meta, Meta memanggil Data Deletion Callback. Callback itu langsung menghapus token iklan dan token WhatsApp yang terikat pada pengguna Facebook tersebut, lalu menampilkan kode konfirmasi.",
+              en: "If you remove the app from Meta settings, Meta calls the Data Deletion Callback. That callback immediately deletes the ad token and WhatsApp token bound to that Facebook user, then shows a confirmation code.",
             },
             {
               id: "Tim kami memproses penghapusan riwayat percakapan, data leads, hasil analisis AI, dan snapshot iklan dalam maksimal 7 hari kerja setelah verifikasi kepemilikan.",

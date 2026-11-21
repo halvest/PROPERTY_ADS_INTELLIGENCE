@@ -861,8 +861,8 @@ export default function SettingsPage() {
                 </h4>
                 <p className="mt-0.5 text-xs text-amber-800/80 dark:text-amber-300/80 leading-relaxed">
                   {id
-                    ? "HD Creative hanya meminta hak akses baca (ads_read) untuk menarik metrik insight iklan, biaya kampanye, dan memvalidasi prospek CRM WhatsApp. Sistem tidak dapat mengubah iklan, anggaran, atau kartu pembayaran Anda."
-                    : "HD Creative requests read-only permission (ads_read) to aggregate ad metrics, campaign spend, and validate CRM WhatsApp leads. The system cannot edit ads, change budgets, or access payment methods."}
+                    ? "HD Creative hanya meminta izin ads_read untuk menampilkan performa iklan: impresi, jangkauan, klik, belanja, dan hasil. Izin ini tidak mengubah iklan, anggaran, atau metode pembayaran, dan tidak membaca pesan WhatsApp."
+                    : "HD Creative requests only ads_read to display ad performance: impressions, reach, clicks, spend, and results. This permission cannot edit ads, budgets, or payment methods, and it does not read WhatsApp messages."}
                 </p>
               </div>
             </div>

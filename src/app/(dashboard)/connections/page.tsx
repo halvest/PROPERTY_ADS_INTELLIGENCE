@@ -6,6 +6,7 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useToast } from "@/components/ui/Toast";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { EMBEDDED_SIGNUP_EXTRAS } from "@/lib/meta/embedded-signup-launch";
 
 type ConnectionHealthStatus =
   | "healthy"
@@ -60,12 +61,6 @@ interface FacebookLoginResponse {
   status?: string;
 }
 
-interface EmbeddedSignupExtras {
-  featureType: "whatsapp_business_app_onboarding";
-  sessionInfoVersion: "3";
-  version: "v3";
-}
-
 declare global {
   interface Window {
     fbAsyncInit?: () => void;
@@ -82,7 +77,7 @@ declare global {
           config_id: string;
           response_type: "code";
           override_default_response_type: boolean;
-          extras: EmbeddedSignupExtras;
+          extras: typeof EMBEDDED_SIGNUP_EXTRAS;
         }
       ) => void;
     };
@@ -92,7 +87,7 @@ declare global {
 const META_APP_ID = (process.env.NEXT_PUBLIC_META_APP_ID ?? "").trim();
 const META_CONFIG_ID = (process.env.NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID ?? "").trim();
 const META_GRAPH_VERSION =
-  (process.env.NEXT_PUBLIC_META_GRAPH_API_VERSION ?? "v26.0").trim() || "v26.0";
+  (process.env.NEXT_PUBLIC_META_GRAPH_API_VERSION ?? "v27.0").trim() || "v27.0";
 
 const TRUSTED_FACEBOOK_ORIGINS = new Set([
   "https://www.facebook.com",
@@ -304,13 +299,7 @@ export default function WhatsAppConnectionsPage() {
   const tryFinalizeSignup = useCallback(async () => {
     const state = pendingSignupRef.current;
     const workspaceId = data?.workspace?.id;
-    if (
-      state.submitted ||
-      !workspaceId ||
-      !state.code ||
-      !state.phoneNumberId ||
-      !state.wabaId
-    ) {
+    if (state.submitted || !workspaceId || !state.code || !state.wabaId) {
       return;
     }
 
@@ -324,12 +313,12 @@ export default function WhatsAppConnectionsPage() {
         body: JSON.stringify({
           workspaceId,
           code: state.code,
-          phoneNumberId: state.phoneNumberId,
+          ...(state.phoneNumberId ? { phoneNumberId: state.phoneNumberId } : {}),
           wabaId: state.wabaId,
           integrationMode: "coexistence",
         }),
       });
-      const json = (await res.json()) as { success?: boolean; error?: string };
+      const json = (await res.json()) as { success?: boolean; error?: string; syncWarnings?: string[] };
 
       if (!res.ok || !json.success) {
         toast.error(
@@ -346,6 +335,9 @@ export default function WhatsAppConnectionsPage() {
             : "Sales WhatsApp Business connected successfully. Chats & mobile replies now sync automatically.",
           isId ? "WhatsApp Terhubung" : "WhatsApp Connected"
         );
+        if (json.syncWarnings && json.syncWarnings.length > 0) {
+          toast.warning(json.syncWarnings.join(" "), isId ? "Sinkronisasi belum lengkap" : "Sync incomplete");
+        }
         await loadConnections();
       }
     } catch {
@@ -360,7 +352,8 @@ export default function WhatsAppConnectionsPage() {
     }
   }, [data?.workspace?.id, isId, loadConnections, resetPendingSignup, toast]);
 
-  // Meta Embedded Signup sessionInfo listener (v3)
+  // Embedded Signup v5 posts WA_EMBEDDED_SIGNUP. Coexistence uses
+  // messaging_account_ids; older payloads still send waba_id.
   useEffect(() => {
     function handleMetaMessage(event: MessageEvent) {
       if (!isTrustedFacebookOrigin(event.origin)) return;
@@ -381,6 +374,7 @@ export default function WhatsAppConnectionsPage() {
         data?: {
           phone_number_id?: string;
           waba_id?: string;
+          messaging_account_ids?: string[];
           error_message?: string;
         };
       };
@@ -408,31 +402,26 @@ export default function WhatsAppConnectionsPage() {
         return;
       }
 
+      const messagingAccountId =
+        msg.data?.waba_id ||
+        (Array.isArray(msg.data?.messaging_account_ids) ? msg.data.messaging_account_ids.find(Boolean) : undefined);
       const isFinishEvent =
         msg.event === "FINISH" ||
         msg.event === "FINISH_ONLY_WABA" ||
         msg.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
-        Boolean(msg.data?.phone_number_id && msg.data?.waba_id);
+        Boolean(msg.data?.phone_number_id && messagingAccountId);
 
       if (!isFinishEvent) return;
 
-      if (msg.data?.waba_id) {
-        pendingSignupRef.current.wabaId = String(msg.data.waba_id);
+      if (messagingAccountId) {
+        pendingSignupRef.current.wabaId = String(messagingAccountId);
       }
       if (msg.data?.phone_number_id) {
         pendingSignupRef.current.phoneNumberId = String(msg.data.phone_number_id);
       }
 
-      if (pendingSignupRef.current.phoneNumberId && pendingSignupRef.current.wabaId) {
+      if (pendingSignupRef.current.wabaId) {
         void tryFinalizeSignup();
-      } else if (msg.event === "FINISH_ONLY_WABA") {
-        resetPendingSignup();
-        toast.warning(
-          isId
-            ? "Akun WABA dipilih, tetapi nomor WhatsApp Business belum dipilih di popup Meta. Silakan ulangi dan pilih nomor Anda."
-            : "WABA was selected, but no Phone Number ID was chosen. Please retry and select your WhatsApp number.",
-          isId ? "Nomor Belum Dipilih" : "Phone Number Missing"
-        );
       }
     }
 
@@ -519,11 +508,7 @@ export default function WhatsAppConnectionsPage() {
           config_id: META_CONFIG_ID,
           response_type: "code",
           override_default_response_type: true,
-          extras: {
-            featureType: "whatsapp_business_app_onboarding",
-            sessionInfoVersion: "3",
-            version: "v3",
-          },
+          extras: EMBEDDED_SIGNUP_EXTRAS,
         }
       );
     } catch {

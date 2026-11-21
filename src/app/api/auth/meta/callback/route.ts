@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
     // 4. Retrieve server configuration for token exchange
     const appId = process.env.META_APP_ID?.trim();
     const appSecret = process.env.META_APP_SECRET?.trim();
-    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v26.0";
+    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v27.0";
 
     if (!appId || !appSecret) {
       settingsUrl.searchParams.set("error", "meta_app_credentials_missing");
@@ -142,14 +142,18 @@ export async function GET(request: NextRequest) {
 
     const redirectUri = resolveMetaOAuthRedirectUri(request);
 
-    // 5. Exchange code for short-lived access token
-    const tokenExchangeUrl = new URL(`https://graph.facebook.com/${apiVersion}/oauth/access_token`);
-    tokenExchangeUrl.searchParams.set("client_id", appId);
-    tokenExchangeUrl.searchParams.set("client_secret", appSecret);
-    tokenExchangeUrl.searchParams.set("redirect_uri", redirectUri);
-    tokenExchangeUrl.searchParams.set("code", code);
-
-    const tokenRes = await fetch(tokenExchangeUrl.toString(), { method: "GET" });
+    // 5. Exchange code for short-lived access token. The secret stays in the
+    // POST body so it is not written into the request URL.
+    const tokenRes = await fetch(`https://graph.facebook.com/${apiVersion}/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: appId,
+        client_secret: appSecret,
+        redirect_uri: redirectUri,
+        code,
+      }),
+    });
     const tokenData: MetaTokenResponse = await tokenRes.json().catch(() => ({}));
 
     if (!tokenRes.ok || !tokenData.access_token) {
@@ -164,13 +168,16 @@ export async function GET(request: NextRequest) {
 
     // 6. Exchange short-lived token for long-lived user token (60-day validity)
     try {
-      const longLivedUrl = new URL(`https://graph.facebook.com/${apiVersion}/oauth/access_token`);
-      longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
-      longLivedUrl.searchParams.set("client_id", appId);
-      longLivedUrl.searchParams.set("client_secret", appSecret);
-      longLivedUrl.searchParams.set("fb_exchange_token", activeToken);
-
-      const longLivedRes = await fetch(longLivedUrl.toString(), { method: "GET" });
+      const longLivedRes = await fetch(`https://graph.facebook.com/${apiVersion}/oauth/access_token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "fb_exchange_token",
+          client_id: appId,
+          client_secret: appSecret,
+          fb_exchange_token: activeToken,
+        }),
+      });
       if (longLivedRes.ok) {
         const longLivedData: MetaTokenResponse = await longLivedRes.json();
         if (longLivedData.access_token) {
@@ -187,6 +194,7 @@ export async function GET(request: NextRequest) {
     // 7. Inspect token: validity, app binding, and granted scopes are verified
     // with debug_token. Unverifiable or under-permissioned tokens are NOT stored.
     let grantedScopes: string[] = [];
+    let metaUserId: string | null = null;
     try {
       const debugUrl = new URL(`https://graph.facebook.com/${apiVersion}/debug_token`);
       debugUrl.searchParams.set("input_token", activeToken);
@@ -206,6 +214,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.redirect(settingsUrl);
       }
       grantedScopes = Array.isArray(d.scopes) ? d.scopes : [];
+      metaUserId = d.user_id ? String(d.user_id) : null;
       if (d.expires_at && d.expires_at > 0) {
         expiresInSeconds = Math.max(0, d.expires_at - Math.floor(Date.now() / 1000));
       }
@@ -267,6 +276,7 @@ export async function GET(request: NextRequest) {
           app_id: appId,
           token_type: "long_lived_user",
           exchanged_at: new Date().toISOString(),
+          meta_user_id: metaUserId,
         },
         error_message: null,
         connected_by: user.id,

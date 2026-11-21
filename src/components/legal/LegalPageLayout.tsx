@@ -32,10 +32,12 @@ export function LegalPageLayout({
   document,
   currentPath,
   confirmationCode,
+  statusNote,
 }: {
   document: LegalDocument;
   currentPath: string;
   confirmationCode?: string;
+  statusNote?: string;
 }) {
   const { locale, dict } = useI18n();
   const language = locale === "id" ? "id" : "en";
@@ -98,6 +100,7 @@ export function LegalPageLayout({
                     {confirmationCode}
                   </code>
                 </p>
+                {statusNote ? <p className="mt-2 text-sm leading-6">{statusNote}</p> : null}
               </div>
             )}
           </header>

@@ -1,6 +1,6 @@
 /**
  * Property Ads Intelligence - Meta Marketing API Types
- * Definitions for Meta Graph API v26.0 responses, pagination, rate limits, and internal domain models.
+ * Definitions for Meta Graph API v27.0 responses, pagination, rate limits, and internal domain models.
  */
 
 export type MarketingErrorCode =
@@ -53,7 +53,7 @@ export interface MetaMarketingConfig {
   rawAdAccountId: string; // Numeric string without prefix
   appId?: string;
   appSecret?: string;
-  apiVersion: string; // e.g. "v26.0"
+  apiVersion: string; // e.g. "v27.0"
   baseUrl: string; // e.g. "https://graph.facebook.com"
   timeoutMs: number;
   maxRetries: number;

@@ -18,8 +18,8 @@ function readRequiredEnv(name: string, value: string | undefined): string {
 }
 
 export function getMetaGraphApiVersion(): string {
-  const version = (process.env.META_GRAPH_API_VERSION ?? "v26.0").trim();
-  return version || "v26.0";
+  const version = (process.env.META_GRAPH_API_VERSION ?? "v27.0").trim();
+  return version || "v27.0";
 }
 
 /**
@@ -33,7 +33,7 @@ export function getMetaPublicConfig(): MetaPublicConfig {
     process.env.NEXT_PUBLIC_META_EMBEDDED_SIGNUP_CONFIG_ID
   );
   const graphApiVersion =
-    (process.env.NEXT_PUBLIC_META_GRAPH_API_VERSION ?? "v26.0").trim() || "v26.0";
+    (process.env.NEXT_PUBLIC_META_GRAPH_API_VERSION ?? "v27.0").trim() || "v27.0";
 
   return {
     appId,

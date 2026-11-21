@@ -5,6 +5,7 @@ import { MetaMarketingApiClient } from "./client";
 import { decryptAccessToken } from "@/lib/security/credential-crypto";
 import { normalizeAdAccountId } from "./config";
 import { MarketingApiError } from "./types";
+import { rememberMetaAdsUser } from "@/lib/meta/meta-data-deletion";
 import type {
   MetaAvailableAssetsResponse,
   MetaAssetSelection,
@@ -94,6 +95,13 @@ export async function getAvailableAndSelectedMetaAssets(
   }));
 
   const { token, status } = await fetchTenantToken(admin, organizationId);
+  if (token) {
+    try {
+      await rememberMetaAdsUser(organizationId, token);
+    } catch {
+      // A missing Facebook user id must not block the ad account list.
+    }
+  }
   if (!token) {
     return { pages: [], adAccounts: [], selected, tokenStatus: status, connectedAccounts };
   }

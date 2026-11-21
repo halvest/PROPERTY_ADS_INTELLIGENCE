@@ -3,7 +3,7 @@ import "server-only";
 import { MarketingApiError, type MetaMarketingConfig } from "./types";
 
 const DEFAULT_GRAPH_BASE_URL = "https://graph.facebook.com";
-const DEFAULT_API_VERSION = "v26.0";
+const DEFAULT_API_VERSION = "v27.0";
 const DEFAULT_TIMEOUT_MS = 45000;
 const DEFAULT_MAX_RETRIES = 2;
 

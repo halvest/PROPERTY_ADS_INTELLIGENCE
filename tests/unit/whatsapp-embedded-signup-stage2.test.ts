@@ -4,6 +4,8 @@ vi.mock("server-only", () => ({}));
 
 import { encryptToken, decryptToken } from "@/lib/security/token-crypto";
 import { getMetaPublicConfig, getMetaServerConfig } from "@/lib/meta/config";
+import { EMBEDDED_SIGNUP_EXTRAS } from "@/lib/meta/embedded-signup-launch";
+import { selectWabaPhoneNumber } from "@/lib/meta/whatsapp-onboarding";
 
 describe("Stage 2 — WhatsApp Embedded Signup Config & AES-256-GCM Token Crypto", () => {
   const ORIGINAL_ENV = { ...process.env };
@@ -39,8 +41,8 @@ describe("Stage 2 — WhatsApp Embedded Signup Config & AES-256-GCM Token Crypto
 
     delete process.env.META_GRAPH_API_VERSION;
     delete process.env.NEXT_PUBLIC_META_GRAPH_API_VERSION;
-    expect(getMetaPublicConfig().graphApiVersion).toBe("v26.0");
-    expect(getMetaServerConfig().graphApiVersion).toBe("v26.0");
+    expect(getMetaPublicConfig().graphApiVersion).toBe("v27.0");
+    expect(getMetaServerConfig().graphApiVersion).toBe("v27.0");
 
     process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY = "not-a-valid-32-byte-hex-key";
     expect(() => getMetaServerConfig()).toThrow(/64-character hex string/i);
@@ -60,6 +62,30 @@ describe("Stage 2 — WhatsApp Embedded Signup Config & AES-256-GCM Token Crypto
 
     expect(decryptToken(enc1.encryptedPayload)).toBe(token);
     expect(decryptToken(enc2.encryptedPayload)).toBe(token);
+  });
+
+  it("launches Embedded Signup v5 with coexistence on and app-only install", () => {
+    expect(EMBEDDED_SIGNUP_EXTRAS.version).toBe("v5");
+    expect(EMBEDDED_SIGNUP_EXTRAS.features).toEqual([{ name: "app_only_install" }]);
+    const serialized = JSON.stringify(EMBEDDED_SIGNUP_EXTRAS);
+    expect(serialized).not.toContain("v3");
+    expect(serialized).not.toContain("v4");
+    expect(serialized).not.toContain("sessionInfoVersion");
+    expect(serialized).not.toContain("featureType");
+  });
+
+  it("picks the only WhatsApp number when the popup omits a phone id", () => {
+    expect(
+      selectWabaPhoneNumber([
+        { id: "111", displayPhoneNumber: "+62 812", verifiedName: "Sales", isOnBizApp: true },
+      ]).id
+    ).toBe("111");
+    expect(() =>
+      selectWabaPhoneNumber([
+        { id: "111", displayPhoneNumber: null, verifiedName: null, isOnBizApp: false },
+        { id: "222", displayPhoneNumber: null, verifiedName: null, isOnBizApp: false },
+      ])
+    ).toThrow(/lebih dari satu nomor/);
   });
 
   it("rejects tampered ciphertext or authTag", () => {

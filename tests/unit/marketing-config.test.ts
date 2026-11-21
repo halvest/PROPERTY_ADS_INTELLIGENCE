@@ -92,10 +92,10 @@ describe("Meta Marketing API - Config & Utilities", () => {
   });
 
   describe("getMetaMarketingConfig & validateMetaMarketingConfig", () => {
-    it("defaults to official Graph API v26.0 and base URL", () => {
+    it("defaults to official Graph API v27.0 and base URL", () => {
       const config = getMetaMarketingConfig();
       expect(config.baseUrl).toBe("https://graph.facebook.com");
-      expect(config.apiVersion).toBe("v26.0");
+      expect(config.apiVersion).toBe("v27.0");
       expect(config.isConfigured).toBe(false);
       expect(config.accessToken).toBe("");
     });

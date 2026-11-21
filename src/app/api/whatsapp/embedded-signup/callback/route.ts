@@ -6,14 +6,19 @@ import { encryptToken } from "@/lib/security/token-crypto";
 import {
   exchangeEmbeddedSignupCode,
   fetchPhoneNumberMetadata,
+  listWabaPhoneNumbers,
+  selectWabaPhoneNumber,
+  startCoexistenceDataSync,
   subscribeAppToWaba,
+  type PhoneNumberMetadata,
 } from "@/lib/meta/whatsapp-onboarding";
+import { readMetaAppScopedUserId } from "@/lib/meta/meta-data-deletion";
 import { getMaxConnectionsForPlan } from "@/lib/workspaces/active-workspace";
 
 const CallbackSchema = z.object({
   workspaceId: z.string().uuid(),
   code: z.string().trim().min(1, "Authorization code is required"),
-  phoneNumberId: z.string().trim().min(1, "phoneNumberId is required"),
+  phoneNumberId: z.string().trim().min(1).optional(),
   wabaId: z.string().trim().min(1, "wabaId is required"),
   integrationMode: z.literal("coexistence").optional().default("coexistence"),
   salesMemberId: z.string().uuid().optional(),
@@ -47,8 +52,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { workspaceId, code, phoneNumberId, wabaId, integrationMode, salesMemberId } =
-      parsed.data;
+    const { workspaceId, code, wabaId, integrationMode, salesMemberId } = parsed.data;
+    let phoneNumberId = parsed.data.phoneNumberId ?? null;
 
     const admin = createAdminClient();
 
@@ -86,28 +91,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Prevent hijacking a phone_number_id currently owned by another workspace
-    const { data: existingPhoneConn } = await admin
-      .from("whatsapp_connections")
-      .select("id, workspace_id, connection_status")
-      .eq("phone_number_id", phoneNumberId)
-      .maybeSingle();
-
-    if (
-      existingPhoneConn &&
-      existingPhoneConn.workspace_id &&
-      existingPhoneConn.workspace_id !== workspaceId
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Nomor WhatsApp ini sudah terhubung dengan workspace lain.",
-        },
-        { status: 409 }
-      );
-    }
-
-    // 3. Pre-check plan quota before exchanging Meta OAuth token
     const [{ data: sub }, { count: connectedCount, error: countErr }] = await Promise.all([
       admin
         .from("subscriptions")
@@ -119,7 +102,7 @@ export async function POST(req: NextRequest) {
         .select("id", { count: "exact", head: true })
         .eq("workspace_id", workspaceId)
         .eq("connection_status", "connected")
-        .neq("phone_number_id", phoneNumberId),
+        .neq("phone_number_id", phoneNumberId ?? ""),
     ]);
 
     if (countErr) {
@@ -149,13 +132,46 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Meta Embedded Signup sequence: code -> token -> metadata -> WABA webhook subscription
     const tokenResult = await exchangeEmbeddedSignupCode(code);
-    const phoneMeta = await fetchPhoneNumberMetadata(phoneNumberId, tokenResult.accessToken);
+    let phoneMeta: PhoneNumberMetadata;
+    if (!phoneNumberId) {
+      const numbers = await listWabaPhoneNumbers(wabaId, tokenResult.accessToken);
+      const selected = selectWabaPhoneNumber(numbers);
+      phoneNumberId = selected.id;
+      phoneMeta = {
+        phoneNumberId: selected.id,
+        displayPhoneNumber: selected.displayPhoneNumber,
+        verifiedName: selected.verifiedName,
+      };
+    } else {
+      phoneMeta = await fetchPhoneNumberMetadata(phoneNumberId, tokenResult.accessToken);
+    }
+
+    const { data: existingPhoneConn } = await admin
+      .from("whatsapp_connections")
+      .select("id, workspace_id, metadata")
+      .eq("phone_number_id", phoneNumberId)
+      .maybeSingle();
+    if (existingPhoneConn?.workspace_id && existingPhoneConn.workspace_id !== workspaceId) {
+      return NextResponse.json(
+        { success: false, error: "Nomor WhatsApp ini sudah terhubung dengan workspace lain." },
+        { status: 409 }
+      );
+    }
+
     await subscribeAppToWaba(wabaId, tokenResult.accessToken);
+    const sync =
+      integrationMode === "coexistence"
+        ? await startCoexistenceDataSync(phoneNumberId, tokenResult.accessToken)
+        : { warnings: [] as string[] };
 
     // 5. Encrypt token with AES-256-GCM before persisting
     const { encryptedPayload, keyVersion } = encryptToken(tokenResult.accessToken);
+    const metaUserId = await readMetaAppScopedUserId(tokenResult.accessToken).catch(() => null);
+    const previousMetadata =
+      existingPhoneConn?.metadata && typeof existingPhoneConn.metadata === "object" && !Array.isArray(existingPhoneConn.metadata)
+        ? existingPhoneConn.metadata
+        : {};
     const nowIso = new Date().toISOString();
     const tokenExpiresAt = tokenResult.expiresInSeconds
       ? new Date(Date.now() + tokenResult.expiresInSeconds * 1000).toISOString()
@@ -178,6 +194,7 @@ export async function POST(req: NextRequest) {
           connected_by: user.id,
           connected_at: nowIso,
           disconnected_at: null,
+          metadata: metaUserId ? { ...previousMetadata, meta_user_id: metaUserId } : previousMetadata,
         },
         { onConflict: "phone_number_id" }
       )
@@ -221,6 +238,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       connection: savedConn,
+      syncWarnings: sync.warnings,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Embedded signup callback failed";

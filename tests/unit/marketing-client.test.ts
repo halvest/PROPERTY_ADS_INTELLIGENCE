@@ -42,7 +42,7 @@ describe("MetaMarketingApiClient", () => {
 
     const campaigns = await client.getCampaigns();
 
-    expect(capturedUrl).toContain("https://graph.facebook.com/v26.0/act_123456789/campaigns");
+    expect(capturedUrl).toContain("https://graph.facebook.com/v27.0/act_123456789/campaigns");
     expect(capturedHeaders["Authorization"]).toBe(`Bearer ${dummyToken}`);
     expect(capturedHeaders["Accept"]).toBe("application/json");
     expect(campaigns).toHaveLength(1);

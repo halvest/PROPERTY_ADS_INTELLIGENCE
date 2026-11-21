@@ -34,7 +34,7 @@ export interface MetaMarketingClientOptions {
 
 /**
  * Meta Marketing API Server Client (Read-Only)
- * Connects directly to Meta Graph API (default v26.0) with strict cursor pagination
+ * Connects directly to Meta Graph API (default v27.0) with strict cursor pagination
  * (`while (hasNextPage)` traversal via `paging.cursors.after`), comprehensive
  * `effective_status` filtering, BUC rate limit header throttling, bounded retries,
  * and sanitized error reporting.
@@ -87,7 +87,7 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches Facebook Pages managed by the authenticated user along with connected Instagram business accounts.
-   * Endpoint: GET /v26.0/me/accounts
+   * Endpoint: GET /v27.0/me/accounts
    */
   async getFacebookPages(): Promise<MetaFacebookPage[]> {
     // Page access tokens are never requested: they are credentials and must
@@ -100,7 +100,7 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches the connected Instagram Professional Account for a given Page ID.
-   * Endpoint: GET /v26.0/{pageId}?fields=instagram_business_account{...}
+   * Endpoint: GET /v27.0/{pageId}?fields=instagram_business_account{...}
    */
   async getInstagramAccount(pageId: string): Promise<MetaInstagramAccount | null> {
     const fields = "instagram_business_account{id,username,name,profile_picture_url}";
@@ -115,7 +115,7 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches list of authorized Ad Accounts for the authenticated access token.
-   * Endpoint: GET /v26.0/me/adaccounts
+   * Endpoint: GET /v27.0/me/adaccounts
    */
   async getAdAccounts(): Promise<MetaAdAccountResponse[]> {
     this.lastFetchTruncated = false;
@@ -134,7 +134,7 @@ export class MetaMarketingApiClient {
 
   /**
    * Fetches metadata for a single Ad Account.
-   * Endpoint: GET /v26.0/act_<ID>
+   * Endpoint: GET /v27.0/act_<ID>
    */
   async getAdAccount(targetAdAccountId?: string): Promise<MetaAdAccountResponse> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
@@ -149,7 +149,7 @@ export class MetaMarketingApiClient {
    * Fetches all campaigns across all effective statuses for an Ad Account using cursor pagination.
    * Explicitly includes ALL_EFFECTIVE_STATUSES so paused, archived, deleted, and review-pending
    * campaigns are never dropped by Meta's default filter.
-   * Endpoint: GET /v26.0/act_<ID>/campaigns
+   * Endpoint: GET /v27.0/act_<ID>/campaigns
    */
   async getCampaigns(targetAdAccountId?: string): Promise<MetaCampaignResponse[]> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
@@ -191,7 +191,7 @@ export class MetaMarketingApiClient {
    * Fetches all AdSets across all effective statuses for an Ad Account using cursor pagination.
    * Explicitly includes ALL_EFFECTIVE_STATUSES so paused, archived, deleted, and parent-paused
    * adsets are never omitted.
-   * Endpoint: GET /v26.0/act_<ID>/adsets
+   * Endpoint: GET /v27.0/act_<ID>/adsets
    */
   async getAdSets(targetAdAccountId?: string): Promise<MetaAdSetResponse[]> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
@@ -240,7 +240,7 @@ export class MetaMarketingApiClient {
    * Fetches all Ads across all effective statuses for an Ad Account using cursor pagination.
    * Explicitly passes ALL_EFFECTIVE_STATUSES so paused, campaign-paused, adset-paused,
    * archived, and deleted ads with historical spend are always synchronized.
-   * Endpoint: GET /v26.0/act_<ID>/ads
+   * Endpoint: GET /v27.0/act_<ID>/ads
    */
   async getAds(targetAdAccountId?: string): Promise<MetaAdResponse[]> {
     const accountId = normalizeAdAccountId(targetAdAccountId || this.defaultAdAccountId);
@@ -325,7 +325,7 @@ export class MetaMarketingApiClient {
    * traversing all cursor pages and applying the 7-day click / 1-day view attribution window.
    * Automatically splits multi-year `timeRange` spans into 365-day windows when `timeIncrement`
    * is daily so Meta Graph API never rejects or drops historical rows.
-   * Endpoint: GET /v26.0/act_<ID>/insights?level=ad
+   * Endpoint: GET /v27.0/act_<ID>/insights?level=ad
    */
   async getAdInsights(options: {
     targetAdAccountId?: string;
@@ -704,7 +704,7 @@ export class MetaMarketingApiClient {
         if (metaCode === 190 || statusCode === 401) {
           throw new MarketingApiError({
             code: "AUTHENTICATION_ERROR",
-            message: `Meta Access Token tidak valid atau telah kedaluwarsa (Code 190). Silakan hubungkan ulang akun Meta Anda di halaman /connections: ${sanitizedMsg}`,
+            message: `Meta Access Token tidak valid atau telah kedaluwarsa (Code 190). Silakan hubungkan ulang akun Meta Anda di Pengaturan, tab Integrasi Meta Ads: ${sanitizedMsg}`,
             metaErrorCode: metaCode ?? 190,
             metaErrorSubcode: metaSubcode,
             statusCode,
@@ -717,7 +717,7 @@ export class MetaMarketingApiClient {
         if (metaCode === 10 || metaCode === 200 || metaCode === 294 || statusCode === 403) {
           throw new MarketingApiError({
             code: "PERMISSION_ERROR",
-            message: `Izin akses akun iklan Meta tidak mencukupi (Code ${metaCode || 403}). Pastikan akun memiliki izin 'ads_read' dan akses ke Ad Account terkait di /connections: ${sanitizedMsg}`,
+            message: `Izin akses akun iklan Meta tidak mencukupi (Code ${metaCode || 403}). Pastikan akun menyetujui ads_read dan memiliki akses ke Ad Account di Pengaturan, tab Integrasi Meta Ads: ${sanitizedMsg}`,
             metaErrorCode: metaCode,
             metaErrorSubcode: metaSubcode,
             statusCode,

@@ -17,6 +17,19 @@ export interface PhoneNumberMetadata {
   verifiedName: string | null;
 }
 
+export interface WabaPhoneCandidate {
+  id: string;
+  displayPhoneNumber: string | null;
+  verifiedName: string | null;
+  isOnBizApp: boolean | null;
+}
+
+export interface CoexistenceSyncResult {
+  contactsRequestId: string | null;
+  historyRequestId: string | null;
+  warnings: string[];
+}
+
 interface GraphErrorPayload {
   error?: {
     message?: string;
@@ -45,13 +58,17 @@ export async function exchangeEmbeddedSignupCode(code: string): Promise<Exchange
   }
 
   const { appId, appSecret, graphApiVersion } = getMetaServerConfig();
-  const url = new URL(`${META_GRAPH_BASE_URL}/${graphApiVersion}/oauth/access_token`);
-  url.searchParams.set("client_id", appId);
-  url.searchParams.set("client_secret", appSecret);
-  url.searchParams.set("code", code.trim());
+  const url = `${META_GRAPH_BASE_URL}/${graphApiVersion}/oauth/access_token`;
 
-  const res = await fetch(url.toString(), {
-    method: "GET",
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: appId,
+      client_secret: appSecret,
+      code: code.trim(),
+      grant_type: "authorization_code",
+    }),
     cache: "no-store",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -156,4 +173,111 @@ export async function subscribeAppToWaba(wabaId: string, accessToken: string): P
   if (subRes && subRes.success === false) {
     throw new Error("Meta WABA webhook subscription returned success=false.");
   }
+}
+
+export function selectWabaPhoneNumber(
+  numbers: WabaPhoneCandidate[],
+  requestedId?: string | null
+): WabaPhoneCandidate {
+  if (requestedId) {
+    return (
+      numbers.find((item) => item.id === requestedId) ?? {
+        id: requestedId,
+        displayPhoneNumber: null,
+        verifiedName: null,
+        isOnBizApp: null,
+      }
+    );
+  }
+  if (numbers.length === 1) return numbers[0];
+  const onBizApp = numbers.filter((item) => item.isOnBizApp === true);
+  if (onBizApp.length === 1) return onBizApp[0];
+  throw new Error(
+    numbers.length === 0
+      ? "Meta tidak mengembalikan nomor WhatsApp pada akun ini."
+      : "Meta mengembalikan lebih dari satu nomor. Ulangi alur dan pilih satu nomor."
+  );
+}
+
+export async function listWabaPhoneNumbers(
+  wabaId: string,
+  accessToken: string
+): Promise<WabaPhoneCandidate[]> {
+  if (!wabaId.trim() || !accessToken.trim()) {
+    throw new Error("wabaId and accessToken are required.");
+  }
+  const { graphApiVersion } = getMetaServerConfig();
+  const url = new URL(`${META_GRAPH_BASE_URL}/${graphApiVersion}/${encodeURIComponent(wabaId.trim())}/phone_numbers`);
+  url.searchParams.set("fields", "id,display_phone_number,verified_name,is_on_biz_app");
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const data = (await res.json().catch(() => null)) as
+    | {
+        data?: Array<{
+          id?: string;
+          display_phone_number?: string;
+          verified_name?: string;
+          is_on_biz_app?: boolean;
+        }>;
+      }
+    | GraphErrorPayload
+    | null;
+  if (!res.ok) {
+    throw new Error(buildGraphErrorMessage("Meta WABA phone list", res.status, data));
+  }
+  const rows = (data as { data?: Array<{ id?: string; display_phone_number?: string; verified_name?: string; is_on_biz_app?: boolean }> } | null)?.data ?? [];
+  return rows
+    .filter((row) => Boolean(row.id))
+    .map((row) => ({
+      id: String(row.id),
+      displayPhoneNumber: row.display_phone_number ?? null,
+      verifiedName: row.verified_name ?? null,
+      isOnBizApp: typeof row.is_on_biz_app === "boolean" ? row.is_on_biz_app : null,
+    }));
+}
+
+async function postCoexistenceSync(
+  phoneNumberId: string,
+  accessToken: string,
+  syncType: "smb_app_state_sync" | "history"
+): Promise<{ requestId: string | null; warning: string | null }> {
+  const { graphApiVersion } = getMetaServerConfig();
+  const url = `${META_GRAPH_BASE_URL}/${graphApiVersion}/${encodeURIComponent(phoneNumberId)}/smb_app_data`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      sync_type: syncType,
+    }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const data = (await res.json().catch(() => null)) as { request_id?: string } | GraphErrorPayload | null;
+  if (!res.ok) {
+    return { requestId: null, warning: buildGraphErrorMessage(`Meta ${syncType} sync`, res.status, data) };
+  }
+  return { requestId: (data as { request_id?: string } | null)?.request_id ?? null, warning: null };
+}
+
+/** Contacts first, then history. Each step can run only once per onboarding. */
+export async function startCoexistenceDataSync(
+  phoneNumberId: string,
+  accessToken: string
+): Promise<CoexistenceSyncResult> {
+  const contacts = await postCoexistenceSync(phoneNumberId, accessToken, "smb_app_state_sync");
+  const history = await postCoexistenceSync(phoneNumberId, accessToken, "history");
+  return {
+    contactsRequestId: contacts.requestId,
+    historyRequestId: history.requestId,
+    warnings: [contacts.warning, history.warning].filter((item): item is string => Boolean(item)),
+  };
 }

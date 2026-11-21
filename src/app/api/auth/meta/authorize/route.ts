@@ -11,7 +11,7 @@ import { resolveMetaOAuthRedirectUri } from "@/lib/meta/oauth-redirect";
  * Requirements:
  * 1. Checks user authentication and organization tenant association.
  * 2. Issues a signed, tamper-resistant anti-CSRF state token bound to (orgId, userId).
- * 3. Enforces read-only scopes (ads_read, pages_read_engagement, pages_show_list, business_management).
+ * 3. Requests only ads_read. Extra permissions are not asked for.
  * 4. Never exposes Meta App Secret to browser.
  * 5. Safely redirects user to Meta's official OAuth authorization dialog.
  */
@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(settingsUrl);
     }
 
-    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v26.0";
+    const apiVersion = process.env.META_GRAPH_API_VERSION?.trim() || "v27.0";
     const redirectUri = resolveMetaOAuthRedirectUri(request);
 
     // Generate signed anti-CSRF state token

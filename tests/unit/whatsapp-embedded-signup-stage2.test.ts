@@ -64,12 +64,11 @@ describe("Stage 2 — WhatsApp Embedded Signup Config & AES-256-GCM Token Crypto
     expect(decryptToken(enc2.encryptedPayload)).toBe(token);
   });
 
-  it("launches Embedded Signup v5 with coexistence on and app-only install", () => {
+  it("launches Embedded Signup v5 with coexistence on by default", () => {
     expect(EMBEDDED_SIGNUP_EXTRAS.version).toBe("v5");
-    expect(EMBEDDED_SIGNUP_EXTRAS.features).toEqual([{ name: "app_only_install" }]);
     const serialized = JSON.stringify(EMBEDDED_SIGNUP_EXTRAS);
-    expect(serialized).not.toContain("v3");
-    expect(serialized).not.toContain("v4");
+    expect(serialized).toBe('{"version":"v5"}');
+    expect(serialized).not.toContain("app_only_install");
     expect(serialized).not.toContain("sessionInfoVersion");
     expect(serialized).not.toContain("featureType");
   });

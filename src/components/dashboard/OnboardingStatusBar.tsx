@@ -3,7 +3,6 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { useToast } from "@/components/ui/Toast";
 
 interface SyncStatusData {
   configured: boolean;
@@ -20,17 +19,13 @@ interface AssetData {
   lastSyncAt?: string;
 }
 
-export function OnboardingStatusBar() {
+export function OnboardingStatusBar({ reloadToken = 0 }: { reloadToken?: number }) {
   const { locale } = useI18n();
-  const { addToast } = useToast();
 
   const [syncMeta, setSyncMeta] = useState<SyncStatusData | null>(null);
   const [assetData, setAssetData] = useState<AssetData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
-
-  const [refreshCount, setRefreshCount] = useState(0);
 
   useEffect(() => {
     let ignore = false;
@@ -84,36 +79,7 @@ export function OnboardingStatusBar() {
     return () => {
       ignore = true;
     };
-  }, [refreshCount]);
-
-  const handleSyncNow = async () => {
-    setIsSyncing(true);
-    try {
-      const res = await fetch("/api/marketing/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (!res.ok || data.status === "error") {
-        throw new Error(data.message || `Gagal sinkronisasi (HTTP ${res.status})`);
-      }
-      setLastSyncTime(new Date().toLocaleTimeString());
-      addToast(
-        "success",
-        locale === "id" ? "Sinkronisasi Berhasil" : "Sync Successful",
-        locale === "id"
-          ? `Data Meta Ads berhasil diperbarui (${data.mode?.toUpperCase() || "LIVE"}).`
-          : `Meta Ads data refreshed successfully (${data.mode?.toUpperCase() || "LIVE"}).`
-      );
-      setRefreshCount((c) => c + 1);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Kesalahan server";
-      addToast("error", locale === "id" ? "Sinkronisasi Gagal" : "Sync Failed", msg);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+  }, [reloadToken]);
 
   if (isLoading) {
     return (
@@ -136,7 +102,7 @@ export function OnboardingStatusBar() {
           <div className="flex items-center gap-1.5">
             {isLive ? (
               <span className="inline-flex items-center gap-1.5 rounded bg-emerald-50 px-2 py-0.5 font-bold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60 font-mono tracking-wider">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 LIVE
               </span>
             ) : (
@@ -176,33 +142,15 @@ export function OnboardingStatusBar() {
           <div className="hidden md:flex items-center gap-1 text-zinc-500 dark:text-zinc-400">
             <span>{locale === "id" ? "Sinkronisasi:" : "Last Sync:"}</span>
             <span className="font-mono text-zinc-700 dark:text-zinc-300">
-              {lastSyncTime || (locale === "id" ? "Siap" : "Ready")}
+              {lastSyncTime || "—"}
             </span>
           </div>
         </div>
 
         {/* Right: Sync Action & Quick Settings */}
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={handleSyncNow}
-            disabled={isSyncing || !isLive}
-            className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 cursor-pointer transition-colors"
-            title={locale === "id" ? "Sinkronisasikan metrik Meta Ads sekarang" : "Sync Meta Ads metrics now"}
-          >
-            <svg
-              className={`h-3 w-3 text-zinc-500 ${isSyncing ? "animate-spin" : ""}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <span>{isSyncing ? (locale === "id" ? "Menyinkronkan..." : "Syncing...") : (locale === "id" ? "Sync Now" : "Sync Now")}</span>
-          </button>
-
           <Link
-            href="/settings"
+            href="/settings?tab=meta"
             className="inline-flex items-center rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 transition-colors"
           >
             {locale === "id" ? "Kelola Aset" : "Manage Assets"}

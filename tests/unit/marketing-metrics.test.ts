@@ -95,9 +95,9 @@ describe("Deterministic Marketing Metrics & Ratio Aggregations", () => {
 
     it("handles empty ad performance list safely without crashing", () => {
       const agg = aggregateAdPerformance([]);
-      expect(agg.totalSpend).toBe(0);
-      expect(agg.totalImpressions).toBe(0);
-      expect(agg.totalClicks).toBe(0);
+      expect(agg.totalSpend).toBeNull();
+      expect(agg.totalImpressions).toBeNull();
+      expect(agg.totalClicks).toBeNull();
       expect(agg.ctr).toBeNull();
       expect(agg.cpc).toBeNull();
       expect(agg.cpm).toBeNull();

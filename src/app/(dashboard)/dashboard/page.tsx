@@ -20,6 +20,9 @@ export default function DashboardPage() {
   const [customEnd, setCustomEnd] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [statusReload, setStatusReload] = useState(0);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [dashboardData, setDashboardData] = useState<LiveDashboardResponse | null>(null);
 
   const periodPills = [
@@ -29,48 +32,39 @@ export default function DashboardPage() {
     { id: "30d", label: t.adsWorkspace.days30 },
   ];
 
-  const refreshDashboard = useCallback(async () => {
+  const loadDashboard = useCallback(async (signal: AbortSignal) => {
     setIsLoading(true);
+    setLoadError(null);
     try {
-      const res = await fetch(`/api/dashboard/summary?dateRange=${encodeURIComponent(dateRange)}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          setDashboardData(json.data);
-        }
+      const res = await fetch(`/api/dashboard/summary?dateRange=${encodeURIComponent(dateRange)}`, {
+        cache: "no-store",
+        signal,
+      });
+      const json = await res.json().catch(() => null);
+      if (signal.aborted) return;
+      if (!res.ok || !json?.success || !json.data) {
+        setLoadError(
+          json?.error ||
+            (locale === "id" ? "Ringkasan dashboard tidak dapat dimuat." : "The dashboard summary could not be loaded.")
+        );
+        return;
       }
-    } catch {
-      // Non-blocking fetch error
+      setDashboardData(json.data);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (!signal.aborted) {
+        setLoadError(locale === "id" ? "Jaringan bermasalah saat memuat dashboard." : "Network error while loading the dashboard.");
+      }
     } finally {
-      setIsLoading(false);
+      if (!signal.aborted) setIsLoading(false);
     }
-  }, [dateRange]);
+  }, [dateRange, locale]);
 
   useEffect(() => {
-    let isMounted = true;
-    async function load() {
-      setIsLoading(true);
-      try {
-        const res = await fetch(`/api/dashboard/summary?dateRange=${encodeURIComponent(dateRange)}`);
-        if (res.ok) {
-          const json = await res.json();
-          if (isMounted && json.success && json.data) {
-            setDashboardData(json.data);
-          }
-        }
-      } catch {
-        // Non-blocking fetch error
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      isMounted = false;
-    };
-  }, [dateRange]);
+    const controller = new AbortController();
+    void loadDashboard(controller.signal);
+    return () => controller.abort();
+  }, [loadDashboard, reloadNonce]);
 
   const handleTriggerSync = async () => {
     setIsSyncing(true);
@@ -90,7 +84,8 @@ export default function DashboardPage() {
             ? `Meta Marketing API sinkron: ${count} record berhasil diproses dan disimpan.`
             : `Meta Marketing API synced: ${count} records processed.`
         );
-        refreshDashboard();
+        setStatusReload((value) => value + 1);
+        setReloadNonce((value) => value + 1);
       } else {
         addToast(
           "error",
@@ -139,7 +134,7 @@ export default function DashboardPage() {
   const totalPipelineLeads = Object.values(funnelCounts).reduce((acc, count) => acc + count, 0);
 
   return (
-    <div className={`space-y-6 max-w-7xl mx-auto pb-12 transition-opacity ${isLoading ? "opacity-80" : "opacity-100"}`}>
+    <div className="mx-auto max-w-7xl space-y-5 pb-12">
       {/* 1. Header & Context Actions Bar */}
       <div className="solar-header surface-card flex flex-col gap-4 rounded-2xl border border-zinc-200/90 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -150,7 +145,7 @@ export default function DashboardPage() {
             </h1>
             {dashboardData?.selectedAdAccount && (
               <span className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs font-mono text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 {dashboardData.selectedAdAccount.name || dashboardData.selectedAdAccount.id}
               </span>
             )}
@@ -250,10 +245,23 @@ export default function DashboardPage() {
       </div>
 
       {/* 2. Onboarding Status Bar */}
-      <OnboardingStatusBar />
+      <OnboardingStatusBar reloadToken={statusReload} />
 
       {/* 3. Connection state */}
-      {!isLoading && state === "not_connected" ? (
+      {loadError ? (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+          <p>{loadError}</p>
+          <button
+            type="button"
+            onClick={() => setReloadNonce((value) => value + 1)}
+            className="rounded-md border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-800 hover:bg-rose-50 dark:border-rose-900 dark:bg-zinc-900 dark:text-rose-200"
+          >
+            {locale === "id" ? "Coba lagi" : "Try again"}
+          </button>
+        </div>
+      ) : null}
+
+      {!isLoading && !loadError && (state === "not_connected" || state === "token_expired" || state === "error" || state === "initial_sync_pending") ? (
         <div className="rounded-2xl border border-indigo-500/20 bg-indigo-50/50 dark:border-indigo-500/30 dark:bg-indigo-950/20 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-bold text-sm">
@@ -261,18 +269,37 @@ export default function DashboardPage() {
             </span>
             <div>
               <h2 className="text-sm font-bold text-indigo-950 dark:text-indigo-100">
-                {locale === "id" ? "Koneksi Meta Ads Langsung Belum Aktif" : "Direct Meta Ads Connection Not Active"}
+                {state === "token_expired"
+                  ? locale === "id"
+                    ? "Otorisasi Meta kedaluwarsa"
+                    : "Meta authorization expired"
+                  : state === "error"
+                    ? locale === "id"
+                      ? "Koneksi Meta bermasalah"
+                      : "Meta connection needs attention"
+                    : state === "initial_sync_pending"
+                      ? locale === "id"
+                        ? "Sinkronisasi pertama belum selesai"
+                        : "The first sync has not finished"
+                      : locale === "id"
+                        ? "Koneksi Meta Ads belum aktif"
+                        : "Meta Ads is not connected"}
               </h2>
               <p className="mt-0.5 text-xs text-indigo-800 dark:text-indigo-300 leading-relaxed">
-                {locale === "id"
-                  ? "Akun Meta belum terhubung pada organisasi ini. Hubungkan akun iklan di Pengaturan untuk memuat data aktual."
-                  : "Meta is not connected for this organization. Connect an ad account in Settings to load actual data."}
+                {dashboardData?.errorMessage ||
+                  (state === "initial_sync_pending"
+                    ? locale === "id"
+                      ? "Akun sudah terhubung. Jalankan sinkronisasi untuk mengisi metrik periode ini."
+                      : "The account is connected. Run a sync to fill this period's metrics."
+                    : locale === "id"
+                      ? "Hubungkan akun iklan di Pengaturan agar angka di halaman ini berasal dari Meta."
+                      : "Connect an ad account in Settings so the figures on this page come from Meta.")}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             <Link
-              href="/settings"
+              href="/settings?tab=meta"
               className="rounded-xl border border-indigo-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-zinc-900 dark:text-indigo-300 dark:hover:bg-zinc-800 transition-colors"
             >
               {locale === "id" ? "Buka Pengaturan" : "Open Settings"}
@@ -354,7 +381,7 @@ export default function DashboardPage() {
               </div>
 
               {/* 6 Funnel Stage Cards */}
-              <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {funnelStages.map((stage) => {
                   const count = funnelCounts[stage] || 0;
                   const percent = totalPipelineLeads > 0 ? Math.round((count / totalPipelineLeads) * 100) : 0;
@@ -362,21 +389,14 @@ export default function DashboardPage() {
                   return (
                     <div
                       key={stage}
-                      className="rounded-xl border border-zinc-200/80 bg-zinc-50/60 p-3 transition-colors dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                      className="rounded-md border border-zinc-200/80 bg-zinc-50/60 px-2.5 py-2 dark:border-zinc-800/80 dark:bg-zinc-950/40"
                     >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <FunnelBadge stage={stage} />
-                        <span className="text-[10px] font-mono text-zinc-400">
-                          {percent}%
-                        </span>
-                      </div>
-                      <div className="flex items-baseline justify-between mt-2">
-                        <span className="font-mono text-xl font-bold text-zinc-900 dark:text-zinc-50">
+                      <FunnelBadge stage={stage} />
+                      <div className="mt-2 flex items-baseline justify-between gap-2">
+                        <span className="font-mono text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
                           {count}
                         </span>
-                        <span className="text-[11px] text-zinc-400">
-                          {locale === "id" ? "prospek" : "leads"}
-                        </span>
+                        <span className="text-[10px] font-mono text-zinc-400">{percent}%</span>
                       </div>
                     </div>
                   );
@@ -475,17 +495,9 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Source Status Badges */}
-            <div className="mt-5 pt-3.5 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between text-[11px]">
-              <span className="text-zinc-400">
-                {locale === "id" ? "Konektor Aktif:" : "Active Source:"}
-              </span>
-              <div className="flex items-center gap-2">
-                <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-600 dark:text-emerald-400">
-                  Spreadsheet CRM
-                </span>
-              </div>
-            </div>
+            <p className="mt-5 border-t border-zinc-100 pt-3.5 text-xs text-zinc-500 dark:border-zinc-800/80 dark:text-zinc-400">
+              {t.dashboard.unknownAttributionRule}
+            </p>
           </div>
         </div>
       )}

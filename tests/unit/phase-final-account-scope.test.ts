@@ -152,7 +152,7 @@ describe("Metadata notice separation (P2)", () => {
   });
 
   it("KPI scope caption is explicit on the Ads page", () => {
-    const page = read("../../src/app/(dashboard)/ads/page.tsx");
+    const page = read("../../src/components/ads/AdsWorkspace.tsx");
     expect(page).toContain("KPI di bawah merupakan agregat akun iklan terpilih, pada periode terpilih");
     expect(page).toContain("total akun sebelum filter");
   });

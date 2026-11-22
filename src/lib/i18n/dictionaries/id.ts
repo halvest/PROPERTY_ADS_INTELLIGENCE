@@ -9,8 +9,6 @@ export const idDictionary: TranslationDictionary = {
     leads: "CRM",
     ctwaLeads: "CTWA Leads",
     pipeline: "Pipeline",
-    reviews: "Studio Kreatif AI",
-    enhancer: "Peningkat Foto AI",
     connections: "Koneksi WhatsApp",
     settings: "Pengaturan",
     login: "Masuk",

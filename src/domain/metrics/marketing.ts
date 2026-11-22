@@ -4,6 +4,8 @@
  * Guarantees that zero denominators return null (never NaN or Infinity).
  */
 
+import { sumReported } from "@/lib/metrics/nullable-number";
+
 export interface AdPerformanceRow {
   adId: string;
   adName?: string;
@@ -16,11 +18,11 @@ export interface AdPerformanceRow {
 }
 
 export interface AggregatedAdMetrics {
-  totalSpend: number;
-  totalImpressions: number;
-  totalClicks: number;
-  totalAttributedLeads: number;
-  totalQualifiedLeads: number;
+  totalSpend: number | null;
+  totalImpressions: number | null;
+  totalClicks: number | null;
+  totalAttributedLeads: number | null;
+  totalQualifiedLeads: number | null;
   ctr: number | null; // Percentage (e.g., 2.50%)
   cpc: number | null; // Cost per click in currency
   cpm: number | null; // Cost per 1000 impressions in currency
@@ -31,7 +33,7 @@ export interface AggregatedAdMetrics {
 /**
  * Click-Through Rate: (clicks / impressions) * 100
  */
-export function calculateCTR(clicks: number, impressions: number): number | null {
+export function calculateCTR(clicks: number | null, impressions: number | null): number | null {
   if (
     typeof clicks !== "number" ||
     typeof impressions !== "number" ||
@@ -48,7 +50,7 @@ export function calculateCTR(clicks: number, impressions: number): number | null
 /**
  * Cost Per Click: spend / clicks
  */
-export function calculateCPC(spend: number, clicks: number): number | null {
+export function calculateCPC(spend: number | null, clicks: number | null): number | null {
   if (
     typeof spend !== "number" ||
     typeof clicks !== "number" ||
@@ -65,7 +67,7 @@ export function calculateCPC(spend: number, clicks: number): number | null {
 /**
  * Cost Per Mille (1,000 Impressions): (spend / impressions) * 1000
  */
-export function calculateCPM(spend: number, impressions: number): number | null {
+export function calculateCPM(spend: number | null, impressions: number | null): number | null {
   if (
     typeof spend !== "number" ||
     typeof impressions !== "number" ||
@@ -83,7 +85,7 @@ export function calculateCPM(spend: number, impressions: number): number | null 
  * Cost Per Qualified Lead: eligibleSpend / qualifiedLeadCount
  * Only calculated when qualifiedLeadCount > 0.
  */
-export function calculateCPQL(eligibleSpend: number, qualifiedLeadCount: number): number | null {
+export function calculateCPQL(eligibleSpend: number | null, qualifiedLeadCount: number | null): number | null {
   if (
     typeof eligibleSpend !== "number" ||
     typeof qualifiedLeadCount !== "number" ||
@@ -101,7 +103,7 @@ export function calculateCPQL(eligibleSpend: number, qualifiedLeadCount: number)
  * Cost Per Qualified Lead with human-understandable reason when null.
  */
 export function calculateCPQLWithReason(
-  eligibleSpend: number,
+  eligibleSpend: number | null,
   qualifiedLeadCount: number
 ): { cpql: number | null; reason: string | null } {
   if (
@@ -176,32 +178,14 @@ export function aggregateAdPerformance(
   rows: AdPerformanceRow[],
   currency = "IDR"
 ): AggregatedAdMetrics {
-  let totalSpend = 0;
-  let totalImpressions = 0;
-  let totalClicks = 0;
-  let totalAttributedLeads = 0;
-  let totalQualifiedLeads = 0;
-
-  for (const row of rows) {
-    if (Number.isFinite(row.spend) && row.spend > 0) {
-      totalSpend += row.spend;
-    }
-    if (Number.isFinite(row.impressions) && row.impressions > 0) {
-      totalImpressions += Math.round(row.impressions);
-    }
-    if (Number.isFinite(row.clicks) && row.clicks > 0) {
-      totalClicks += Math.round(row.clicks);
-    }
-    if (Number.isFinite(row.attributedLeadsCount) && row.attributedLeadsCount > 0) {
-      totalAttributedLeads += Math.round(row.attributedLeadsCount);
-    }
-    if (Number.isFinite(row.qualifiedLeadsCount) && row.qualifiedLeadsCount > 0) {
-      totalQualifiedLeads += Math.round(row.qualifiedLeadsCount);
-    }
-  }
+  const totalSpend = sumReported(rows.map((row) => row.spend));
+  const totalImpressions = sumReported(rows.map((row) => row.impressions));
+  const totalClicks = sumReported(rows.map((row) => row.clicks));
+  const totalAttributedLeads = sumReported(rows.map((row) => row.attributedLeadsCount));
+  const totalQualifiedLeads = sumReported(rows.map((row) => row.qualifiedLeadsCount));
 
   return {
-    totalSpend: Number(totalSpend.toFixed(2)),
+    totalSpend: totalSpend === null ? null : Number(totalSpend.toFixed(2)),
     totalImpressions,
     totalClicks,
     totalAttributedLeads,

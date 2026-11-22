@@ -95,18 +95,18 @@ export async function getAvailableAndSelectedMetaAssets(
   }));
 
   const { token, status } = await fetchTenantToken(admin, organizationId);
-  if (token) {
-    try {
-      await rememberMetaAdsUser(organizationId, token);
-    } catch {
-      // A missing Facebook user id must not block the ad account list.
-    }
-  }
   if (!token) {
     return { pages: [], adAccounts: [], selected, tokenStatus: status, connectedAccounts };
   }
 
-  const client = new MetaMarketingApiClient({ accessToken: token });
+  // Profile bookkeeping must not run before the account list. When the user
+  // id is already stored this returns after one database read.
+  const remembered = rememberMetaAdsUser(organizationId, token).catch(() => undefined);
+  const client = new MetaMarketingApiClient({
+    accessToken: token,
+    timeoutMs: 12000,
+    maxRetries: 1,
+  });
   const [pagesResult, accountsResult] = await Promise.allSettled([
     client.getFacebookPages(),
     client.getAdAccounts(),
@@ -135,6 +135,7 @@ export async function getAvailableAndSelectedMetaAssets(
           : "api_error";
   }
 
+  await remembered;
   return { pages, adAccounts, accountError, selected, tokenStatus, connectedAccounts };
 }
 

@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
       admin
         .from("whatsapp_connections")
         .select(
-          "id, workspace_id, sales_member_id, phone_number_id, waba_id, display_phone_number, verified_name, connection_status, integration_mode, last_echo_at, connected_at, disconnected_at, created_at, updated_at"
+          "id, workspace_id, sales_member_id, phone_number_id, waba_id, display_phone_number, verified_name, connection_status, integration_mode, coexistence_enabled, last_echo_at, connected_at, disconnected_at, created_at, updated_at"
         )
         .eq("workspace_id", workspaceId)
         .order("created_at", { ascending: false }),

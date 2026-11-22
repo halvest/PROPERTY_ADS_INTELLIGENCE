@@ -214,7 +214,7 @@ describe("Conversion metadata fallback (PGRST204 / 42703)", () => {
     });
     expect(captured.insightsUpserts).toHaveLength(1);
     expect(result.warnings ?? []).toHaveLength(0);
-    const page = read("../../src/app/(dashboard)/ads/page.tsx");
+    const page = read("../../src/components/ads/AdsWorkspace.tsx");
     expect(page).toContain('"Sinkronisasi Berhasil"');
     expect(page).toContain('"Sinkronisasi Berhasil dengan Catatan"');
   });

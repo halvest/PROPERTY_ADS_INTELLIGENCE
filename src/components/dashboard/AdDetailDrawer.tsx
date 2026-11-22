@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { useToast } from "@/components/ui/Toast";
-import type { RealAdRow } from "@/app/(dashboard)/ads/page";
+import type { RealAdRow } from "@/lib/ads/ad-row";
 import type {
   AIAdAnalysisResponse,
   CoreMetricItem,
@@ -724,11 +724,13 @@ export function AdDetailDrawer({
       currency || "IDR",
       locale === "en" ? "en" : "id"
     );
-  const formatPercent = (value: number) =>
-    `${new Intl.NumberFormat(locale === "id" ? "id-ID" : "en-US", {
+  const formatPercent = (value: number | null | undefined) => {
+    if (value == null || Number.isNaN(value)) return "—";
+    return `${new Intl.NumberFormat(locale === "id" ? "id-ID" : "en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value)}%`;
+  };
 
   // Body scroll lock, Escape shortcut, Focus trap, and Focus restoration
   useEffect(() => {
@@ -1007,24 +1009,35 @@ export function AdDetailDrawer({
     metricSource !== undefined
       ? metricSource.linkClicks
       : (ad.linkClicks ?? null);
-  const metricLinkClicks = rawLinkClicks ?? 0;
+  const metricLinkClicks = rawLinkClicks;
   const metricAllClicks = metricSource?.allClicks ?? ad.allClicks;
+  const impressionsReported = typeof metricImpressions === "number" ? metricImpressions : null;
+  const allClicksReported = typeof metricAllClicks === "number" ? metricAllClicks : null;
+  const spendReported = typeof metricSpend === "number" ? metricSpend : null;
   const metricCtr =
     metricSource?.linkCtr ??
     ad.linkCtr ??
-    (metricImpressions > 0 ? (metricLinkClicks / metricImpressions) * 100 : 0);
+    (impressionsReported != null && impressionsReported > 0 && metricLinkClicks != null
+      ? (metricLinkClicks / impressionsReported) * 100
+      : null);
   const metricAllCtr =
     metricSource?.allCtr ??
     ad.allCtr ??
-    (metricImpressions > 0 ? (metricAllClicks / metricImpressions) * 100 : 0);
+    (impressionsReported != null && impressionsReported > 0 && allClicksReported != null
+      ? (allClicksReported / impressionsReported) * 100
+      : null);
   const metricAllCpc =
     metricSource?.allCpc ??
     ad.allCpc ??
-    (metricAllClicks > 0 ? metricSpend / metricAllClicks : 0);
+    (allClicksReported != null && allClicksReported > 0 && spendReported != null
+      ? spendReported / allClicksReported
+      : null);
   const metricCpm =
     metricSource?.cpm ??
     ad.cpm ??
-    (metricImpressions > 0 ? (metricSpend / metricImpressions) * 1000 : 0);
+    (impressionsReported != null && impressionsReported > 0 && spendReported != null
+      ? (spendReported / impressionsReported) * 1000
+      : null);
 
   // Strictly separated CTWA Messaging Conversations vs Meta Leads (Section 5)
   const effectiveActionTypes =
@@ -1046,18 +1059,20 @@ export function AdDetailDrawer({
     metricSource !== undefined
       ? metricSource.costPerMessagingConversation
       : metaMessagingConversations !== null && metaMessagingConversations > 0
-        ? metricSpend / metaMessagingConversations
+        ? metricSpend != null
+          ? metricSpend / metaMessagingConversations
+          : null
         : null;
 
   const computedLinkCtr: number | null =
-    metricImpressions > 0 && rawLinkClicks !== null
-      ? (rawLinkClicks / metricImpressions) * 100
+    impressionsReported != null && impressionsReported > 0 && rawLinkClicks !== null
+      ? (rawLinkClicks / impressionsReported) * 100
       : (metricSource?.linkCtr ?? ad.linkCtr ?? null);
 
   const computedLinkCpc: number | null =
     metricSource?.linkCpc ??
     ad.linkCpc ??
-    (rawLinkClicks !== null && rawLinkClicks > 0
+    (rawLinkClicks !== null && rawLinkClicks > 0 && metricSpend != null
       ? metricSpend / rawLinkClicks
       : null);
 
@@ -1070,10 +1085,11 @@ export function AdDetailDrawer({
       : null;
 
   const impressionsToLinkDropoff: number | null =
-    metricImpressions > 0 &&
+    impressionsReported != null &&
+    impressionsReported > 0 &&
     rawLinkClicks !== null &&
-    rawLinkClicks <= metricImpressions
-      ? ((metricImpressions - rawLinkClicks) / metricImpressions) * 100
+    rawLinkClicks <= impressionsReported
+      ? ((impressionsReported - rawLinkClicks) / impressionsReported) * 100
       : null;
 
   const linkToMessagingDropoff: number | null =
@@ -1190,43 +1206,44 @@ export function AdDetailDrawer({
   );
 
   // 4-Stage Mini Funnel computations for Tab 1 (Metrics)
-  const numericResults = resultValue ?? 0;
+  const numericResults = typeof resultValue === "number" ? resultValue : null;
   const funnelMax = Math.max(
-    metricImpressions,
-    metricAllClicks,
-    metricLinkClicks,
-    numericResults,
+    impressionsReported ?? 0,
+    allClicksReported ?? 0,
+    metricLinkClicks ?? 0,
+    numericResults ?? 0,
     1
   );
-  const stage1Width = metricImpressions > 0 ? 100 : 0;
+  const stage1Width = impressionsReported != null && impressionsReported > 0 ? 100 : 0;
   const stage2Width =
-    metricAllClicks > 0
-      ? Math.max(8, Math.min(100, (metricAllClicks / funnelMax) * 100))
+    allClicksReported != null && allClicksReported > 0
+      ? Math.max(8, Math.min(100, (allClicksReported / funnelMax) * 100))
       : 0;
   const stage3Width =
-    metricLinkClicks > 0
+    metricLinkClicks != null && metricLinkClicks > 0
       ? Math.max(6, Math.min(100, (metricLinkClicks / funnelMax) * 100))
       : 0;
   const stage4Width =
-    numericResults > 0
+    numericResults != null && numericResults > 0
       ? Math.max(4, Math.min(100, (numericResults / funnelMax) * 100))
       : 0;
 
   const linkIntentRate =
-    metricAllClicks > 0 ? (metricLinkClicks / metricAllClicks) * 100 : null;
+    allClicksReported != null && allClicksReported > 0 && metricLinkClicks != null
+      ? (metricLinkClicks / allClicksReported) * 100
+      : null;
   const resultConversionRate =
-    metricLinkClicks > 0 && resultValue !== null
+    metricLinkClicks != null && metricLinkClicks > 0 && resultValue !== null
       ? (resultValue / metricLinkClicks) * 100
       : null;
 
-  // 3-Stage CTWA Funnel bar widths for Tab 2 (AI & CTWA)
   const ctwaMax = Math.max(
-    metricImpressions,
+    impressionsReported ?? 0,
     rawLinkClicks ?? 0,
     metaMessagingConversations ?? 0,
     1
   );
-  const ctwaBar1 = metricImpressions > 0 ? 100 : 0;
+  const ctwaBar1 = impressionsReported != null && impressionsReported > 0 ? 100 : 0;
   const ctwaBar2 =
     rawLinkClicks !== null && rawLinkClicks > 0
       ? Math.max(8, Math.min(100, (rawLinkClicks / ctwaMax) * 100))
@@ -1665,7 +1682,7 @@ export function AdDetailDrawer({
                     label={t.kpiLinkCtr}
                     value={formatPercent(metricCtr)}
                     detail={t.kpiLinkCtrDetail}
-                    highlight={metricCtr >= 1 ? "green" : "amber"}
+                    highlight={metricCtr != null && metricCtr >= 1 ? "green" : "amber"}
                   />
                 </dl>
               </section>
@@ -1823,9 +1840,9 @@ export function AdDetailDrawer({
                     <MetricCard
                       label={t.metricLinkIntent}
                       value={formatPercent(
-                        metricAllClicks > 0
-                          ? (metricLinkClicks / metricAllClicks) * 100
-                          : 0
+                        allClicksReported != null && allClicksReported > 0 && metricLinkClicks != null
+                          ? (metricLinkClicks / allClicksReported) * 100
+                          : null
                       )}
                       detail={t.metricLinkIntentDetail
                         .replace("{linkClicks}", formatNumber(metricLinkClicks))

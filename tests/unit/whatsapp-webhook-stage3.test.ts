@@ -14,6 +14,9 @@ interface TableStore {
   ctwa_attributions: RowRecord[];
   leads: RowRecord[];
   lead_pipeline_events: RowRecord[];
+  ads: RowRecord[];
+  contacts: RowRecord[];
+  organization_workspaces: RowRecord[];
 }
 
 function createInMemoryAdminClient(initial?: Partial<TableStore>) {
@@ -25,6 +28,9 @@ function createInMemoryAdminClient(initial?: Partial<TableStore>) {
     ctwa_attributions: initial?.ctwa_attributions ? [...initial.ctwa_attributions] : [],
     leads: initial?.leads ? [...initial.leads] : [],
     lead_pipeline_events: initial?.lead_pipeline_events ? [...initial.lead_pipeline_events] : [],
+    ads: initial?.ads ? [...initial.ads] : [],
+    contacts: initial?.contacts ? [...initial.contacts] : [],
+    organization_workspaces: initial?.organization_workspaces ? [...initial.organization_workspaces] : [],
   };
 
   let idSeq = 1;
@@ -34,6 +40,7 @@ function createInMemoryAdminClient(initial?: Partial<TableStore>) {
     private table: keyof TableStore;
     private op: "select" | "insert" | "upsert" | "update" = "select";
     private filters: Array<{ col: string; val: unknown }> = [];
+    private predicates: Array<(row: RowRecord) => boolean> = [];
     private payload: RowRecord | null = null;
     private onConflict: string | null = null;
     private wantsRow = false;
@@ -49,6 +56,28 @@ function createInMemoryAdminClient(initial?: Partial<TableStore>) {
 
     eq(col: string, val: unknown) {
       this.filters.push({ col, val });
+      return this;
+    }
+
+    in(col: string, vals: unknown[]) {
+      this.predicates.push((row) => vals.includes(row[col]));
+      return this;
+    }
+
+    lt(col: string, val: unknown) {
+      this.predicates.push((row) => {
+        const current = row[col];
+        return typeof current === "string" && typeof val === "string" && current < val;
+      });
+      return this;
+    }
+
+    is(col: string, val: unknown) {
+      this.predicates.push((row) => (val === null ? row[col] == null : row[col] === val));
+      return this;
+    }
+
+    limit(_count: number) {
       return this;
     }
 
@@ -89,11 +118,11 @@ function createInMemoryAdminClient(initial?: Partial<TableStore>) {
     }
 
     private matches(row: RowRecord): boolean {
-      return this.filters.every((f) => row[f.col] === f.val);
+      return this.filters.every((f) => row[f.col] === f.val) && this.predicates.every((predicate) => predicate(row));
     }
 
     private async execute(): Promise<{ data: unknown; error: { code?: string; message: string } | null }> {
-      const rows = store[this.table];
+        const rows = store[this.table] ?? [];
 
       if (this.op === "select") {
         const found = rows.filter((r) => this.matches(r));
@@ -195,6 +224,8 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 import { verifyMetaWebhookSignature, maskPhoneNumber } from "@/lib/meta/webhook-security";
 import { GET, POST } from "@/app/api/webhooks/whatsapp/route";
+import { replayRetryingWebhookEvents, requeueDeadLetterWebhookEvent } from "@/lib/meta/webhook-ingestion";
+import { qualifyCrmTemperature } from "@/lib/leads/qualified";
 
 function signBody(rawBody: string, secret: string): string {
   return `sha256=${crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex")}`;
@@ -326,7 +357,7 @@ describe("Stage 3 — WhatsApp Webhook Receiver & Coexistence Ingestion", () => 
 
     expect(db.store.leads).toHaveLength(1);
     expect(db.store.leads[0].customer_phone_masked).toBe("+62812****7890");
-    expect(db.store.leads[0].lead_temperature).toBe("cold");
+    expect(db.store.leads[0].lead_temperature).toBe("unassessed");
     expect(db.store.leads[0].pipeline_stage).toBe("new_inquiry");
     expect(db.store.leads[0].assigned_sales_id).toBe("member-sales-1");
 
@@ -536,5 +567,281 @@ describe("Stage 3 — WhatsApp Webhook Receiver & Coexistence Ingestion", () => 
 
     // Locked lead did NOT overwrite stage
     expect(db.store.leads[1].pipeline_stage).toBe("new_inquiry");
+  });
+
+  it("does not store a new message when the number is disconnected or revoked", async () => {
+    const db = createInMemoryAdminClient({
+      whatsapp_connections: [
+        {
+          id: "conn-1",
+          workspace_id: "ws-1",
+          phone_number_id: "9988776655",
+          connection_status: "disconnected",
+        },
+      ],
+    });
+    mockAdminClient = db.client;
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-1",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "9988776655" },
+                messages: [
+                  { id: "wamid.closed.1", from: "6281234567890", timestamp: "1700000000", type: "text", text: { body: "Halo" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const rawBody = JSON.stringify(payload);
+    const res = await POST(new NextRequest("http://localhost:3000/api/webhooks/whatsapp", {
+      method: "POST",
+      headers: { "x-hub-signature-256": signBody(rawBody, APP_SECRET) },
+      body: rawBody,
+    }));
+    expect(res.status).toBe(200);
+    expect(db.store.messages).toHaveLength(0);
+    expect(db.store.conversations).toHaveLength(0);
+    expect(db.store.webhook_events[0].status).toBe("processed");
+    expect(db.store.webhook_events[0].error_message).toBe("connection_not_authorized");
+  });
+
+  it("reprocesses a failed event when Meta delivers it again", async () => {
+    const db = createInMemoryAdminClient({
+      whatsapp_connections: [
+        {
+          id: "conn-1",
+          workspace_id: "ws-1",
+          phone_number_id: "9988776655",
+          connection_status: "connected",
+        },
+      ],
+      webhook_events: [
+        {
+          id: "event-failed",
+          meta_event_id: "waba-1:messages:wamid.retry.1",
+          status: "failed",
+          error_message: "attempts=1 insert failed",
+          received_at: new Date(Date.now() - 60_000).toISOString(),
+          phone_number_id: "9988776655",
+          workspace_id: "ws-1",
+          event_type: "messages",
+          payload: {},
+        },
+      ],
+    });
+    mockAdminClient = db.client;
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-1",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "9988776655" },
+                messages: [
+                  { id: "wamid.retry.1", from: "6281234567890", timestamp: "1700000000", type: "text", text: { body: "Halo" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const rawBody = JSON.stringify(payload);
+    const first = await POST(new NextRequest("http://localhost:3000/api/webhooks/whatsapp", {
+      method: "POST",
+      headers: { "x-hub-signature-256": signBody(rawBody, APP_SECRET) },
+      body: rawBody,
+    }));
+    expect(first.status).toBe(200);
+    expect(db.store.messages).toHaveLength(1);
+  });
+
+  it("links a CTWA message only when one provider ad id matches, and leaves temperature unassessed", async () => {
+    const db = createInMemoryAdminClient({
+      whatsapp_connections: [
+        {
+          id: "conn-1",
+          workspace_id: "ws-1",
+          organization_id: "org-1",
+          sales_member_id: "member-sales-1",
+          phone_number_id: "9988776655",
+          connection_status: "connected",
+        },
+      ],
+      ads: [
+        {
+          id: "ad-1",
+          organization_id: "org-1",
+          campaign_id: "camp-1",
+          provider_ad_id: "120201999888",
+        },
+      ],
+    });
+    mockAdminClient = db.client;
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-1",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "9988776655" },
+                messages: [
+                  {
+                    id: "wamid.linked.1",
+                    from: "6281234567890",
+                    timestamp: "1700000000",
+                    type: "text",
+                    text: { body: "Halo" },
+                    referral: { source_id: "120201999888", source_type: "ad" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const rawBody = JSON.stringify(payload);
+    const res = await POST(new NextRequest("http://localhost:3000/api/webhooks/whatsapp", {
+      method: "POST",
+      headers: { "x-hub-signature-256": signBody(rawBody, APP_SECRET) },
+      body: rawBody,
+    }));
+    expect(res.status).toBe(200);
+    expect(db.store.conversations[0].ad_id).toBe("ad-1");
+    expect(db.store.conversations[0].campaign_id).toBe("camp-1");
+    expect(db.store.conversations[0].attribution_status).toBe("verified");
+    expect(db.store.conversations[0].channel).toBe("whatsapp");
+    expect(db.store.leads[0].lead_temperature).toBe("unassessed");
+    expect(qualifyCrmTemperature("unassessed")).toBe("unassessed");
+    expect(qualifyCrmTemperature("Warm")).toBe("qualified");
+    expect(qualifyCrmTemperature("cold")).toBe("not_qualified");
+  });
+
+  it("does not process a second delivery while the processing lease is fresh", async () => {
+    const db = createInMemoryAdminClient({
+      whatsapp_connections: [
+        {
+          id: "conn-1",
+          workspace_id: "ws-1",
+          phone_number_id: "9988776655",
+          connection_status: "connected",
+        },
+      ],
+      webhook_events: [
+        {
+          id: "event-live",
+          meta_event_id: "waba-1:messages:wamid.live.1",
+          status: "processing",
+          claimed_at: new Date().toISOString(),
+          received_at: new Date().toISOString(),
+          phone_number_id: "9988776655",
+          workspace_id: "ws-1",
+          event_type: "messages",
+          payload: {},
+        },
+      ],
+    });
+    mockAdminClient = db.client;
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [{
+        id: "waba-1",
+        changes: [{
+          field: "messages",
+          value: {
+            metadata: { phone_number_id: "9988776655" },
+            messages: [{ id: "wamid.live.1", from: "6281234567890", timestamp: "1700000000", type: "text", text: { body: "Halo" } }],
+          },
+        }],
+      }],
+    };
+    const rawBody = JSON.stringify(payload);
+    const res = await POST(new NextRequest("http://localhost:3000/api/webhooks/whatsapp", {
+      method: "POST",
+      headers: { "x-hub-signature-256": signBody(rawBody, APP_SECRET) },
+      body: rawBody,
+    }));
+    expect(res.status).toBe(200);
+    expect(db.store.messages).toHaveLength(0);
+    expect(db.store.webhook_events[0].status).toBe("processing");
+  });
+
+  it("recovers a stale processing lock and replays a requeued dead letter once", async () => {
+    const change = {
+      field: "messages",
+      value: {
+        metadata: { phone_number_id: "9988776655" },
+        messages: [{ id: "wamid.stale.1", from: "6281234567890", timestamp: "1700000000", type: "text", text: { body: "Halo dari iklan" } }],
+      },
+    };
+    const db = createInMemoryAdminClient({
+      whatsapp_connections: [
+        {
+          id: "conn-1",
+          workspace_id: "ws-1",
+          phone_number_id: "9988776655",
+          connection_status: "connected",
+        },
+      ],
+      webhook_events: [
+        {
+          id: "event-stale",
+          meta_event_id: "waba-1:messages:wamid.stale.1",
+          status: "processing",
+          claimed_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+          received_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+          phone_number_id: "9988776655",
+          workspace_id: "ws-1",
+          event_type: "messages",
+          payload: change,
+        },
+      ],
+    });
+    mockAdminClient = db.client;
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [{ id: "waba-1", changes: [change] }],
+    };
+    const rawBody = JSON.stringify(payload);
+    const recovered = await POST(new NextRequest("http://localhost:3000/api/webhooks/whatsapp", {
+      method: "POST",
+      headers: { "x-hub-signature-256": signBody(rawBody, APP_SECRET) },
+      body: rawBody,
+    }));
+    expect(recovered.status).toBe(200);
+    expect(db.store.messages).toHaveLength(1);
+    expect(db.store.webhook_events[0].status).toBe("processed");
+
+    db.store.messages.length = 0;
+    db.store.webhook_events[0].status = "dead_letter";
+    db.store.webhook_events[0].error_message = "attempts=5 permanent";
+    const blocked = await POST(new NextRequest("http://localhost:3000/api/webhooks/whatsapp", {
+      method: "POST",
+      headers: { "x-hub-signature-256": signBody(rawBody, APP_SECRET) },
+      body: rawBody,
+    }));
+    expect(blocked.status).toBe(200);
+    expect(db.store.messages).toHaveLength(0);
+
+    expect(await requeueDeadLetterWebhookEvent("event-stale")).toBe(true);
+    expect(db.store.webhook_events[0].status).toBe("retrying");
+    expect(await replayRetryingWebhookEvents()).toBe(1);
+    expect(db.store.messages).toHaveLength(1);
+    expect(db.store.webhook_events).toHaveLength(1);
   });
 });

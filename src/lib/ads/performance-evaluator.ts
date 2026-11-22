@@ -46,12 +46,12 @@ export type AnalysisPeriod = "1d" | "3d" | "7d" | "14d" | "30d" | "custom";
 export interface EvaluationInput {
   period: AnalysisPeriod | string;
   durationDays: number;
-  spend: number;
+  spend: number | null;
   results: number | null; // null if fetch error / data unavailable
   reportedCpr?: number | null;
   targetCpr?: number | null;
-  linkClicks: number;
-  impressions: number;
+  linkClicks: number | null;
+  impressions: number | null;
   reach?: number;
   frequency?: number | null;
   trackingStatus?: "verified" | "unverified" | "unavailable";
@@ -251,6 +251,36 @@ export function evaluateAdsPerformance(input: EvaluationInput): PerformanceEvalu
   } = input;
 
   const loc = forceIndonesianLocale(locale);
+  if (spend == null || impressions == null || linkClicks == null) {
+    const unavailableComparison = calculateMetricComparison(null, null);
+    return {
+      dataStatus: "terbatas",
+      dataStatusReason: "Metrik inti tidak tersedia dari Meta. Tidak ada kesimpulan performa.",
+      resultsCondition: "unavailable",
+      performanceStatus: "belum_dapat_dinilai",
+      action: "periksa_tracking",
+      mainReason: "Belanja, impresi, atau klik tidak tersedia, jadi performa tidak dinilai.",
+      uncertaintyNotes: ["Metrik yang kosong tidak diubah menjadi nol."],
+      actualCpr: null,
+      targetCpr: targetCpr ?? null,
+      riskToSpendRatio: null,
+      comparisons: {
+        spend: calculateMetricComparison(spend, prevSpend),
+        results: calculateMetricComparison(results, prevResults),
+        cpr: unavailableComparison,
+      },
+      learningStatus: "Data belum cukup",
+      trackingStatusDisplay: "Tidak tersedia",
+      headline: "Data performa belum tersedia",
+      subtext: "Sebagian metrik Meta tidak tersedia pada periode ini. Angka yang kosong tidak ditampilkan sebagai nol.",
+      nextActions: [],
+      entityStatus: normalizeEntityStatus(rawEntityStatus),
+      analysisScope,
+      periodConfidence: classifyPeriodConfidence(durationDays),
+      scaleEligible: false,
+      causalDiagnostics: [],
+    };
+  }
   const uncertaintyNotes: string[] = [];
 
   // 1. Validate Numeric Data Validity & Inconsistencies

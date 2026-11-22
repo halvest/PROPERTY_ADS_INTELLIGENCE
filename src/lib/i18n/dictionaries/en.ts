@@ -9,8 +9,6 @@ export const enDictionary: TranslationDictionary = {
     leads: "CRM",
     ctwaLeads: "CTWA Leads",
     pipeline: "Pipeline",
-    reviews: "AI Creative Studio",
-    enhancer: "AI Photo Enhancer",
     connections: "WhatsApp Connections",
     settings: "Settings",
     login: "Sign In",

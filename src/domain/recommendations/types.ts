@@ -10,9 +10,9 @@ export type RecommendationCategory =
   | "insufficient_data";
 
 export interface AdRecommendationMetrics {
-  spend: number;
-  impressions: number;
-  clicks: number;
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
   ctr: number | null;
   cpc: number | null;
   cpm: number | null;
@@ -33,9 +33,9 @@ export interface AdEvaluationInput {
   adName: string;
   campaignName?: string;
   dateRange: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
   attributedLeadsCount: number;
   qualifiedLeadsCount: number;
   avgBuyerScore: number | null;

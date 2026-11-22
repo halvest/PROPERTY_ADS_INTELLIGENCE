@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MetaMarketingApiClient, ALL_EFFECTIVE_STATUSES } from "@/lib/marketing/meta/client";
+import { MetaMarketingApiClient, AD_EFFECTIVE_STATUSES, ADSET_EFFECTIVE_STATUSES, CAMPAIGN_EFFECTIVE_STATUSES } from "@/lib/marketing/meta/client";
 import { executeMarketingSync, chunkArray, SUPABASE_UPSERT_CHUNK_SIZE } from "@/lib/marketing/meta/sync-service";
 import { MarketingApiError } from "@/lib/marketing/meta/types";
 
@@ -14,6 +14,20 @@ function jsonResponse(body: unknown, extraHeaders?: Record<string, string>) {
 }
 
 describe("Meta client pagination, effective_status & BUC rate limits", () => {
+  it("stops when Graph returns a cursor without a next page", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        data: [{ id: "act_1", name: "One" }],
+        paging: { cursors: { after: "last-cursor" } },
+      })
+    );
+    const client = new MetaMarketingApiClient({ accessToken: "t", fetchFn });
+    const accounts = await client.getAdAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(client.lastFetchTruncated).toBe(false);
+  });
+
   it("collects insights across multiple pages", async () => {
     let calls = 0;
     const fetchFn = vi.fn(async () => {
@@ -46,7 +60,7 @@ describe("Meta client pagination, effective_status & BUC rate limits", () => {
     expect(client.lastFetchTruncated).toBe(true);
   });
 
-  it("explicitly passes all 9 ALL_EFFECTIVE_STATUSES on getCampaigns, getAdSets, and getAds", async () => {
+  it("requests only the effective statuses Meta accepts on each edge", async () => {
     const urls: string[] = [];
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
       urls.push(String(input));
@@ -58,12 +72,12 @@ describe("Meta client pagination, effective_status & BUC rate limits", () => {
     await client.getAds();
 
     expect(urls).toHaveLength(3);
-    for (const rawUrl of urls) {
-      const parsed = new URL(rawUrl);
-      const eff = parsed.searchParams.get("effective_status");
-      expect(eff).toBeTruthy();
-      expect(JSON.parse(eff!)).toEqual(Array.from(ALL_EFFECTIVE_STATUSES));
-    }
+    const statuses = urls.map((rawUrl) => JSON.parse(new URL(rawUrl).searchParams.get("effective_status") || "[]"));
+    expect(statuses[0]).toEqual(Array.from(CAMPAIGN_EFFECTIVE_STATUSES));
+    expect(statuses[1]).toEqual(Array.from(ADSET_EFFECTIVE_STATUSES));
+    expect(statuses[2]).toEqual(Array.from(AD_EFFECTIVE_STATUSES));
+    expect(statuses[0]).not.toContain("ADSET_PAUSED");
+    expect(statuses[0]).not.toContain("PENDING_REVIEW");
   });
 
   it("passes level=ad and 7d_click/1d_view attribution windows on getAdInsights and captures BUC headers", async () => {

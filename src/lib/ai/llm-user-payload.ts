@@ -58,12 +58,12 @@ export interface LlmUserPayload {
   };
   groundTruthMetrics: {
     currency: string | null;
-    spend: number;
-    impressions: number;
-    allClicks: number;
-    linkClicks: number;
+    spend: number | null;
+    impressions: number | null;
+    allClicks: number | null;
+    linkClicks: number | null;
     intentRatio: number | null;
-    results: number;
+    results: number | null;
     resultKind: string;
     resultLabel: string;
     cpr: number | null;
@@ -111,11 +111,11 @@ export interface LlmUserPayloadInput {
   lockedAction: DecisionAction;
   targetCpr: number | null;
   currency: string | null;
-  spend: number;
-  impressions: number;
-  allClicks: number;
-  linkClicks: number;
-  results: number;
+  spend: number | null;
+  impressions: number | null;
+  allClicks: number | null;
+  linkClicks: number | null;
+  results: number | null;
   resultKind: string;
   resultLabel: string;
   cpr: number | null;
@@ -125,8 +125,8 @@ export interface LlmUserPayloadInput {
   frequency: number | null;
   previousSpend: number | null;
   previousResults: number | null;
-  dailySpend: number[];
-  dailyResults: number[];
+  dailySpend: Array<number | null>;
+  dailyResults: Array<number | null>;
   objectiveGroups: string[];
   crm: {
     connected: boolean;
@@ -150,22 +150,35 @@ function percentDelta(current: number | null, previous: number | null): number |
   return round(((current - previous) / Math.abs(previous)) * 100, 1);
 }
 
-function sumTail(values: number[], days: number): number | null {
+function sumTail(values: Array<number | null>, days: number): number | null {
   if (values.length === 0) return null;
-  return values.slice(-days).reduce((total, value) => total + (Number.isFinite(value) ? value : 0), 0);
+  let total = 0;
+  let seen = false;
+  for (const value of values.slice(-days)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      total += value;
+      seen = true;
+    }
+  }
+  return seen ? total : null;
 }
 
 export function buildLlmUserPayload(input: LlmUserPayloadInput): LlmUserPayload {
   const paused = input.entityStatus === "PAUSED" || input.entityStatus === "ARCHIVED";
   const performanceBasis = paused ? "historical_paused" : "live_active";
-  const noDelivery = input.spend <= 0 && input.impressions <= 0;
+  const spendReported = typeof input.spend === "number" && Number.isFinite(input.spend) ? input.spend : null;
+  const impressionsReported = typeof input.impressions === "number" && Number.isFinite(input.impressions) ? input.impressions : null;
+  const resultsReported = typeof input.results === "number" && Number.isFinite(input.results) ? input.results : null;
+  const clicksReported = typeof input.allClicks === "number" && Number.isFinite(input.allClicks) ? input.allClicks : null;
+  const linkClicksReported = typeof input.linkClicks === "number" && Number.isFinite(input.linkClicks) ? input.linkClicks : null;
+  const noDelivery = (spendReported === null || spendReported <= 0) && (impressionsReported === null || impressionsReported <= 0);
   const dataStatus = noDelivery ? "tidak_ada_data" : input.dataStatus === "cukup" ? "cukup" : "belum_cukup";
   const targetCpr = input.targetCpr !== null && input.targetCpr > 0 ? input.targetCpr : null;
   const cpr = round(input.cpr, 2);
   const targetStatus =
     targetCpr === null
       ? "TARGET_NOT_CONFIGURED"
-      : cpr === null || input.results <= 0
+      : cpr === null || resultsReported === null || resultsReported <= 0
         ? "CPR_UNAVAILABLE"
         : cpr <= targetCpr * 0.9
           ? "BETTER"
@@ -234,19 +247,19 @@ export function buildLlmUserPayload(input: LlmUserPayloadInput): LlmUserPayload 
     },
     groundTruthMetrics: {
       currency: input.currency,
-      spend: round(input.spend, 2) ?? 0,
-      impressions: input.impressions,
-      allClicks: input.allClicks,
-      linkClicks: input.linkClicks,
-      intentRatio: input.allClicks > 0 ? round(input.linkClicks / input.allClicks, 4) : null,
-      results: input.results,
+      spend: round(spendReported, 2),
+      impressions: impressionsReported,
+      allClicks: clicksReported,
+      linkClicks: linkClicksReported,
+      intentRatio: clicksReported !== null && clicksReported > 0 && linkClicksReported !== null ? round(linkClicksReported / clicksReported, 4) : null,
+      results: resultsReported,
       resultKind: input.resultKind,
       resultLabel: input.resultLabel,
       cpr,
       linkCtr: round(input.linkCtr, 2),
       linkCpc: round(input.linkCpc, 2),
       cpm: round(input.cpm, 2),
-      cvr: input.linkClicks > 0 ? round((input.results / input.linkClicks) * 100, 2) : null,
+      cvr: linkClicksReported !== null && linkClicksReported > 0 && resultsReported !== null ? round((resultsReported / linkClicksReported) * 100, 2) : null,
       frequency,
       previousPeriodDeltaPct: {
         spend: percentDelta(input.spend, input.previousSpend),

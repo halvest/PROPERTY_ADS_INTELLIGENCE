@@ -2,6 +2,7 @@ import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getMetaGraphApiVersion } from "@/lib/meta/config";
+import { decideCapiDispatch } from "@/lib/meta/capi-event-policy";
 import { maskCtwaClid } from "@/lib/ctwa-leads/types";
 
 export type MetaCapiEventName = "QualifiedLead" | "Schedule" | "Purchase";
@@ -44,9 +45,7 @@ export interface MetaCapiBusinessMessagingPayload {
 }
 
 export function mapPipelineStageToCapiEvent(stage: string): MetaCapiEventName | null {
-  if (stage === "qualified") return "QualifiedLead";
-  if (stage === "survey") return "Schedule";
-  if (stage === "won") return "Purchase";
+  void stage;
   return null;
 }
 
@@ -186,50 +185,23 @@ export async function tryDispatchLeadStageCapi(params: {
   nextStage: string;
   conversationId?: string;
 }): Promise<void> {
+  const decision = decideCapiDispatch(params.nextStage);
   try {
-    const eventName = mapPipelineStageToCapiEvent(params.nextStage);
-    if (!eventName) return;
-
-    const datasetId = process.env.META_CAPI_DATASET_ID?.trim() || "";
-    const accessToken = process.env.META_CAPI_ACCESS_TOKEN?.trim() || "";
-    if (!datasetId || !accessToken) return;
-
     const admin = createAdminClient();
-    let conversationId = params.conversationId;
-
-    if (!conversationId) {
-      const { data: leadRow } = await admin
-        .from("leads")
-        .select("conversation_id")
-        .eq("id", params.leadId)
-        .eq("workspace_id", params.workspaceId)
-        .maybeSingle();
-      conversationId = leadRow?.conversation_id;
-    }
-
-    if (!conversationId) return;
-
-    const { data: attr } = await admin
-      .from("ctwa_attributions")
-      .select("ctwa_clid")
-      .eq("conversation_id", conversationId)
-      .eq("workspace_id", params.workspaceId)
-      .maybeSingle();
-
-    const ctwaClid = attr?.ctwa_clid?.trim();
-    if (!ctwaClid) return;
-
-    await dispatchCtwaConversionEvent({
-      workspaceId: params.workspaceId,
-      leadId: params.leadId,
-      eventName,
-      ctwaClid,
-      datasetId,
-      accessToken,
-    });
+    await admin.from("capi_dispatch_logs").upsert(
+      {
+        workspace_id: params.workspaceId,
+        lead_id: params.leadId,
+        event_name: "not_sent",
+        event_id: `haspro_${params.leadId}_${params.nextStage}_not_sent`,
+        status: decision.status,
+        error_message: decision.reason,
+      },
+      { onConflict: "event_id" }
+    );
   } catch (err: unknown) {
     console.error(
-      "[tryDispatchLeadStageCapi] Non-blocking dispatch failed:",
+      "[tryDispatchLeadStageCapi] Failed to record the skipped conversion:",
       err instanceof Error ? err.message : String(err)
     );
   }

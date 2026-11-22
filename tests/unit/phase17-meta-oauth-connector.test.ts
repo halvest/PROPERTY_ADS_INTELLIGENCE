@@ -209,15 +209,13 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
               }),
             };
           }
-          if (table === "ad_insights" || table === "conversations") {
+          if (table === "ad_insights" || table === "conversations" || table === "campaigns" || table === "ads") {
             return {
               select: vi.fn(() => mockQuery([])),
             };
           }
           return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-            }),
+            select: vi.fn(() => mockQuery([])),
           };
         }),
       } as unknown as SupabaseClient;
@@ -229,9 +227,9 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
 
       expect(response.state).toBe("no_data_for_period");
       expect(response.isDemoMode).toBe(false);
-      expect(response.summary?.totalSpend).toBe(0);
-      expect(response.summary?.totalImpressions).toBe(0);
-      expect(response.summary?.totalClicks).toBe(0);
+      expect(response.summary?.totalSpend).toBeNull();
+      expect(response.summary?.totalImpressions).toBeNull();
+      expect(response.summary?.totalClicks).toBeNull();
       expect(response.selectedAdAccount?.name).toBe("Haspro Realty Live");
     });
 
@@ -360,10 +358,13 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
               select: vi.fn(() => mockQuery(mockConvs)),
             };
           }
+          if (table === "campaigns" || table === "ads") {
+            return {
+              select: vi.fn(() => mockQuery([])),
+            };
+          }
           return {
-            select: vi.fn().mockReturnValue({
-              eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-            }),
+            select: vi.fn(() => mockQuery([])),
           };
         }),
       } as unknown as SupabaseClient;
@@ -412,6 +413,7 @@ describe("Phase 17 — Haspro AI: Meta OAuth, Live Dashboard & Zero-Fabrication"
             order: vi.fn().mockReturnThis(),
             limit: vi.fn().mockReturnThis(),
             maybeSingle: vi.fn().mockResolvedValue({ data: null }),
+            in: vi.fn().mockReturnThis(),
             gte: vi.fn().mockReturnThis(),
             lte: vi.fn().mockResolvedValue({ data: [] }),
           })),

@@ -199,12 +199,13 @@ function wrapUntrustedLabel(value: string): string {
 
 export function buildCtwaUserPrompt(ctx: CtwaPromptContext): string {
   const m = ctx.metrics;
-  const money = ctx.formatMoney;
   const locale = ctx.locale ?? "id";
   const numberLocale = locale === "en" ? "en-US" : "id-ID";
   const pct = (v: number) =>
     `${new Intl.NumberFormat(numberLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)}%`;
-  const n = (v: number) => v.toLocaleString(numberLocale);
+  const n = (v: number | null | undefined) =>
+    v == null || !Number.isFinite(v) ? "—" : v.toLocaleString(numberLocale);
+  const money = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "—" : ctx.formatMoney(v));
   const scope = ctx.analysisScope ?? "ad";
   const periodDays = ctx.periodDays ?? ctx.durationDays;
   const statusNorm = normalizeEntityStatus(ctx.status);

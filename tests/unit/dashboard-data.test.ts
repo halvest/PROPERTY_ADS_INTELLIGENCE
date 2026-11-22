@@ -124,7 +124,7 @@ describe("Phase 4: Dashboard Data Layer & Contract Verification", () => {
 
       const sortedBySpend = getAdLeaderboard({ sortBy: "spend" });
       for (let i = 0; i < sortedBySpend.length - 1; i++) {
-        expect(sortedBySpend[i].spend).toBeGreaterThanOrEqual(sortedBySpend[i + 1].spend);
+        expect((sortedBySpend[i].spend ?? Number.NEGATIVE_INFINITY)).toBeGreaterThanOrEqual(sortedBySpend[i + 1].spend ?? Number.NEGATIVE_INFINITY);
       }
     });
   });

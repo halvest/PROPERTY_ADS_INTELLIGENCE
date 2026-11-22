@@ -63,12 +63,12 @@ export const privacyPolicy: LegalDocument = {
       heading: { id: "5. Retensi Data & Meta Conversions API", en: "5. Data Retention & Meta Conversions API" },
       paragraphs: [
         {
-          id: "Jika Anda mengaktifkan Meta Conversions API (CAPI) for Business Messaging, Haspro mengirimkan sinyal tahapan terverifikasi (QualifiedLead, Schedule, Purchase) beserta ctwa_clid ke Meta Graph API agar algoritma iklan Meta dapat mengoptimalkan kualitas prospek Anda.",
-          en: "When Meta Conversions API (CAPI) for Business Messaging is configured, Haspro transmits verified funnel milestones (QualifiedLead, Schedule, Purchase) with the corresponding ctwa_clid to the Meta Graph API to help optimize your ad delivery.",
+          id: "Haspro tidak mengirim event Conversions API dari tahap pipeline. Survey bukan Schedule dan won bukan Purchase. Event hanya dapat dikirim jika suatu saat ada dataset milik tenant itu sendiri dan ada bukti konversi yang sesuai. Dataset global lintas tenant tidak digunakan.",
+          en: "Haspro does not send Conversions API events from pipeline stages. Survey is not Schedule and won is not Purchase. An event can be sent only if a dataset belonging to that tenant exists and the conversion itself is verified. A global cross-tenant dataset is not used.",
         },
         {
-          id: "Jika Anda memutuskan nomor WhatsApp di halaman Koneksi WhatsApp, token akses rahasia langsung dihapus permanen. Data historis percakapan dan analitik tetap disimpan di workspace untuk keperluan pelaporan audit Anda hingga Anda meminta penghapusan workspace atau menggunakan alur Penghapusan Data.",
-          en: "When you disconnect a WhatsApp number in WhatsApp Connections, encrypted access tokens are immediately and permanently deleted. Historical conversation analytics remain in your workspace for audit reporting until you request deletion via our Data Deletion procedure.",
+          id: "Jika Anda memutuskan nomor WhatsApp di halaman Koneksi WhatsApp, token akses rahasia langsung dihapus permanen dan pesan baru dari nomor itu tidak lagi disimpan. Riwayat yang sudah sah tetap ada sampai callback penghapusan data Meta untuk pengguna Facebook yang sama, atau sampai Owner meminta penghapusan workspace.",
+          en: "When you disconnect a WhatsApp number, the secret access token is deleted immediately and new messages from that number are no longer stored. Existing history remains until the Meta data-deletion callback for the same Facebook user, or until the Owner requests workspace deletion.",
         },
       ],
     },
@@ -187,12 +187,12 @@ export const dataDeletion: LegalDocument = {
               en: "Email support@hdcreative.cloud with subject \"Data Deletion Request — <Workspace Name>\" from the workspace Owner/Admin email.",
             },
             {
-              id: "Jika Anda menghapus aplikasi dari pengaturan Meta, Meta memanggil Data Deletion Callback. Callback itu langsung menghapus token iklan dan token WhatsApp yang terikat pada pengguna Facebook tersebut, lalu menampilkan kode konfirmasi.",
-              en: "If you remove the app from Meta settings, Meta calls the Data Deletion Callback. That callback immediately deletes the ad token and WhatsApp token bound to that Facebook user, then shows a confirmation code.",
+              id: "Jika Anda menghapus aplikasi dari pengaturan Meta, Meta memanggil Data Deletion Callback. Bila pengguna Facebook cocok dengan koneksi yang tersimpan, callback menghapus token, percakapan WhatsApp, pesan, lead turunan, payload webhook, dan snapshot iklan yang disinkronkan oleh koneksi itu. Data CRM yang Anda unggah sendiri tidak ikut terhapus. Jika tidak ada data yang cocok, halaman status menyatakan tidak ada yang dihapus.",
+              en: "If you remove the app from Meta settings, Meta calls the Data Deletion Callback. When the Facebook user matches a stored connection, the callback deletes tokens, WhatsApp conversations, messages, derived leads, webhook payloads, and ad snapshots synced by that connection. CRM records you uploaded yourself are not deleted. If nothing matches, the status page says nothing was deleted.",
             },
             {
-              id: "Tim kami memproses penghapusan riwayat percakapan, data leads, hasil analisis AI, dan snapshot iklan dalam maksimal 7 hari kerja setelah verifikasi kepemilikan.",
-              en: "Our team purges conversation transcripts, lead records, AI snapshots, and ad insights within 7 business days upon ownership verification.",
+              id: "Penghapusan data CRM yang Anda unggah sendiri diproses setelah permintaan Owner/Admin terverifikasi, paling lambat 7 hari kerja. Itu terpisah dari callback Meta.",
+              en: "Deletion of CRM records you uploaded is processed after a verified Owner/Admin request, within 7 business days. That is separate from the Meta callback.",
             },
           ],
         },

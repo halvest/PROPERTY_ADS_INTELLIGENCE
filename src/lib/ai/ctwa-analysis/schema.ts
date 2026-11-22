@@ -14,7 +14,7 @@ export type RecommendedAction = z.infer<typeof RecommendedActionSchema>;
 export const DataSufficiencySchema = z.enum(["cukup", "terbatas", "tidak_valid"]);
 
 export const JustificationMetricsSchema = z.object({
-  spend: z.number(),
+  spend: z.number().nullable(),
   link_ctr: z.number().nullable(),
   cpm: z.number().nullable(),
   link_cpc: z.number().nullable(),

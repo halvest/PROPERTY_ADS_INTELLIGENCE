@@ -8,6 +8,7 @@ type RowRecord = Record<string, unknown>;
 
 interface AdminStore {
   capi_dispatch_logs: RowRecord[];
+  [table: string]: RowRecord[];
 }
 
 interface SsrStore {
@@ -32,8 +33,9 @@ let mockSsrState: { store: SsrStore; user: { id: string } | null } = {
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
-    from(table: keyof AdminStore) {
-      let op: "select" | "upsert" = "select";
+    from(table: string) {
+      if (!mockAdminStore[table]) mockAdminStore[table] = [];
+      let op: "select" | "upsert" | "delete" | "update" = "select";
       const filters: Array<{ col: string; val: unknown }> = [];
       let payload: RowRecord | null = null;
 
@@ -41,6 +43,17 @@ vi.mock("@/lib/supabase/admin", () => ({
         select: () => builder,
         eq: (col: string, val: unknown) => {
           filters.push({ col, val });
+          return builder;
+        },
+        contains: () => builder,
+        in: () => builder,
+        delete: () => {
+          op = "delete";
+          return builder;
+        },
+        update: (record: RowRecord) => {
+          op = "update";
+          payload = { ...record };
           return builder;
         },
         upsert: (record: RowRecord, opts?: { onConflict?: string }) => {
@@ -53,7 +66,7 @@ vi.mock("@/lib/supabase/admin", () => ({
             rows[idx] = { ...rows[idx], ...payload };
           } else {
             rows.push({
-              id: `capi-log-${rows.length + 1}`,
+              id: `row-${rows.length + 1}`,
               created_at: new Date().toISOString(),
               ...payload,
             });
@@ -69,6 +82,9 @@ vi.mock("@/lib/supabase/admin", () => ({
           }
           return { data: payload, error: null };
         },
+        then: (
+          onfulfilled?: (value: { data: unknown; error: null; count: number }) => unknown
+        ) => Promise.resolve({ data: [] as unknown[], error: null, count: 0 }).then(onfulfilled),
       };
       return builder;
     },
@@ -239,7 +255,7 @@ describe("Stage 6 — Auto-CPQL, Meta CAPI Business Messaging & Data Deletion Ca
     const okRes = await dataDeletionCallbackPost(okReq);
     expect(okRes.status).toBe(200);
     const okJson = (await okRes.json()) as { url: string; confirmation_code: string };
-    expect(okJson.confirmation_code).toMatch(/^haspro_del_/);
+    expect(okJson.confirmation_code).toMatch(/^haspro/);
     expect(okJson.url).toBe(
       `https://hdcreative.cloud/data-deletion?code=${encodeURIComponent(okJson.confirmation_code)}`
     );

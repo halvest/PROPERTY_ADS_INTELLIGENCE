@@ -14,6 +14,8 @@
  *   (conversions) is retained only for backward compatibility.
  */
 
+import { finiteNumber } from "@/lib/metrics/nullable-number";
+
 export interface AdInsightRowLike {
   spend?: number | null;
   impressions?: number | null;
@@ -28,9 +30,9 @@ export interface AdInsightRowLike {
 }
 
 export interface AdMetricsAggregate {
-  spend: number;
-  impressions: number;
-  allClicks: number;
+  spend: number | null;
+  impressions: number | null;
+  allClicks: number | null;
   /** Null when no row reported link clicks. */
   linkClicks: number | null;
   /** Null when unavailable or when rows span more than one day. */
@@ -69,13 +71,13 @@ function num(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function ratio(numerator: number, denominator: number | null): number | null {
-  if (denominator === null || denominator <= 0) return null;
+function ratio(numerator: number | null, denominator: number | null): number | null {
+  if (numerator === null || denominator === null || denominator <= 0) return null;
   return Number((numerator / denominator).toFixed(2));
 }
 
-function percent(numerator: number | null, denominator: number): number | null {
-  if (numerator === null || denominator <= 0) return null;
+function percent(numerator: number | null, denominator: number | null): number | null {
+  if (numerator === null || denominator === null || denominator <= 0) return null;
   return Number(((numerator / denominator) * 100).toFixed(2));
 }
 
@@ -122,9 +124,9 @@ export function leadsFromRow(row: AdInsightRowLike): number | null {
 }
 
 export function aggregateAdInsights(rows: AdInsightRowLike[]): AdMetricsAggregate {
-  let spend = 0;
-  let impressions = 0;
-  let allClicks = 0;
+  let spend: number | null = null;
+  let impressions: number | null = null;
+  let allClicks: number | null = null;
   let linkClicksSum = 0;
   let linkClicksSeen = false;
   let reachSum = 0;
@@ -138,21 +140,24 @@ export function aggregateAdInsights(rows: AdInsightRowLike[]): AdMetricsAggregat
   const days = new Set<string>();
 
   for (const row of rows) {
-    spend += num(row.spend) ?? 0;
-    impressions += num(row.impressions) ?? 0;
-    allClicks += num(row.clicks) ?? 0;
+    const reportedSpend = finiteNumber(row.spend);
+    const reportedImpressions = finiteNumber(row.impressions);
+    const reportedClicks = finiteNumber(row.clicks);
+    if (reportedSpend !== null) spend = (spend ?? 0) + reportedSpend;
+    if (reportedImpressions !== null) impressions = (impressions ?? 0) + reportedImpressions;
+    if (reportedClicks !== null) allClicks = (allClicks ?? 0) + reportedClicks;
 
-    const link = num(row.link_clicks ?? row.linkClicks);
+    const link = finiteNumber(row.link_clicks ?? row.linkClicks);
     if (link !== null) {
       linkClicksSum += link;
       linkClicksSeen = true;
     }
-    const reach = num(row.reach);
+    const reach = finiteNumber(row.reach);
     if (reach !== null) {
       reachSum += reach;
       reachSeen = true;
     }
-    const results = num(row.conversions);
+    const results = finiteNumber(row.conversions);
     if (results !== null) {
       resultsSum += results;
       resultsSeen = true;
@@ -171,7 +176,7 @@ export function aggregateAdInsights(rows: AdInsightRowLike[]): AdMetricsAggregat
     if (day) days.add(day);
   }
 
-  spend = Math.round(spend * 100) / 100;
+  const roundedSpend = spend === null ? null : Math.round(spend * 100) / 100;
   const linkClicks = linkClicksSeen ? linkClicksSum : null;
   // Unique reach is only defensible for a single observation day.
   const reach = reachSeen && days.size <= 1 ? reachSum : null;
@@ -180,23 +185,23 @@ export function aggregateAdInsights(rows: AdInsightRowLike[]): AdMetricsAggregat
   const leads = leadsSeen ? leadsSum : null;
 
   return {
-    spend,
+    spend: roundedSpend,
     impressions,
     allClicks,
     linkClicks,
     reach,
-    frequency: reach !== null && reach > 0 ? Number((impressions / reach).toFixed(2)) : null,
+    frequency: reach !== null && reach > 0 && impressions !== null ? Number((impressions / reach).toFixed(2)) : null,
     linkCtr: percent(linkClicks, impressions),
-    linkCpc: linkClicks !== null ? ratio(spend, linkClicks) : null,
+    linkCpc: ratio(roundedSpend, linkClicks),
     allCtr: percent(allClicks, impressions),
-    allCpc: ratio(spend, allClicks),
-    cpm: impressions > 0 ? Number(((spend / impressions) * 1000).toFixed(2)) : null,
+    allCpc: ratio(roundedSpend, allClicks),
+    cpm: impressions !== null && impressions > 0 && roundedSpend !== null ? Number(((roundedSpend / impressions) * 1000).toFixed(2)) : null,
     results,
     messagingConversations,
     leads,
-    costPerMessagingConversation: messagingConversations !== null ? ratio(spend, messagingConversations) : null,
-    costPerLead: leads !== null ? ratio(spend, leads) : null,
-    costPerResult: results !== null ? ratio(spend, results) : null,
+    costPerMessagingConversation: ratio(roundedSpend, messagingConversations),
+    costPerLead: ratio(roundedSpend, leads),
+    costPerResult: ratio(roundedSpend, results),
     days: days.size,
     rowCount: rows.length,
   };
@@ -273,41 +278,67 @@ export function enumerateInclusiveDates(since: string, until: string): string[] 
 }
 
 export interface ZeroFilledDailyTrends {
-  spend: number[];
-  results: number[];
-  cpr: number[];
-  ctr: number[];
+  spend: Array<number | null>;
+  results: Array<number | null>;
+  cpr: Array<number | null>;
+  ctr: Array<number | null>;
 }
 
-/** Every calendar day from since through until is present. Missing insight rows are 0. */
+/**
+ * Calendar alignment for a range that already contains reported insight rows.
+ * A day with no row stays 0 only when some other day in the range reported a
+ * value, matching the existing chart contract. An empty series, or a metric
+ * that was never reported, stays null. CTR and CPR stay null when the
+ * denominator is missing or zero.
+ */
 export function buildZeroFilledDailyTrends(
   rows: AdInsightRowLike[],
   since: string,
   until: string,
-  resultOf: (row: AdInsightRowLike) => number = (row) => num(row.conversions) ?? 0
+  resultOf: (row: AdInsightRowLike) => number | null = (row) => finiteNumber(row.conversions)
 ): ZeroFilledDailyTrends {
   const dates = enumerateInclusiveDates(since, until);
-  const daily = new Map<string, { spend: number; results: number; clicks: number; impressions: number }>();
+  const daily = new Map<string, { spend: number | null; results: number | null; clicks: number | null; impressions: number | null }>();
+  let anySpend = false;
+  let anyResults = false;
   for (const row of rows) {
     const day = row.date_start ? String(row.date_start).slice(0, 10) : "";
     if (!day || (dates.length > 0 && (day < since || day > until))) continue;
-    const bucket = daily.get(day) || { spend: 0, results: 0, clicks: 0, impressions: 0 };
-    bucket.spend += num(row.spend) ?? 0;
-    bucket.results += resultOf(row);
-    bucket.clicks += num(row.link_clicks ?? row.linkClicks) ?? 0;
-    bucket.impressions += num(row.impressions) ?? 0;
+    const bucket = daily.get(day) || { spend: null, results: null, clicks: null, impressions: null };
+    const spend = finiteNumber(row.spend);
+    const results = resultOf(row);
+    const clicks = finiteNumber(row.link_clicks ?? row.linkClicks);
+    const impressions = finiteNumber(row.impressions);
+    if (spend !== null) {
+      bucket.spend = (bucket.spend ?? 0) + spend;
+      anySpend = true;
+    }
+    if (results !== null) {
+      bucket.results = (bucket.results ?? 0) + results;
+      anyResults = true;
+    }
+    if (clicks !== null) bucket.clicks = (bucket.clicks ?? 0) + clicks;
+    if (impressions !== null) bucket.impressions = (bucket.impressions ?? 0) + impressions;
     daily.set(day, bucket);
   }
-  const spend: number[] = [];
-  const results: number[] = [];
-  const cpr: number[] = [];
-  const ctr: number[] = [];
+  const spend: Array<number | null> = [];
+  const results: Array<number | null> = [];
+  const cpr: Array<number | null> = [];
+  const ctr: Array<number | null> = [];
   for (const day of dates) {
-    const item = daily.get(day) || { spend: 0, results: 0, clicks: 0, impressions: 0 };
-    spend.push(Math.round(item.spend));
-    results.push(item.results);
-    cpr.push(item.results > 0 ? Math.round(item.spend / item.results) : 0);
-    ctr.push(item.impressions > 0 ? Number(((item.clicks / item.impressions) * 100).toFixed(2)) : 0);
+    const item = daily.get(day);
+    const daySpend = item?.spend ?? (anySpend ? 0 : null);
+    const dayResults = item?.results ?? (anyResults ? 0 : null);
+    const dayClicks = item?.clicks ?? null;
+    const dayImpressions = item?.impressions ?? null;
+    spend.push(daySpend === null ? null : Math.round(daySpend));
+    results.push(dayResults);
+    cpr.push(daySpend !== null && dayResults !== null && dayResults > 0 ? Math.round(daySpend / dayResults) : null);
+    ctr.push(
+      dayClicks !== null && dayImpressions !== null && dayImpressions > 0
+        ? Number(((dayClicks / dayImpressions) * 100).toFixed(2))
+        : null
+    );
   }
   return { spend, results, cpr, ctr };
 }

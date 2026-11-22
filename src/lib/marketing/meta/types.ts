@@ -70,7 +70,26 @@ export interface MetaAdAccountResponse {
   business_name?: string;
 }
 
-export const ALL_EFFECTIVE_STATUSES = [
+/**
+ * Statuses sent to the campaigns edge. A wider filter that also asked for
+ * DELETED, IN_PROCESS, and WITH_ISSUES returned Graph code 100 on this app,
+ * and each rejected call lowers the Marketing API success rate.
+ */
+export const CAMPAIGN_EFFECTIVE_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED"] as const;
+
+/** Statuses Meta accepts on the adsets edge. */
+export const ADSET_EFFECTIVE_STATUSES = [
+  "ACTIVE",
+  "PAUSED",
+  "DELETED",
+  "ARCHIVED",
+  "CAMPAIGN_PAUSED",
+  "IN_PROCESS",
+  "WITH_ISSUES",
+] as const;
+
+/** Statuses Meta accepts on the ads edge. */
+export const AD_EFFECTIVE_STATUSES = [
   "ACTIVE",
   "PAUSED",
   "DELETED",
@@ -80,9 +99,20 @@ export const ALL_EFFECTIVE_STATUSES = [
   "PENDING_REVIEW",
   "DISAPPROVED",
   "PREAPPROVED",
+  "IN_PROCESS",
+  "WITH_ISSUES",
 ] as const;
 
-export type MetaEffectiveStatus = (typeof ALL_EFFECTIVE_STATUSES)[number];
+export const ALL_EFFECTIVE_STATUSES = [
+  ...CAMPAIGN_EFFECTIVE_STATUSES,
+  ...ADSET_EFFECTIVE_STATUSES,
+  ...AD_EFFECTIVE_STATUSES,
+].filter((status, index, all) => all.indexOf(status) === index);
+
+export type MetaEffectiveStatus =
+  | (typeof CAMPAIGN_EFFECTIVE_STATUSES)[number]
+  | (typeof ADSET_EFFECTIVE_STATUSES)[number]
+  | (typeof AD_EFFECTIVE_STATUSES)[number];
 
 export interface MetaCampaignResponse {
   id: string;

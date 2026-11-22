@@ -1,5 +1,5 @@
 import type { CampaignDetailData } from "@/components/dashboard/CampaignDetailWorkspace";
-import type { RealAdRow } from "@/app/(dashboard)/ads/page";
+import type { RealAdRow } from "@/lib/ads/ad-row";
 import {
   buildAccountIntelligence,
   type AccountAdInput,
@@ -116,7 +116,8 @@ export function buildAccountIntelligenceFromDashboardData(
         ? ad.conversations
         : ad.results ?? ad.resultMetricValue ?? 0;
 
-    const breakdownForCount = (count: number): Record<string, number> | undefined => {
+    const breakdownForCount = (count: number | null): Record<string, number> | undefined => {
+      if (count == null) return undefined;
       if (!actionType) return undefined;
       return { [actionType]: count };
     };

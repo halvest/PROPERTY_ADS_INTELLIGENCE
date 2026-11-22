@@ -9,29 +9,30 @@ import { SidebarProvider, useSidebar } from "@/components/layout/SidebarContext"
 function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
   const { isCollapsed, toggleMobileMenu, closeMobileMenu, mobileMenuOpen } = useSidebar();
   const pathname = usePathname();
-  const studioBleed = pathname === "/studio" || pathname === "/reviews" || pathname === "/enhancer";
-  const isFluidAdsWorkspace = pathname === "/ads";
+  const isFluidWorkspace = pathname === "/ads" || pathname === "/settings";
 
   return (
-    <div className={`solar-ambient bg-zinc-50 dark:bg-zinc-950 flex flex-col ${studioBleed ? "h-dvh overflow-hidden" : "min-h-screen"}`}>
+    <div className="solar-ambient bg-zinc-50 dark:bg-zinc-950 flex min-h-screen flex-col">
       <Header onMenuToggle={toggleMobileMenu} />
       <Suspense
         fallback={
-          <aside className="hidden lg:fixed lg:inset-y-0 lg:top-14 lg:z-30 lg:flex lg:w-60 border-r border-zinc-200/80 bg-zinc-50 dark:border-zinc-800/70 dark:bg-zinc-950" />
+          <aside
+            className={`hidden lg:fixed lg:inset-y-0 lg:top-14 lg:z-30 lg:flex border-r border-zinc-200/80 bg-zinc-50 dark:border-zinc-800/70 dark:bg-zinc-950 ${
+              isCollapsed ? "lg:w-[68px]" : "lg:w-60"
+            }`}
+          />
         }
       >
         <Sidebar isOpen={mobileMenuOpen} onClose={closeMobileMenu} />
       </Suspense>
       <div
-        className={`flex flex-col flex-1 min-h-0 min-w-0 transition-[padding] duration-300 ease-in-out ${
+        className={`flex flex-col flex-1 min-h-0 min-w-0 transition-[padding] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${
           isCollapsed ? "lg:pl-[68px]" : "lg:pl-60"
         }`}
       >
         <main
           className={
-            studioBleed
-              ? "flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden p-0"
-              : isFluidAdsWorkspace
+            isFluidWorkspace
               ? "flex-1 w-full min-w-0 py-4 sm:py-6"
               : "p-4 sm:p-6 lg:p-8 flex-1 max-w-7xl w-full mx-auto min-w-0"
           }

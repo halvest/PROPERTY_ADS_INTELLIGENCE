@@ -1698,6 +1698,72 @@ export type Database = {
         }
         Relationships: []
       }
+      organization_workspaces: {
+        Row: {
+          organization_id: string
+          workspace_id: string
+          created_at: string
+        }
+        Insert: {
+          organization_id: string
+          workspace_id: string
+          created_at?: string
+        }
+        Update: {
+          organization_id?: string
+          workspace_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      meta_deletion_requests: {
+        Row: {
+          id: string
+          confirmation_code: string
+          meta_user_id: string
+          outcome: string
+          ads_tokens_revoked: number
+          whatsapp_tokens_revoked: number
+          conversations_deleted: number
+          messages_deleted: number
+          leads_deleted: number
+          webhook_events_deleted: number
+          insights_deleted: number
+          error_message: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          confirmation_code: string
+          meta_user_id: string
+          outcome: string
+          ads_tokens_revoked?: number
+          whatsapp_tokens_revoked?: number
+          conversations_deleted?: number
+          messages_deleted?: number
+          leads_deleted?: number
+          webhook_events_deleted?: number
+          insights_deleted?: number
+          error_message?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          confirmation_code?: string
+          meta_user_id?: string
+          outcome?: string
+          ads_tokens_revoked?: number
+          whatsapp_tokens_revoked?: number
+          conversations_deleted?: number
+          messages_deleted?: number
+          leads_deleted?: number
+          webhook_events_deleted?: number
+          insights_deleted?: number
+          error_message?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -2613,6 +2679,7 @@ export type Database = {
       }
       webhook_events: {
         Row: {
+          claimed_at: string | null
           error_message: string | null
           event_type: string
           id: string
@@ -2625,6 +2692,7 @@ export type Database = {
           workspace_id: string | null
         }
         Insert: {
+          claimed_at?: string | null
           error_message?: string | null
           event_type: string
           id?: string
@@ -2637,6 +2705,7 @@ export type Database = {
           workspace_id?: string | null
         }
         Update: {
+          claimed_at?: string | null
           error_message?: string | null
           event_type?: string
           id?: string

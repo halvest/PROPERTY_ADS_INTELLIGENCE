@@ -138,13 +138,13 @@ export interface RankedCampaign {
   objective: string | null;
   resultKind: string;
   resultLabel: string;
-  spend: number;
+  spend: number | null;
   results: number | null;
   cpr: number | null;
   ctr: number | null;
   cpc: number | null;
   cpm: number | null;
-  impressions: number;
+  impressions: number | null;
   reach: number | null;
   frequency: number | null;
   linkClicks?: number | null;
@@ -174,13 +174,13 @@ export interface RankedAd {
   campaignName: string;
   resultKind: string;
   resultLabel: string;
-  spend: number;
+  spend: number | null;
   results: number | null;
   cpr: number | null;
   ctr: number | null;
   cpc: number | null;
   cpm: number | null;
-  impressions: number;
+  impressions: number | null;
   reach: number | null;
   frequency: number | null;
   linkClicks?: number | null;
@@ -201,7 +201,7 @@ export interface ObjectiveKindBreakdownItem {
   kind: string;
   label: string;
   shortUnit: string;
-  spend: number;
+  spend: number | null;
   results: number;
   cpr: number | null;
   campaignCount: number;
@@ -217,7 +217,7 @@ export interface PriorityActionItem {
   action: IntelligenceAction;
   actionLabel: string;
   funnelSignal: FunnelSignal;
-  spend: number;
+  spend: number | null;
   results: number | null;
   cpr: number | null;
   summaryShort: string;
@@ -232,7 +232,7 @@ export interface AccountRecommendation {
   objectId: string;
   providerId: string;
   currentStatus: string;
-  spend: number;
+  spend: number | null;
   results: number | null;
   cpr: number | null;
   ctr: number | null;
@@ -281,11 +281,11 @@ export interface AccountIntelligenceReport {
     total_ads: number;
     active_ads: number;
     paused_ads: number;
-    total_spend: number;
+    total_spend: number | null;
     total_results: number | null;
     blended_cpr: number | null;
     average_ctr: number | null;
-    total_impressions: number;
+    total_impressions: number | null;
     total_link_clicks: number | null;
     result_label: string | null;
     results_comparable: boolean;
@@ -306,15 +306,15 @@ export interface AccountIntelligenceReport {
   ad_rankings: RankedAd[];
   priority_actions?: PriorityActionItem[];
   budget_analysis: {
-    total_spend: number;
+    total_spend: number | null;
     allocated_budget: null;
     remaining_budget: null;
     allocation_note: string;
-    top_spending_campaign: { id: string; name: string; spend: number; share_pct: number } | null;
-    top_spending_ad: { id: string; name: string; spend: number } | null;
+    top_spending_campaign: { id: string; name: string; spend: number | null; share_pct: number } | null;
+    top_spending_ad: { id: string; name: string; spend: number | null } | null;
     highest_result_campaign: { id: string; name: string; results: number } | null;
     most_efficient_campaign: { id: string; name: string; cpr: number } | null;
-    wasted_spend_campaigns: Array<{ id: string; name: string; spend: number; results: number | null }>;
+    wasted_spend_campaigns: Array<{ id: string; name: string; spend: number | null; results: number | null }>;
     spend_by_ad_category: Record<string, number>;
   };
   comparison: {
@@ -389,7 +389,8 @@ function lowerBetter(value: number | null, peers: Array<number | null>): number 
   return Math.round((worse / (comparable.length - 1)) * 100);
 }
 
-function confidenceScore(impressions: number, results: number | null, thresholds: RankingThresholds): number {
+function confidenceScore(impressions: number | null, results: number | null, thresholds: RankingThresholds): number {
+  if (impressions == null) return 0;
   const impressionPart = Math.min(100, Math.round((impressions / Math.max(thresholds.minImpressionsForWinner, 1)) * 100));
   const resultPart = Math.min(100, Math.round(((results ?? 0) / thresholds.minResultsForWinner) * 100));
   return Math.round(impressionPart * 0.55 + resultPart * 0.45);
@@ -407,12 +408,13 @@ function confidenceScore(impressions: number, results: number | null, thresholds
  * 3. Any entity with impressions < minImpressionsToJudge (500) and results < minResultsForStrong (3) is quarantined as INSUFFICIENT_DATA.
  */
 function insufficientSample(input: {
-  impressions: number;
+  impressions: number | null;
   results: number | null;
-  spend: number;
+  spend: number | null;
   target?: number | null;
   thresholds: RankingThresholds;
 }): boolean {
+  if (input.spend == null || input.impressions == null) return true;
   const results = input.results ?? 0;
   const minSpendFloor =
     input.target && input.target > 0
@@ -437,10 +439,11 @@ function insufficientSample(input: {
  */
 export function meetsWinnerSignificanceFloor(
   results: number | null,
-  spend: number,
+  spend: number | null,
   target: number | null,
   thresholds: RankingThresholds = DEFAULT_RANKING_THRESHOLDS
 ): boolean {
+  if (spend == null) return false;
   const minSpendFloor =
     target && target > 0
       ? Math.max(target * 3, thresholds.smallSampleMaxSpend)
@@ -454,7 +457,8 @@ export function meetsWinnerSignificanceFloor(
  * the score is deterministically forced to 0 across all components,
  * preventing division-by-zero (CPR = Infinity) from corrupting sort order.
  */
-function materialZeroResult(results: number | null, spend: number, impressions: number, thresholds: RankingThresholds): boolean {
+function materialZeroResult(results: number | null, spend: number | null, impressions: number | null, thresholds: RankingThresholds): boolean {
+  if (spend == null || impressions == null) return false;
   return (results ?? 0) === 0 && spend >= thresholds.materialZeroResultSpend && impressions >= thresholds.minImpressionsToJudge;
 }
 
@@ -466,12 +470,12 @@ function materialZeroResult(results: number | null, spend: number, impressions: 
  * - Forces total score to 0 when Material Waste Protocol triggers.
  */
 function buildScore(
-  metrics: { cpr: number | null; results: number | null; ctr: number | null; cpc: number | null; impressions: number; spend?: number; cvr?: number | null; linkClicks?: number | null },
+  metrics: { cpr: number | null; results: number | null; ctr: number | null; cpc: number | null; impressions: number | null; spend?: number | null; cvr?: number | null; linkClicks?: number | null },
   peers: Array<{ cpr: number | null; results: number | null; ctr: number | null; cpc: number | null }>,
   target: number | null,
   thresholds: RankingThresholds
 ): ScoreBreakdown {
-  if (materialZeroResult(metrics.results, metrics.spend ?? 0, metrics.impressions, thresholds)) {
+  if (materialZeroResult(metrics.results, metrics.spend ?? null, metrics.impressions, thresholds)) {
     return { cpr: 0, volume: 0, ctr: 0, cpc: 0, confidence: 0, total: 0 };
   }
 
@@ -504,8 +508,8 @@ function campaignCategory(
   score: number,
   insufficient: boolean,
   results: number | null,
-  spend: number,
-  impressions: number,
+  spend: number | null,
+  impressions: number | null,
   cpr: number | null,
   target: number | null,
   peerCount: number,
@@ -523,7 +527,7 @@ function campaignCategory(
   if (significantForWinner && score >= 64) return "EFFICIENT";
 
   // AUDIT PATCH 3: Entities with results between 1 and 9 are capped at STABLE or flagged as GATHERING_DATA unless spend is massive
-  const isMassiveSpend = target && target > 0 ? spend >= target * 5 : spend >= thresholds.materialZeroResultSpend * 2;
+  const isMassiveSpend = spend != null && (target && target > 0 ? spend >= target * 5 : spend >= thresholds.materialZeroResultSpend * 2);
   if (res >= 1 && res < thresholds.minResultsForWinner && !isMassiveSpend) {
     return score >= 48 ? "STABLE" : "GATHERING_DATA";
   }
@@ -537,8 +541,8 @@ function adCategory(
   score: number,
   insufficient: boolean,
   results: number | null,
-  impressions: number,
-  spend: number,
+  impressions: number | null,
+  spend: number | null,
   cpr: number | null,
   target: number | null,
   thresholds: RankingThresholds,
@@ -552,16 +556,17 @@ function adCategory(
   const significantForWinner = meetsWinnerSignificanceFloor(results, spend, target, thresholds);
   const enoughForWinner =
     significantForWinner &&
+    impressions != null &&
     impressions >= thresholds.minImpressionsForWinner &&
     (target === null || (cpr !== null && cpr <= target));
 
   if (enoughForWinner && score >= 72) return "WINNER";
-  if (significantForWinner && (results ?? 0) >= thresholds.minResultsForStrong && spend >= thresholds.smallSampleMaxSpend && score >= 60) {
+  if (significantForWinner && spend != null && (results ?? 0) >= thresholds.minResultsForStrong && spend >= thresholds.smallSampleMaxSpend && score >= 60) {
     return "STRONG_PERFORMER";
   }
 
   // AUDIT PATCH 3: Entities with results between 1 and 9 are capped at STABLE or flagged as GATHERING_DATA unless spend is massive
-  const isMassiveSpend = target && target > 0 ? spend >= target * 5 : spend >= thresholds.materialZeroResultSpend * 2;
+  const isMassiveSpend = spend != null && (target && target > 0 ? spend >= target * 5 : spend >= thresholds.materialZeroResultSpend * 2);
   if (res >= 1 && res < thresholds.minResultsForWinner && !isMassiveSpend) {
     return score >= 50 ? "STABLE" : "GATHERING_DATA";
   }
@@ -609,7 +614,8 @@ function adAction(category: AdRankCategory, paused: boolean): IntelligenceAction
   return "MONITOR";
 }
 
-function money(value: number): string {
+function money(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "tidak tersedia";
   return `Rp ${Math.round(value).toLocaleString("id-ID")}`;
 }
 
@@ -651,8 +657,8 @@ function fmtPctId(val: number | null | undefined): string {
 }
 
 function detectFunnelSignal(input: {
-  spend: number;
-  impressions: number;
+  spend: number | null;
+  impressions: number | null;
   results: number | null;
   cpr: number | null;
   ctr: number | null;
@@ -661,6 +667,7 @@ function detectFunnelSignal(input: {
   targetValue: number | null;
   thresholds: RankingThresholds;
 }): FunnelSignal {
+  if (input.spend == null || input.impressions == null) return "normal";
   const res = input.results ?? 0;
   const ctr = input.ctr;
   const cvr = input.cvr;
@@ -702,7 +709,7 @@ function buildCompactDiagnosisCopy(input: {
   funnelSignal: FunnelSignal;
   category: CampaignRankCategory | AdRankCategory;
   action: IntelligenceAction;
-  spend: number;
+  spend: number | null;
   results: number | null;
   cpr: number | null;
   ctr: number | null;
@@ -714,6 +721,13 @@ function buildCompactDiagnosisCopy(input: {
   summaryShort: string;
   actionLabel: string;
 } {
+  if (input.spend == null) {
+    return {
+      diagnosisLabel: "Data tidak tersedia",
+      summaryShort: "Metrik belanja tidak tersedia dari Meta. Tidak ada kesimpulan performa.",
+      actionLabel: "Tidak ada tindakan",
+    };
+  }
   const res = input.results ?? 0;
   const spendStr = compactRupiah(input.spend);
   const cprStr = compactRupiah(input.cpr);
@@ -983,7 +997,7 @@ export function buildAccountIntelligence(input: {
   campaigns: AccountCampaignInput[];
   ads: AccountAdInput[];
   insights: AccountInsightInput[];
-  previous?: { spend: number; results: number | null } | null;
+  previous?: { spend: number | null; results: number | null } | null;
   insightTruncated?: boolean;
   thresholds?: RankingThresholds;
 }): AccountIntelligenceReport {
@@ -1061,14 +1075,14 @@ export function buildAccountIntelligence(input: {
   const accountAgg = aggregateAdInsights(accountRows);
   const resultKinds = new Set(
     campaignMetrics
-      .filter((item) => (item.metrics.results ?? 0) > 0 || item.metrics.spend > 0)
+      .filter((item) => (item.metrics.results ?? 0) > 0 || (item.metrics.spend != null && item.metrics.spend > 0))
       .map((item) => item.metrics.resultKind)
   );
   const comparable = resultKinds.size <= 1;
   const soleKind = campaignMetrics.find((item) => (item.metrics.results ?? 0) > 0)?.metrics;
   const summedResults = campaignMetrics.reduce((sum, item) => sum + (item.metrics.results ?? 0), 0);
   const accountResults = comparable ? summedResults : null;
-  const accountCpr = comparable && accountResults && accountResults > 0
+  const accountCpr = comparable && accountResults && accountResults > 0 && accountAgg.spend != null
     ? Number((accountAgg.spend / accountResults).toFixed(2))
     : null;
   const accountLabel = comparable ? soleKind?.resultLabel ?? null : null;
@@ -1097,7 +1111,9 @@ export function buildAccountIntelligence(input: {
       const insufficient = insufficientSample({ ...item.metrics, target: target.value, thresholds });
       const sameKind = peerCampaign.filter((peer) => peer.resultKind === item.metrics.resultKind);
       const score = buildScore(item.metrics, sameKind, target.value, thresholds);
-      const share = totalSpend > 0 ? Number(((item.metrics.spend / totalSpend) * 100).toFixed(1)) : null;
+      const share = totalSpend != null && totalSpend > 0 && item.metrics.spend != null
+        ? Number(((item.metrics.spend / totalSpend) * 100).toFixed(1))
+        : null;
       const category = campaignCategory(score.total, insufficient, item.metrics.results, item.metrics.spend, item.metrics.impressions, item.metrics.cpr, target.value, sameKind.length, thresholds);
       const resolved = resolveOperationalStatus({ configuredStatus: item.campaign.status });
       const paused = resolved.effective === "PAUSED" || resolved.effective === "ARCHIVED" || resolved.effective === "DELETED";
@@ -1274,17 +1290,18 @@ export function buildAccountIntelligence(input: {
     .sort((a, b) => b.score.total - a.score.total || (b.results ?? 0) - (a.results ?? 0) || a.id.localeCompare(b.id))
     .map((item, index) => ({ ...item, rank: index + 1 }));
 
-  const topSpendCampaign = [...rankedCampaigns].sort((a, b) => b.spend - a.spend)[0];
-  const topSpendAd = [...rankedAds].sort((a, b) => b.spend - a.spend)[0];
+  const topSpendCampaign = [...rankedCampaigns].sort((a, b) => (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY))[0];
+  const topSpendAd = [...rankedAds].sort((a, b) => (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY))[0];
   const mostResults = [...rankedCampaigns].sort((a, b) => (b.results ?? 0) - (a.results ?? 0))[0];
   const efficient = [...rankedCampaigns]
     .filter((item) => item.cpr !== null && item.category !== "INSUFFICIENT_DATA")
     .sort((a, b) => (a.cpr || 0) - (b.cpr || 0))[0];
-  const wasted = rankedCampaigns.filter((item) => item.spend >= thresholds.materialZeroResultSpend && (item.results ?? 0) === 0);
+  const wasted = rankedCampaigns.filter((item) => item.spend != null && item.spend >= thresholds.materialZeroResultSpend && (item.results ?? 0) === 0);
 
   const spendByCategory: Record<string, number> = {};
   for (const ad of rankedAds) {
-    spendByCategory[ad.category] = (spendByCategory[ad.category] || 0) + ad.spend;
+    if (typeof ad.spend !== "number") continue;
+    spendByCategory[ad.category] = (spendByCategory[ad.category] ?? 0) + ad.spend;
   }
 
   const insights: AccountIntelligenceReport["key_insights"] = [];
@@ -1292,10 +1309,10 @@ export function buildAccountIntelligence(input: {
     insights.push({
       object_id: efficient.id,
       object_name: efficient.name,
-      text: `${efficient.name} (${efficient.providerId}) punya CPR terendah yang layak dibanding di antara campaign berdata cukup: ${money(efficient.cpr || 0)}.`,
+      text: `${efficient.name} (${efficient.providerId}) punya CPR terendah yang layak dibanding di antara campaign berdata cukup: ${efficient.cpr != null ? money(efficient.cpr) : "tidak tersedia"}.`,
     });
   }
-  if (topSpendCampaign && totalSpend > 0) {
+  if (topSpendCampaign && totalSpend != null && totalSpend > 0) {
     insights.push({
       object_id: topSpendCampaign.id,
       object_name: topSpendCampaign.name,
@@ -1332,7 +1349,7 @@ export function buildAccountIntelligence(input: {
     .map((item): AccountRecommendation => {
       const level = "campaignId" in item ? "ad" as const : "campaign" as const;
       const priority =
-        item.action === "REDUCE_BUDGET" || (item.action === "PAUSE" && item.spend >= thresholds.materialZeroResultSpend)
+        item.action === "REDUCE_BUDGET" || (item.action === "PAUSE" && item.spend != null && item.spend >= thresholds.materialZeroResultSpend)
           ? "CRITICAL"
           : item.action === "SCALE" || item.action === "PAUSE" || item.action === "REACTIVATION_CANDIDATE"
             ? "HIGH"
@@ -1368,7 +1385,7 @@ export function buildAccountIntelligence(input: {
       };
     })
     .filter((item) => item.action !== "NO_ACTION" && item.action !== "MAINTAIN")
-    .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || b.spend - a.spend);
+    .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY));
   const historicalActions = new Set<IntelligenceAction>(["KEEP_PAUSED", "HISTORICAL_REVIEW", "REACTIVATION_CANDIDATE", "HISTORICAL_REFERENCE", "STATUS_UNKNOWN"]);
   const historical_reviews = rankedRecommendations.filter((item) => historicalActions.has(item.action)).slice(0, 5);
   const recommendations = rankedRecommendations.filter((item) => !historicalActions.has(item.action)).slice(0, 5);
@@ -1386,18 +1403,20 @@ export function buildAccountIntelligence(input: {
       kind: c.resultKind,
       label: c.resultLabel,
       shortUnit: shortResultUnitLabel(c.resultKind),
-      spend: 0,
+      spend: null,
       results: 0,
       cpr: null,
       campaignCount: 0,
     };
-    existing.spend = Math.round((existing.spend + c.spend) * 100) / 100;
+    if (typeof c.spend === "number") {
+      existing.spend = Math.round(((existing.spend ?? 0) + c.spend) * 100) / 100;
+    }
     existing.results += c.results ?? 0;
     existing.campaignCount += 1;
-    existing.cpr = existing.results > 0 ? Number((existing.spend / existing.results).toFixed(2)) : null;
+    existing.cpr = existing.results > 0 && existing.spend != null ? Number((existing.spend / existing.results).toFixed(2)) : null;
     kindBuckets.set(c.resultKind, existing);
   }
-  const resultBreakdownByKind = Array.from(kindBuckets.values()).sort((a, b) => b.spend - a.spend);
+  const resultBreakdownByKind = Array.from(kindBuckets.values()).sort((a, b) => (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY));
 
   // Build "Prioritas Tindakan" (strictly ACTIVE entities, ordered by financial impact)
   // Order: 1) Spend Tanpa Hasil / Material Waste & Pause/Reduce Budget (largest spend first)
@@ -1447,7 +1466,7 @@ export function buildAccountIntelligence(input: {
     });
   }
 
-  priorityCandidates.sort((a, b) => a.sortBucket - b.sortBucket || b.spend - a.spend);
+  priorityCandidates.sort((a, b) => a.sortBucket - b.sortBucket || (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY));
   const priorityActions: PriorityActionItem[] = priorityCandidates
     .slice(0, 5)
     .map(({ sortBucket: _bucket, ...rest }) => {

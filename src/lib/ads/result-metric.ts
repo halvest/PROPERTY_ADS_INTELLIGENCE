@@ -33,45 +33,44 @@ export function resolveAdResultMetric(
   input: AdResultMetricInput,
   locale: "id" | "en" = "id"
 ): ResolvedAdResultMetric {
-  const spend = Math.max(0, finite(input.spend) ?? 0);
-  const impressions = Math.max(0, finite(input.impressions) ?? 0);
-  const conversions = Math.max(0, finite(input.conversions) ?? 0);
-  const linkClicks = Math.max(0, finite(input.linkClicks) ?? 0);
-  const clicks = Math.max(0, finite(input.clicks) ?? 0);
-  const hasActivity = spend > 0 || impressions > 0 || linkClicks > 0 || clicks > 0 || conversions > 0;
+  const spend = finite(input.spend);
+  const impressions = finite(input.impressions);
+  const conversions = finite(input.conversions);
+  const linkClicks = finite(input.linkClicks);
+  const clicks = finite(input.clicks);
 
-  if (conversions > 0) {
+  if (conversions !== null && conversions > 0) {
     return {
       value: conversions,
       label: conversionLabel(input.objective, locale),
-      costPerResult: Math.round(spend / conversions),
+      costPerResult: spend !== null ? Math.round(spend / conversions) : null,
       kind: "conversion",
       unitLabel: locale === "en" ? "result" : "hasil",
     };
   }
-  if (linkClicks > 0) {
+  if (linkClicks !== null && linkClicks > 0) {
     return {
       value: linkClicks,
       label: locale === "en" ? "Link Clicks" : "Klik Tujuan",
-      costPerResult: Math.round(spend / linkClicks),
+      costPerResult: spend !== null ? Math.round(spend / linkClicks) : null,
       kind: "link_click",
       unitLabel: locale === "en" ? "click" : "klik",
     };
   }
-  if (clicks > 0) {
+  if (clicks !== null && clicks > 0) {
     return {
       value: clicks,
       label: locale === "en" ? "Interactions" : "Interaksi",
-      costPerResult: Math.round(spend / clicks),
+      costPerResult: spend !== null ? Math.round(spend / clicks) : null,
       kind: "interaction",
       unitLabel: locale === "en" ? "interaction" : "interaksi",
     };
   }
-  if (impressions > 0 || spend > 0) {
+  if ((impressions !== null && impressions > 0) || (spend !== null && spend > 0)) {
     return {
       value: 0,
       label: locale === "en" ? "Results" : "Hasil",
-      costPerResult: 0,
+      costPerResult: null,
       kind: "zero",
       unitLabel: locale === "en" ? "result" : "hasil",
     };
@@ -80,7 +79,7 @@ export function resolveAdResultMetric(
     value: null,
     label: locale === "en" ? "No data yet" : "Belum ada data",
     costPerResult: null,
-    kind: hasActivity ? "zero" : "unavailable",
+    kind: "unavailable",
     unitLabel: locale === "en" ? "result" : "hasil",
   };
 }
@@ -259,6 +258,39 @@ const META_OBJECTIVE_LABELS_EN: Record<string, string> = {
   OUTCOME_AWARENESS: "Objective: Brand Reach",
   REACH: "Objective: Brand Reach",
 };
+
+const OBJECTIVE_FILTER_GROUPS: Record<string, string> = {
+  OUTCOME_ENGAGEMENT: "engagement",
+  MESSAGES: "engagement",
+  OUTCOME_LEADS: "leads",
+  LEAD_GENERATION: "leads",
+  OUTCOME_SALES: "sales",
+  CONVERSIONS: "sales",
+  OUTCOME_TRAFFIC: "traffic",
+  LINK_CLICKS: "traffic",
+  OUTCOME_AWARENESS: "awareness",
+  REACH: "awareness",
+};
+
+const OBJECTIVE_FILTER_SAMPLE: Record<string, string> = {
+  engagement: "MESSAGES",
+  leads: "OUTCOME_LEADS",
+  sales: "OUTCOME_SALES",
+  traffic: "LINK_CLICKS",
+  awareness: "REACH",
+};
+
+/** Stable filter id. Legacy Meta objectives that share a label stay one option. */
+export function objectiveFilterKey(value?: string | null): string | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  return OBJECTIVE_FILTER_GROUPS[upper] || upper;
+}
+
+export function objectiveFilterLabel(key: string, locale: "id" | "en" = "id") {
+  return translateMetaTerm(OBJECTIVE_FILTER_SAMPLE[key] || key, locale);
+}
 
 export function translateMetaTerm(value?: string | null, locale: "id" | "en" = "id") {
   const raw = value?.trim();

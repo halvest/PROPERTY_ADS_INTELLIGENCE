@@ -42,7 +42,7 @@ describe("Reach null handling (final fix)", () => {
 
   it("the Ads page no longer coerces totalReach to 0 for display", () => {
     const page = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../../src/app/(dashboard)/ads/page.tsx"),
+      path.resolve(import.meta.dirname, "../../src/components/ads/AdsWorkspace.tsx"),
       "utf-8"
     );
     expect(page).not.toContain("totalReach ?? 0");
@@ -51,7 +51,7 @@ describe("Reach null handling (final fix)", () => {
 
   it("the reach strip is labelled as unique reach with the multi-day tooltip", () => {
     const page = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../../src/app/(dashboard)/ads/page.tsx"),
+      path.resolve(import.meta.dirname, "../../src/components/ads/AdsWorkspace.tsx"),
       "utf-8"
     );
     expect(page).not.toContain("Reach harian (akumulasi)");

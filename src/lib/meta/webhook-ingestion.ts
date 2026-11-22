@@ -3,6 +3,17 @@ import "server-only";
 import crypto from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { maskPhoneNumber } from "@/lib/meta/webhook-security";
+import { canAcceptInboundMessages } from "@/lib/meta/connection-lifecycle";
+import {
+  deadLetterRequeuePatch,
+  decideWebhookRedelivery,
+  formatWebhookFailure,
+  readWebhookAttempt,
+  WEBHOOK_PROCESSING_LEASE_MS,
+  webhookProcessingAgeMs,
+} from "@/lib/meta/webhook-redelivery";
+import { linkVerifiedMetaAd, type TenantAdRecord } from "@/lib/attribution/ctwa-ad-link";
+import { hashPhoneNumber } from "@/lib/security/phone-hash";
 import type { Json } from "@/types/database.types";
 
 type WebhookEventType =
@@ -228,6 +239,103 @@ function pickLatestIso(a: string | null | undefined, b: string): string {
   return bMs >= aMs ? b : a;
 }
 
+type WebhookAdmin = ReturnType<typeof createAdminClient>;
+
+function claimedRow(data: unknown): boolean {
+  if (Array.isArray(data)) return data.length > 0;
+  return Boolean(data && typeof data === "object");
+}
+
+async function reclaimStaleWebhookProcessing(admin: WebhookAdmin): Promise<void> {
+  const cutoff = new Date(Date.now() - WEBHOOK_PROCESSING_LEASE_MS).toISOString();
+  const patch = { status: "retrying" as const, processed_at: null };
+  await admin.from("webhook_events").update(patch).eq("status", "processing").lt("claimed_at", cutoff);
+  await admin
+    .from("webhook_events")
+    .update(patch)
+    .eq("status", "processing")
+    .is("claimed_at", null)
+    .lt("received_at", cutoff);
+}
+
+async function claimWebhookEvent(
+  admin: WebhookAdmin,
+  eventId: string,
+  status: string | null | undefined
+): Promise<boolean> {
+  const patch = {
+    status: "processing" as const,
+    claimed_at: new Date().toISOString(),
+    processed_at: null,
+  };
+  if (status === "processing") {
+    const cutoff = new Date(Date.now() - WEBHOOK_PROCESSING_LEASE_MS).toISOString();
+    const staleClaim = await admin
+      .from("webhook_events")
+      .update(patch)
+      .eq("id", eventId)
+      .eq("status", "processing")
+      .lt("claimed_at", cutoff)
+      .select("id");
+    if (claimedRow(staleClaim.data)) return true;
+    const legacyClaim = await admin
+      .from("webhook_events")
+      .update(patch)
+      .eq("id", eventId)
+      .eq("status", "processing")
+      .is("claimed_at", null)
+      .lt("received_at", cutoff)
+      .select("id");
+    return claimedRow(legacyClaim.data);
+  }
+  const claimed = await admin
+    .from("webhook_events")
+    .update(patch)
+    .eq("id", eventId)
+    .in("status", ["pending", "failed", "retrying"])
+    .select("id");
+  return claimedRow(claimed.data);
+}
+
+export async function requeueDeadLetterWebhookEvent(eventId: string): Promise<boolean> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("webhook_events")
+    .update(deadLetterRequeuePatch())
+    .eq("id", eventId)
+    .eq("status", "dead_letter")
+    .select("id");
+  if (error) return false;
+  return claimedRow(data);
+}
+
+export async function replayRetryingWebhookEvents(limit = 10): Promise<number> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("webhook_events")
+    .select("meta_event_id, payload")
+    .eq("status", "retrying")
+    .limit(limit);
+  const rows = Array.isArray(data) ? data : [];
+  let replayed = 0;
+  for (const row of rows) {
+    const change = row.payload;
+    if (!change || typeof change !== "object" || Array.isArray(change)) continue;
+    if ("skipped" in change) continue;
+    const entryId = String(row.meta_event_id ?? "").split(":")[0] || "unknown_entry";
+    try {
+      await ingestWhatsAppWebhookPayload({
+        object: "whatsapp_business_account",
+        entry: [{ id: entryId, changes: [change] }],
+      });
+      replayed += 1;
+    } catch {
+      // The event row keeps the failure and the attempt count.
+    }
+  }
+  return replayed;
+}
+
 export async function ingestWhatsAppWebhookPayload(
   payload: unknown
 ): Promise<WebhookIngestionSummary> {
@@ -250,6 +358,7 @@ export async function ingestWhatsAppWebhookPayload(
   }
 
   const admin = createAdminClient();
+  await reclaimStaleWebhookProcessing(admin);
 
   for (const entry of root.entry) {
     const entryId = String(entry?.id || "unknown_entry");
@@ -268,13 +377,27 @@ export async function ingestWhatsAppWebhookPayload(
       // 1. Lookup workspace connection by phone_number_id
       const { data: conn } = await admin
         .from("whatsapp_connections")
-        .select("id, workspace_id, sales_member_id, connection_status")
+        .select("id, workspace_id, organization_id, sales_member_id, connection_status")
         .eq("phone_number_id", phoneNumberId)
         .maybeSingle();
 
       const workspaceId = conn?.workspace_id ?? null;
+      const authorized = Boolean(
+        conn && workspaceId && canAcceptInboundMessages(conn.connection_status)
+      );
+      let organizationId = conn?.organization_id ?? null;
+      if (authorized && !organizationId && workspaceId) {
+        const { data: mappings } = await admin
+          .from("organization_workspaces")
+          .select("organization_id")
+          .eq("workspace_id", workspaceId);
+        if (mappings?.length === 1) organizationId = mappings[0].organization_id;
+      }
 
-      // 2. Log webhook_events idempotently via UNIQUE(meta_event_id)
+      const storedPayload = authorized
+        ? (change as unknown as Json)
+        : ({ field: change.field ?? null, skipped: "connection_not_authorized" } as Json);
+
       const { data: loggedEvent, error: logErr } = await admin
         .from("webhook_events")
         .insert({
@@ -282,25 +405,66 @@ export async function ingestWhatsAppWebhookPayload(
           phone_number_id: phoneNumberId,
           meta_event_id: metaEventId,
           event_type: eventType,
-          payload: change as unknown as Json,
-          status: workspaceId && conn ? "processing" : "processed",
-          processed_at: workspaceId && conn ? null : new Date().toISOString(),
+          payload: storedPayload,
+          status: authorized ? "processing" : "processed",
+          claimed_at: authorized ? new Date().toISOString() : null,
+          processed_at: authorized ? null : new Date().toISOString(),
+          error_message: authorized ? null : "connection_not_authorized",
         })
         .select("id")
         .single();
 
+      let eventRowId = loggedEvent?.id ?? null;
+
       if (logErr) {
-        if (isUniqueViolation(logErr)) {
+        if (!isUniqueViolation(logErr)) {
+          throw new Error(`Failed to log webhook_event: ${logErr.message}`);
+        }
+        const { data: existing } = await admin
+          .from("webhook_events")
+          .select("id, status, error_message, received_at, claimed_at")
+          .eq("meta_event_id", metaEventId)
+          .maybeSingle();
+        const attempt = readWebhookAttempt(existing?.error_message);
+        const processingAgeMs = webhookProcessingAgeMs({
+          claimedAt: existing?.claimed_at,
+          receivedAt: existing?.received_at,
+        });
+        const decision = decideWebhookRedelivery({
+          status: existing?.status,
+          attempt,
+          processingAgeMs,
+        });
+        if (decision === "skip_duplicate" || !existing?.id) {
           summary.duplicatesSkipped += 1;
           continue;
         }
-        throw new Error(`Failed to log webhook_event: ${logErr.message}`);
+        if (decision === "dead_letter") {
+          await admin
+            .from("webhook_events")
+            .update({
+              status: "dead_letter",
+              error_message: formatWebhookFailure(attempt, "attempt cap reached"),
+              processed_at: new Date().toISOString(),
+            })
+            .eq("id", existing.id);
+          continue;
+        }
+        const claimed = await claimWebhookEvent(admin, existing.id, existing.status);
+        if (!claimed) {
+          summary.duplicatesSkipped += 1;
+          continue;
+        }
+        eventRowId = existing.id;
+      }
+
+      if (!eventRowId) {
+        throw new Error("Webhook event was not persisted.");
       }
 
       summary.eventsLogged += 1;
 
-      // Unknown phone_number_id: acknowledged cleanly to stop Meta retry storms
-      if (!conn || !workspaceId) {
+      if (!authorized || !conn || !workspaceId) {
         continue;
       }
 
@@ -332,15 +496,35 @@ export async function ingestWhatsAppWebhookPayload(
                   ? "ctwa"
                   : existingConv?.source_type || "organic";
 
+            let verifiedLink: { adId: string; campaignId: string } | null = null;
+            if (organizationId && referral?.source_id) {
+              const { data: adRows } = await admin
+                .from("ads")
+                .select("id, campaign_id, organization_id, provider_ad_id")
+                .eq("organization_id", organizationId)
+                .eq("provider_ad_id", referral.source_id.trim());
+              const link = linkVerifiedMetaAd(
+                referral.source_id,
+                (adRows ?? []) as TenantAdRecord[],
+                organizationId
+              );
+              if (link) verifiedLink = { adId: link.adId, campaignId: link.campaignId };
+            }
+
             const { data: conv, error: convErr } = await admin
               .from("conversations")
               .upsert(
                 {
                   workspace_id: workspaceId,
+                  organization_id: organizationId,
                   connection_id: conn.id,
                   customer_wa_id: customerWaId,
                   customer_name: customerName || existingConv?.customer_name || null,
                   source_type: nextSourceType,
+                  channel: "whatsapp",
+                  ad_id: verifiedLink?.adId ?? null,
+                  campaign_id: verifiedLink?.campaignId ?? null,
+                  attribution_status: verifiedLink ? "verified" : "unknown",
                   first_message_at: existingConv?.first_message_at ?? sentAt,
                   last_message_at: pickLatestIso(existingConv?.last_message_at, sentAt),
                   last_prospect_message_at: sentAt,
@@ -353,6 +537,29 @@ export async function ingestWhatsAppWebhookPayload(
 
             if (convErr || !conv) {
               throw new Error(`Failed to upsert conversation: ${convErr?.message || "Unknown"}`);
+            }
+
+            if (organizationId) {
+              const phoneHash = hashPhoneNumber(customerWaId);
+              const { data: contactRows } = await admin
+                .from("contacts")
+                .select("id")
+                .eq("organization_id", organizationId)
+                .eq("phone_hash", phoneHash);
+              if (contactRows?.length === 1) {
+                const { data: crmRows } = await admin
+                  .from("conversations")
+                  .select("id")
+                  .eq("organization_id", organizationId)
+                  .eq("contact_id", contactRows[0].id)
+                  .eq("channel", "crm_upload");
+                if (crmRows?.length === 1) {
+                  await admin
+                    .from("conversations")
+                    .update({ attribution_evidence: { crm_conversation_id: crmRows[0].id } })
+                    .eq("id", conv.id);
+                }
+              }
             }
 
             // Insert message idempotently (unique wamid)
@@ -419,7 +626,7 @@ export async function ingestWhatsAppWebhookPayload(
                     assigned_sales_id: conn.sales_member_id ?? null,
                     customer_name: customerName || existingConv?.customer_name || null,
                     customer_phone_masked: maskPhoneNumber(customerWaId),
-                    lead_temperature: "cold",
+                    lead_temperature: "unassessed",
                     pipeline_stage: "new_inquiry",
                   })
                   .select("id")
@@ -438,7 +645,7 @@ export async function ingestWhatsAppWebhookPayload(
                     from_stage: null,
                     to_stage: "new_inquiry",
                     from_temperature: null,
-                    to_temperature: "cold",
+                    to_temperature: "unassessed",
                     reason: "CTWA conversation detected",
                   });
                 }
@@ -576,17 +783,29 @@ export async function ingestWhatsAppWebhookPayload(
             status: "processed",
             processed_at: new Date().toISOString(),
           })
-          .eq("id", loggedEvent.id);
+          .eq("id", eventRowId);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Webhook processing failed";
+        const { data: current } = await admin
+          .from("webhook_events")
+          .select("error_message")
+          .eq("id", eventRowId)
+          .maybeSingle();
+        const nextAttempt = readWebhookAttempt(current?.error_message) + 1;
+        const decision = decideWebhookRedelivery({
+          status: "failed",
+          attempt: nextAttempt,
+          processingAgeMs: null,
+        });
         await admin
           .from("webhook_events")
           .update({
-            status: "failed",
-            error_message: message.slice(0, 500),
+            status: decision === "dead_letter" ? "dead_letter" : "failed",
+            error_message: formatWebhookFailure(nextAttempt, message),
             processed_at: new Date().toISOString(),
           })
-          .eq("id", loggedEvent.id);
+          .eq("id", eventRowId);
+        if (decision === "dead_letter") continue;
         throw err;
       }
     }

@@ -1,7 +1,10 @@
 import "server-only";
 
 import {
+  AD_EFFECTIVE_STATUSES,
+  ADSET_EFFECTIVE_STATUSES,
   ALL_EFFECTIVE_STATUSES,
+  CAMPAIGN_EFFECTIVE_STATUSES,
   MarketingApiError,
   type MetaAdAccountResponse,
   type MetaCampaignResponse,
@@ -20,7 +23,7 @@ import {
   sanitizeMarketingLog,
 } from "./config";
 
-export { ALL_EFFECTIVE_STATUSES };
+export { AD_EFFECTIVE_STATUSES, ADSET_EFFECTIVE_STATUSES, ALL_EFFECTIVE_STATUSES, CAMPAIGN_EFFECTIVE_STATUSES };
 
 export interface MetaMarketingClientOptions {
   accessToken?: string;
@@ -94,7 +97,7 @@ export class MetaMarketingApiClient {
     // not flow toward any caller that serializes pages to a browser.
     const fields = "id,name,category,tasks,instagram_business_account{id,username,name,profile_picture_url}";
     const endpoint = `/me/accounts?fields=${fields}&limit=50`;
-    const pages = await this.fetchAllPages<MetaFacebookPage>(endpoint);
+    const pages = await this.fetchAllPages<MetaFacebookPage>(endpoint, 8);
     return pages.map((p) => ({ ...p, access_token: undefined }));
   }
 
@@ -121,7 +124,7 @@ export class MetaMarketingApiClient {
     this.lastFetchTruncated = false;
     const fields = "id,account_id,name,currency,timezone_name,account_status,business_name";
     const endpoint = `/me/adaccounts?fields=${fields}&limit=50`;
-    const accounts = await this.fetchAllPages<MetaAdAccountResponse>(endpoint, 100);
+    const accounts = await this.fetchAllPages<MetaAdAccountResponse>(endpoint, 8);
     if (this.lastFetchTruncated) {
       throw new MarketingApiError({
         code: "PAGINATION_ERROR",
@@ -146,9 +149,8 @@ export class MetaMarketingApiClient {
   }
 
   /**
-   * Fetches all campaigns across all effective statuses for an Ad Account using cursor pagination.
-   * Explicitly includes ALL_EFFECTIVE_STATUSES so paused, archived, deleted, and review-pending
-   * campaigns are never dropped by Meta's default filter.
+   * Fetches campaigns for an ad account using cursor pagination.
+   * The status filter is limited to values this edge accepts, so the first request succeeds.
    * Endpoint: GET /v27.0/act_<ID>/campaigns
    */
   async getCampaigns(targetAdAccountId?: string): Promise<MetaCampaignResponse[]> {
@@ -158,7 +160,7 @@ export class MetaMarketingApiClient {
     const fields = "id,name,status,effective_status,objective,created_time,updated_time";
     const params = new URLSearchParams({
       fields,
-      effective_status: JSON.stringify(ALL_EFFECTIVE_STATUSES),
+      effective_status: JSON.stringify(CAMPAIGN_EFFECTIVE_STATUSES),
       limit: "100",
     });
     const endpoint = `/${accountId}/campaigns?${params.toString()}`;
@@ -166,31 +168,17 @@ export class MetaMarketingApiClient {
       return await this.fetchAllPages<MetaCampaignResponse>(endpoint, 200);
     } catch (err) {
       if (err instanceof MarketingApiError && err.metaErrorCode === 100) {
-        const fallbackParams = new URLSearchParams({
-          fields,
-          effective_status: JSON.stringify(["ACTIVE", "PAUSED", "ARCHIVED", "IN_PROCESS", "WITH_ISSUES"]),
-          limit: "100",
-        });
-        try {
-          return await this.fetchAllPages<MetaCampaignResponse>(
-            `/${accountId}/campaigns?${fallbackParams.toString()}`,
-            200
-          );
-        } catch {
-          return this.fetchAllPages<MetaCampaignResponse>(
-            `/${accountId}/campaigns?fields=${fields}&limit=100`,
-            200
-          );
-        }
+        return this.fetchAllPages<MetaCampaignResponse>(
+          `/${accountId}/campaigns?fields=${fields}&limit=100`,
+          200
+        );
       }
       throw err;
     }
   }
 
   /**
-   * Fetches all AdSets across all effective statuses for an Ad Account using cursor pagination.
-   * Explicitly includes ALL_EFFECTIVE_STATUSES so paused, archived, deleted, and parent-paused
-   * adsets are never omitted.
+   * Fetches ad sets for an ad account using cursor pagination.
    * Endpoint: GET /v27.0/act_<ID>/adsets
    */
   async getAdSets(targetAdAccountId?: string): Promise<MetaAdSetResponse[]> {
@@ -200,7 +188,7 @@ export class MetaMarketingApiClient {
     const fields = "id,name,status,effective_status,campaign_id,daily_budget,lifetime_budget,optimization_goal,created_time,updated_time";
     const params = new URLSearchParams({
       fields,
-      effective_status: JSON.stringify(ALL_EFFECTIVE_STATUSES),
+      effective_status: JSON.stringify(ADSET_EFFECTIVE_STATUSES),
       limit: "100",
     });
     const endpoint = `/${accountId}/adsets?${params.toString()}`;
@@ -208,38 +196,17 @@ export class MetaMarketingApiClient {
       return await this.fetchAllPages<MetaAdSetResponse>(endpoint, 200);
     } catch (err) {
       if (err instanceof MarketingApiError && err.metaErrorCode === 100) {
-        const fallbackParams = new URLSearchParams({
-          fields,
-          effective_status: JSON.stringify([
-            "ACTIVE",
-            "PAUSED",
-            "ARCHIVED",
-            "CAMPAIGN_PAUSED",
-            "IN_PROCESS",
-            "WITH_ISSUES",
-          ]),
-          limit: "100",
-        });
-        try {
-          return await this.fetchAllPages<MetaAdSetResponse>(
-            `/${accountId}/adsets?${fallbackParams.toString()}`,
-            200
-          );
-        } catch {
-          return this.fetchAllPages<MetaAdSetResponse>(
-            `/${accountId}/adsets?fields=${fields}&limit=100`,
-            200
-          );
-        }
+        return this.fetchAllPages<MetaAdSetResponse>(
+          `/${accountId}/adsets?fields=${fields}&limit=100`,
+          200
+        );
       }
       throw err;
     }
   }
 
   /**
-   * Fetches all Ads across all effective statuses for an Ad Account using cursor pagination.
-   * Explicitly passes ALL_EFFECTIVE_STATUSES so paused, campaign-paused, adset-paused,
-   * archived, and deleted ads with historical spend are always synchronized.
+   * Fetches ads for an ad account using cursor pagination.
    * Endpoint: GET /v27.0/act_<ID>/ads
    */
   async getAds(targetAdAccountId?: string): Promise<MetaAdResponse[]> {
@@ -249,7 +216,7 @@ export class MetaMarketingApiClient {
     const fields = "id,name,status,effective_status,campaign_id,adset_id,created_time,updated_time";
     const params = new URLSearchParams({
       fields,
-      effective_status: JSON.stringify(ALL_EFFECTIVE_STATUSES),
+      effective_status: JSON.stringify(AD_EFFECTIVE_STATUSES),
       limit: "100",
     });
     const endpoint = `/${accountId}/ads?${params.toString()}`;
@@ -257,31 +224,10 @@ export class MetaMarketingApiClient {
       return await this.fetchAllPages<MetaAdResponse>(endpoint, 200);
     } catch (err) {
       if (err instanceof MarketingApiError && err.metaErrorCode === 100) {
-        const fallbackParams = new URLSearchParams({
-          fields,
-          effective_status: JSON.stringify([
-            "ACTIVE",
-            "PAUSED",
-            "ARCHIVED",
-            "CAMPAIGN_PAUSED",
-            "ADSET_PAUSED",
-            "PENDING_REVIEW",
-            "DISAPPROVED",
-            "PREAPPROVED",
-          ]),
-          limit: "100",
-        });
-        try {
-          return await this.fetchAllPages<MetaAdResponse>(
-            `/${accountId}/ads?${fallbackParams.toString()}`,
-            200
-          );
-        } catch {
-          return this.fetchAllPages<MetaAdResponse>(
-            `/${accountId}/ads?fields=${fields}&limit=100`,
-            200
-          );
-        }
+        return this.fetchAllPages<MetaAdResponse>(
+          `/${accountId}/ads?fields=${fields}&limit=100`,
+          200
+        );
       }
       throw err;
     }
@@ -497,6 +443,8 @@ export class MetaMarketingApiClient {
         break;
       }
 
+      // A cursor on its own is not another page. Graph includes cursors.after
+      // on the last page; paging.next is what means more rows exist.
       const afterCursor = response?.paging?.cursors?.after;
       const nextUrl = response?.paging?.next;
 
@@ -505,9 +453,6 @@ export class MetaMarketingApiClient {
         hasNextPage = true;
       } else if (nextUrl) {
         currentEndpoint = nextUrl;
-        hasNextPage = true;
-      } else if (afterCursor) {
-        currentEndpoint = this.withAfterCursor(initialEndpoint, afterCursor);
         hasNextPage = true;
       } else {
         currentEndpoint = null;

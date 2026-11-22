@@ -22,6 +22,7 @@ import {
 } from "@/lib/ai/ctwa-analysis/dynamic-context";
 import { PAGE_ANALYST_SYSTEM_PROMPT } from "@/lib/ai/ctwa-analysis/prompt";
 import { buildLlmUserPayload, serializeLlmUserPayload, type LlmPayloadEntity } from "@/lib/ai/llm-user-payload";
+import { addReported, finiteNumber } from "@/lib/metrics/nullable-number";
 import {
   aggregateAdInsights,
   buildZeroFilledDailyTrends,
@@ -87,12 +88,12 @@ export interface PerformanceAnalysisOutput {
   metrics: Array<{
     key: "spend" | "results" | "cpr" | "ctr";
     label: string;
-    value: number;
+    value: number | null;
     display: string;
     delta_pct: number | null;
     delta_note: string | null;
     vs_target: "better" | "on_target" | "worse" | "no_target";
-    trend_7d: number[] | null;
+    trend_7d: Array<number | null> | null;
   }>;
   extra_metrics: Array<{
     label: string;
@@ -141,17 +142,17 @@ export interface RankedCampaignAdSetItem {
   status: "ACTIVE" | "PAUSED";
   adsCount: number;
   activeAdsCount: number;
-  spend: number;
-  spendSharePct: number;
-  results: number;
+  spend: number | null;
+  spendSharePct: number | null;
+  results: number | null;
   resultLabel: string;
   cpr: number | null;
   targetCpr: number | null;
   cprVsTargetPct: number | null;
   ctr: number | null;
   cpc: number | null;
-  impressions: number;
-  linkClicks: number;
+  impressions: number | null;
+  linkClicks: number | null;
   score: number;
   category: EfficiencyCategoryCode;
   efficiencyLabel: string;
@@ -168,17 +169,17 @@ export interface RankedCampaignAdItem {
   adsetName: string;
   status: "ACTIVE" | "PAUSED" | "ARCHIVED" | "DELETED";
   effectiveStatus: "ACTIVE" | "PAUSED" | "ARCHIVED" | "DELETED" | "UNKNOWN";
-  spend: number;
-  spendSharePct: number;
-  results: number;
+  spend: number | null;
+  spendSharePct: number | null;
+  results: number | null;
   resultLabel: string;
   cpr: number | null;
   targetCpr: number | null;
   cprVsTargetPct: number | null;
   ctr: number | null;
   cpc: number | null;
-  impressions: number;
-  linkClicks: number;
+  impressions: number | null;
+  linkClicks: number | null;
   score: number;
   category: EfficiencyCategoryCode;
   efficiencyLabel: string;
@@ -431,17 +432,17 @@ function buildDeterministicAnalysis(params: {
   dateRange: { since: string; until: string };
   durationDays: number;
   timezone: string;
-  spend: number;
-  results: number;
+  spend: number | null;
+  results: number | null;
   costPerResult: number | null;
-  linkClicks: number;
+  linkClicks: number | null;
   linkCtr: number | null;
   linkCpc: number | null;
   cpm: number | null;
-  impressions: number;
+  impressions: number | null;
   reach: number | null;
   frequency: number | null;
-  allClicks: number;
+  allClicks: number | null;
   allCtr: number | null;
   allCpc: number | null;
   prevSpend: number | null;
@@ -450,10 +451,10 @@ function buildDeterministicAnalysis(params: {
   prevLinkCtr: number | null;
   targetCpr: number | null;
   trends: {
-    spend: number[];
-    results: number[];
-    cpr: number[];
-    ctr: number[];
+    spend: Array<number | null>;
+    results: Array<number | null>;
+    cpr: Array<number | null>;
+    ctr: Array<number | null>;
   };
   locale?: "id" | "en";
   entityStatus?: EntityDeliveryStatus;
@@ -608,7 +609,7 @@ function buildDeterministicAnalysis(params: {
       key: "results",
       label: resultLabel,
       value: results,
-      display: results.toLocaleString("id-ID"),
+      display: results == null ? "Tidak tersedia" : results.toLocaleString("id-ID"),
       delta_pct: evalResult.comparisons.results.percentageDelta,
       delta_note: evalResult.comparisons.results.displayDelta,
       vs_target: "no_target",
@@ -617,7 +618,7 @@ function buildDeterministicAnalysis(params: {
     {
       key: "cpr",
       label: "Biaya per Hasil (CPR)",
-      value: evalResult.actualCpr ?? 0,
+      value: evalResult.actualCpr,
       display: evalResult.actualCpr !== null ? formatRp(evalResult.actualCpr, loc) : (loc === "id" ? "Tidak tersedia" : "Unavailable"),
       delta_pct: evalResult.comparisons.cpr.percentageDelta,
       delta_note: evalResult.comparisons.cpr.displayDelta,
@@ -627,7 +628,7 @@ function buildDeterministicAnalysis(params: {
     {
       key: "ctr",
       label: "CTR Tautan",
-      value: linkCtr ?? 0,
+      value: linkCtr,
       display: formatPct(linkCtr, loc),
       delta_pct: ctrDeltaPct,
       delta_note: ctrDeltaNote,
@@ -660,12 +661,12 @@ function buildDeterministicAnalysis(params: {
     },
     {
       label: "Total Tayangan",
-      display: impressions.toLocaleString("id-ID"),
+      display: impressions == null ? "Tidak tersedia" : impressions.toLocaleString("id-ID"),
       note: "Jumlah iklan ditampilkan",
     },
     {
       label: "Semua Klik (Interaksi)",
-      display: allClicks.toLocaleString("id-ID"),
+      display: allClicks == null ? "Tidak tersedia" : allClicks.toLocaleString("id-ID"),
       note: `CTR ${formatPct(allCtr, loc)} · CPC ${formatRp(allCpc, loc)}`,
     },
   ];
@@ -724,7 +725,7 @@ function buildDeterministicAnalysis(params: {
       title: "Penayangan Sedang Dijeda",
       insight: "Tidak ada tayangan maupun pembelanjaan anggaran pada periode ini karena status objek sedang dijeda.",
     });
-  } else if (pausedDelivery && impressions > 0) {
+  } else if (pausedDelivery && impressions != null && impressions > 0) {
     watchouts.unshift({
       severity: "ok",
       title: "Data Historis Pasca-Jeda",
@@ -1052,14 +1053,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Previous Insights
-    let prevInsights: Array<{
-      spend: number;
-      impressions: number;
-      clicks: number;
-      reach: number;
-      link_clicks: number;
-      conversions: number;
-    }> = [];
+    let prevInsights: AdInsightRowLike[] = [];
 
     if (prevSince && prevUntil && (scope === "account" || targetAdIds.length > 0)) {
       const loadedPrevious = await loadInsightPages(db, {
@@ -1070,12 +1064,13 @@ export async function POST(req: NextRequest) {
       });
       if (!loadedPrevious.error) {
         prevInsights = loadedPrevious.rows.map((row) => ({
-          spend: Number(row.spend) || 0,
-          impressions: Number(row.impressions) || 0,
-          clicks: Number(row.clicks) || 0,
-          reach: Number(row.reach) || 0,
-          link_clicks: Number(row.link_clicks) || 0,
-          conversions: Number(row.conversions) || 0,
+          spend: finiteNumber(row.spend),
+          impressions: finiteNumber(row.impressions),
+          clicks: finiteNumber(row.clicks),
+          reach: finiteNumber(row.reach),
+          link_clicks: finiteNumber(row.link_clicks),
+          conversions: finiteNumber(row.conversions),
+          date_start: row.date_start,
         }));
       }
     }
@@ -1088,9 +1083,9 @@ export async function POST(req: NextRequest) {
     const currImpressions = currAgg.impressions;
     const currClicks = currAgg.allClicks;
     const currReach = currAgg.reach;
-    const currLinkClicks = currAgg.linkClicks ?? 0;
+    const currLinkClicks = currAgg.linkClicks;
     const primaryResult = selectPrimaryResult(currAgg, targetObjective);
-    const currResults = primaryResult.count ?? currAgg.results ?? 0;
+    const currResults = primaryResult.count ?? currAgg.results;
     const decisionCpr = primaryResult.kind === "legacy" ? currAgg.costPerResult : primaryResult.cost;
 
     const currLinkCtr = currAgg.linkCtr;
@@ -1102,9 +1097,9 @@ export async function POST(req: NextRequest) {
     const currFrequency = currAgg.frequency;
 
     const resultOfDay = (row: AdInsightRowLike) => {
-      if (primaryResult.kind === "messaging") return messagingFromRow(row) ?? 0;
-      if (primaryResult.kind === "leads") return leadsFromRow(row) ?? 0;
-      return Number(row.conversions) || 0;
+      if (primaryResult.kind === "messaging") return messagingFromRow(row);
+      if (primaryResult.kind === "leads") return leadsFromRow(row);
+      return finiteNumber(row.conversions);
     };
     const filledTrends = since && until
       ? buildZeroFilledDailyTrends(currentInsights, since, until, resultOfDay)
@@ -1117,12 +1112,12 @@ export async function POST(req: NextRequest) {
     // 8. Aggregate Previous Metrics (same shared aggregation)
     const prevAgg = aggregateAdInsights(prevInsights || []);
     const prevSpend = prevAgg.spend;
-    const prevResults = prevAgg.results ?? 0;
+    const prevResults = prevAgg.results;
     const prevImpressions = prevAgg.impressions;
-    const prevLinkClicks = prevAgg.linkClicks ?? 0;
+    const prevLinkClicks = prevAgg.linkClicks;
 
     const prevCpr = prevAgg.costPerResult;
-    const prevLinkCtr = prevImpressions > 0 ? Number(((prevLinkClicks / prevImpressions) * 100).toFixed(2)) : null;
+    const prevLinkCtr = prevImpressions != null && prevImpressions > 0 && prevLinkClicks != null ? Number(((prevLinkClicks / prevImpressions) * 100).toFixed(2)) : null;
     const periodName =
       period === "1d" || period === "daily"
         ? "1 Hari (Pemantauan)"
@@ -1182,7 +1177,7 @@ export async function POST(req: NextRequest) {
       .from("conversations")
       .select("id, ad_id, campaign_id, attribution_status, quality_label, channel, attribution_evidence")
       .eq("organization_id", organizationId)
-      .eq("channel", "crm_upload")
+      .in("channel", ["crm_upload", "whatsapp"])
       .limit(2000);
     if (crmBounds.start) crmRowsQuery = crmRowsQuery.gte("started_at", crmBounds.start);
     if (crmBounds.end) crmRowsQuery = crmRowsQuery.lte("started_at", crmBounds.end);
@@ -1247,7 +1242,7 @@ export async function POST(req: NextRequest) {
       {
         label: "Qualified Leads",
         display: crmContext.qualifiedLeads.value === null ? "Data tidak tersedia" : String(crmContext.qualifiedLeads.value),
-        note: "Hot + Warm pada cakupan ini. Cold tidak dihitung.",
+        note: "Qualified Lead = Hot + Warm pada cakupan ini. Cold tidak dihitung.",
       },
       {
         label: "CQPL",
@@ -1262,7 +1257,7 @@ export async function POST(req: NextRequest) {
       deterministicOutput.extra_metrics.push({
         label: "Percakapan Pesan",
         display: currAgg.messagingConversations.toLocaleString("id-ID"),
-        note: `Chat yang Meta laporkan dari iklan CTWA. Biaya per percakapan: ${formatRp(currAgg.costPerMessagingConversation, locale)}. Angka ini tidak sama dengan catatan CRM.`,
+        note: `Percakapan Messaging: chat yang Meta laporkan dari iklan CTWA. Biaya per percakapan: ${formatRp(currAgg.costPerMessagingConversation, locale)}. Angka ini tidak sama dengan catatan CRM.`,
       });
     }
 
@@ -1824,7 +1819,10 @@ function buildCampaignHierarchyBreakdown(input: {
   }
 
   const defaultAdSetName = `Ad Set Utama · ${cleanEntityName(input.campaign.name)}`;
-  const totalRankedAdSpend = singleReport.ad_rankings.reduce((acc, a) => acc + a.spend, 0);
+  const totalRankedAdSpend = singleReport.ad_rankings.reduce<number | null>((acc, item) => {
+    if (typeof item.spend !== "number") return acc;
+    return (acc ?? 0) + item.spend;
+  }, null);
   const rankedAdIds = new Set<string>();
   const ad_rankings: RankedCampaignAdItem[] = singleReport.ad_rankings.map((ad, idx) => {
     rankedAdIds.add(ad.id);
@@ -1835,7 +1833,9 @@ function buildCampaignHierarchyBreakdown(input: {
         ? Number((((ad.cpr - input.targetCpr) / input.targetCpr) * 100).toFixed(1))
         : null;
     const adSpendSharePct =
-      totalRankedAdSpend > 0 ? Number(((ad.spend / totalRankedAdSpend) * 100).toFixed(1)) : 0;
+      totalRankedAdSpend != null && totalRankedAdSpend > 0 && ad.spend != null
+        ? Number(((ad.spend / totalRankedAdSpend) * 100).toFixed(1))
+        : null;
     return {
       rank: idx + 1,
       id: ad.id,
@@ -1849,7 +1849,7 @@ function buildCampaignHierarchyBreakdown(input: {
       effectiveStatus: ad.effectiveStatus,
       spend: ad.spend,
       spendSharePct: adSpendSharePct,
-      results: ad.results ?? 0,
+      results: ad.results,
       resultLabel: ad.resultLabel || input.resultLabel,
       cpr: ad.cpr,
       targetCpr: input.targetCpr,
@@ -1921,40 +1921,40 @@ function buildCampaignHierarchyBreakdown(input: {
     adsetGroups.set(key, group);
   }
 
-  const totalCampaignSpend = ad_rankings.reduce((acc, a) => acc + a.spend, 0);
+  const totalCampaignSpend = ad_rankings.reduce<number | null>((acc, item) => addReported(acc, item.spend), null);
   const rawAdSets: Omit<RankedCampaignAdSetItem, "rank">[] = Array.from(adsetGroups.values()).map((grp) => {
-    const spend = grp.ads.reduce((acc, a) => acc + a.spend, 0);
-    const results = grp.ads.reduce((acc, a) => acc + a.results, 0);
-    const impressions = grp.ads.reduce((acc, a) => acc + a.impressions, 0);
-    const linkClicks = grp.ads.reduce((acc, a) => acc + a.linkClicks, 0);
-    const cpr = results > 0 ? Number((spend / results).toFixed(2)) : null;
-    const ctr = impressions > 0 ? Number(((linkClicks / impressions) * 100).toFixed(2)) : null;
-    const cpc = linkClicks > 0 ? Number((spend / linkClicks).toFixed(2)) : null;
-    const spendSharePct = totalCampaignSpend > 0 ? Number(((spend / totalCampaignSpend) * 100).toFixed(1)) : 0;
+    const spend = grp.ads.reduce<number | null>((acc, item) => addReported(acc, item.spend), null);
+    const results = grp.ads.reduce<number | null>((acc, item) => addReported(acc, item.results), null);
+    const impressions = grp.ads.reduce<number | null>((acc, item) => addReported(acc, item.impressions), null);
+    const linkClicks = grp.ads.reduce<number | null>((acc, item) => addReported(acc, item.linkClicks), null);
+    const cpr = results != null && results > 0 && spend != null ? Number((spend / results).toFixed(2)) : null;
+    const ctr = impressions != null && impressions > 0 && linkClicks != null ? Number(((linkClicks / impressions) * 100).toFixed(2)) : null;
+    const cpc = linkClicks != null && linkClicks > 0 && spend != null ? Number((spend / linkClicks).toFixed(2)) : null;
+    const spendSharePct = totalCampaignSpend != null && totalCampaignSpend > 0 && spend != null ? Number(((spend / totalCampaignSpend) * 100).toFixed(1)) : null;
     const cprVsTargetPct =
       input.targetCpr && input.targetCpr > 0 && cpr !== null
         ? Number((((cpr - input.targetCpr) / input.targetCpr) * 100).toFixed(1))
         : null;
     const activeAdsCount = grp.ads.filter((a) => a.effectiveStatus === "ACTIVE").length;
-    const deliveredAds = grp.ads.filter((a) => a.spend > 0 || a.impressions > 0);
+    const deliveredAds = grp.ads.filter((a) => (a.spend != null && a.spend > 0) || (a.impressions != null && a.impressions > 0));
     const weightedScore =
-      spend > 0
-        ? Math.round(deliveredAds.reduce((acc, a) => acc + a.score * (a.spend / spend), 0))
+      spend != null && spend > 0
+        ? Math.round(deliveredAds.reduce((acc, a) => acc + a.score * ((a.spend ?? 0) / spend), 0))
         : deliveredAds.length > 0
           ? Math.round(deliveredAds.reduce((acc, a) => acc + a.score, 0) / deliveredAds.length)
           : 0;
 
     let category: EfficiencyCategoryCode = "INSUFFICIENT_DATA";
-    if (spend > 0 || results > 0) {
-      if (results >= 5 && input.targetCpr && cpr !== null && cpr <= input.targetCpr * 0.9 && weightedScore >= 75) {
+    if ((spend != null && spend > 0) || (results != null && results > 0)) {
+      if (results != null && results >= 5 && input.targetCpr && cpr !== null && cpr <= input.targetCpr * 0.9 && weightedScore >= 75) {
         category = "TOP_PERFORMER";
-      } else if (results >= 2 && ((input.targetCpr && cpr !== null && cpr <= input.targetCpr * 1.05) || weightedScore >= 68)) {
+      } else if (results != null && results >= 2 && ((input.targetCpr && cpr !== null && cpr <= input.targetCpr * 1.05) || weightedScore >= 68)) {
         category = "EFFICIENT";
-      } else if (results > 0 && weightedScore >= 52) {
+      } else if (results != null && results > 0 && weightedScore >= 52) {
         category = "STABLE";
-      } else if (results > 0 && weightedScore >= 38) {
+      } else if (results != null && results > 0 && weightedScore >= 38) {
         category = "NEEDS_OPTIMIZATION";
-      } else if (spend > 0 && (results === 0 || weightedScore < 38)) {
+      } else if (spend != null && spend > 0 && (results === 0 || weightedScore < 38)) {
         category = "UNDERPERFORMING";
       }
     }
@@ -2001,13 +2001,13 @@ function buildCampaignHierarchyBreakdown(input: {
     };
   });
 
-  rawAdSets.sort((a, b) => b.score - a.score || b.results - a.results || b.spend - a.spend);
+  rawAdSets.sort((a, b) => b.score - a.score || (b.results ?? Number.NEGATIVE_INFINITY) - (a.results ?? Number.NEGATIVE_INFINITY) || (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY));
   const adset_rankings: RankedCampaignAdSetItem[] = rawAdSets.map((item, idx) => ({
     ...item,
     rank: idx + 1,
   }));
 
-  const adsWithDelivery = ad_rankings.filter((a) => a.spend > 0 || a.impressions > 0).length;
+  const adsWithDelivery = ad_rankings.filter((a) => (a.spend != null && a.spend > 0) || (a.impressions != null && a.impressions > 0)).length;
   const efficientAdsCount = ad_rankings.filter((a) => a.category === "TOP_PERFORMER" || a.category === "EFFICIENT").length;
   const optimizeAdsCount = ad_rankings.filter((a) => a.category === "STABLE" || a.category === "NEEDS_OPTIMIZATION").length;
   const underperformingAdsCount = ad_rankings.filter((a) => a.category === "UNDERPERFORMING").length;
@@ -2036,7 +2036,7 @@ function applyCampaignHierarchyIntelligence(
   durationDays: number,
   locale: "id" | "en"
 ): void {
-  const deliveredAds = breakdown.ad_rankings.filter((a) => a.spend > 0 || a.impressions > 0);
+  const deliveredAds = breakdown.ad_rankings.filter((a) => (a.spend != null && a.spend > 0) || (a.impressions != null && a.impressions > 0));
   const topAd = deliveredAds[0];
   const worstAd = deliveredAds.length > 1 ? deliveredAds[deliveredAds.length - 1] : null;
   const topAdSet = breakdown.adset_rankings[0];

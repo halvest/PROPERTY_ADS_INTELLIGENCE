@@ -21,10 +21,11 @@ const PLAN_DEFAULT_MAX_CONNECTIONS: Record<string, number> = {
 };
 
 export function getMaxConnectionsForPlan(plan: string, configuredMax?: number | null): number {
-  if (typeof configuredMax === "number" && configuredMax > 0) {
-    return configuredMax;
+  const planCap = PLAN_DEFAULT_MAX_CONNECTIONS[plan] ?? 1;
+  if (typeof configuredMax !== "number" || !Number.isFinite(configuredMax) || configuredMax <= 0) {
+    return planCap;
   }
-  return PLAN_DEFAULT_MAX_CONNECTIONS[plan] ?? 1;
+  return Math.min(Math.floor(configuredMax), planCap);
 }
 
 /**

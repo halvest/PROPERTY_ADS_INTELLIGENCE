@@ -425,7 +425,7 @@ export function getAdLeaderboard(options?: {
 
   // Sort results
   items.sort((a, b) => {
-    if (sortBy === "spend") return b.spend - a.spend;
+    if (sortBy === "spend") return (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY);
     if (sortBy === "leads") return b.attributedLeadsCount - a.attributedLeadsCount;
     if (sortBy === "cpql") {
       if (a.cpql === null) return 1;

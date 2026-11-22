@@ -154,8 +154,8 @@ describe("Phase 2 wiring contracts", () => {
     const whole = aggregateAdInsights(rows);
     const perDay = rows.map((r) => aggregateAdInsights([r]));
     // Additive metrics agree; unique reach across two days is null in both views.
-    expect(whole.spend).toBe(perDay.reduce((a, d) => a + d.spend, 0));
-    expect(whole.impressions).toBe(perDay.reduce((a, d) => a + d.impressions, 0));
+    expect(whole.spend).toBe((perDay[0].spend ?? 0) + (perDay[1].spend ?? 0));
+    expect(whole.impressions).toBe((perDay[0].impressions ?? 0) + (perDay[1].impressions ?? 0));
     expect(whole.messagingConversations).toBe(5);
     expect(whole.leads).toBe(2);
     expect(whole.reach).toBeNull();
@@ -167,6 +167,8 @@ describe("Phase 2 wiring contracts", () => {
     expect(analyzeAd).not.toContain("buyer_score");
     expect(analyzeAd).toContain("Qualified Lead = Hot + Warm");
     const live = read("src/lib/data/live-dashboard-service.ts");
+    expect(live).not.toContain("ads.campaigns.ad_account_id");
+    expect(live).toContain('.in("ad_id", scopedAdIds)');
     expect(live).not.toContain("buyerScore >= 70");
     expect(live).not.toContain("buyerScore !== null && buyerScore >= 70");
   });

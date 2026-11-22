@@ -184,7 +184,10 @@ export function buildCrmAnalysisContext(
 
   for (const row of rows) {
     if (!row.id || seen.has(row.id)) continue;
-    if (row.channel && row.channel !== "crm_upload") continue;
+    if (row.channel && row.channel !== "crm_upload" && row.channel !== "whatsapp") continue;
+    if (row.channel === "whatsapp" && ((row.attribution_status || "").toLowerCase() !== "verified" || !row.ad_id)) {
+      continue;
+    }
     if (options.organizationId && row.organization_id && row.organization_id !== options.organizationId) continue;
     if (row.started_at && (bounds.start || bounds.end)) {
       const at = new Date(row.started_at).getTime();

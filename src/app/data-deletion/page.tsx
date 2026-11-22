@@ -25,14 +25,22 @@ export default async function DataDeletionPage({
   if (confirmationCode) {
     try {
       const status = await lookupMetaDataDeletion(confirmationCode);
-      if (status.found) {
+      if (status.found && status.outcome === "not_found") {
         statusNote = locale === "id"
-          ? `Token Meta untuk pengguna ini sudah dihapus. Koneksi iklan yang dicabut: ${status.adsTokensRevoked}. Nomor WhatsApp yang diputus: ${status.whatsappTokensRevoked}.`
-          : `Meta tokens for this user were deleted. Ad connections revoked: ${status.adsTokensRevoked}. WhatsApp numbers disconnected: ${status.whatsappTokensRevoked}.`;
+          ? "Permintaan penghapusan tercatat. Tidak ada data Meta yang cocok dengan pengguna ini, jadi tidak ada data yang dihapus."
+          : "The deletion request was recorded. No Meta data matched this user, so nothing was deleted.";
+      } else if (status.found && status.outcome === "completed") {
+        statusNote = locale === "id"
+          ? `Data Meta untuk pengguna ini dihapus. Token iklan: ${status.adsTokensRevoked}. Nomor WhatsApp: ${status.whatsappTokensRevoked}. Percakapan: ${status.conversationsDeleted}. Pesan: ${status.messagesDeleted}.`
+          : `Meta data for this user was deleted. Ad tokens: ${status.adsTokensRevoked}. WhatsApp numbers: ${status.whatsappTokensRevoked}. Conversations: ${status.conversationsDeleted}. Messages: ${status.messagesDeleted}.`;
+      } else if (status.found) {
+        statusNote = locale === "id"
+          ? "Kode ini tercatat, tetapi hasil penghapusannya belum bisa diklasifikasi. Simpan kode dan hubungi support@hdcreative.cloud."
+          : "This code is recorded, but the deletion result could not be classified. Keep the code and contact support@hdcreative.cloud.";
       } else {
         statusNote = locale === "id"
-          ? "Tidak ada token iklan atau WhatsApp yang tersimpan untuk kode ini. Jika koneksi dibuat sebelum ID Facebook dicatat, kirim kode ini ke support@hdcreative.cloud. Data workspace yang diunggah sendiri dihapus dalam 7 hari kerja setelah kepemilikan diverifikasi."
-          : "No stored ad or WhatsApp token matches this code. If the connection predates Facebook user id recording, send this code to support@hdcreative.cloud. Workspace-uploaded records are deleted within 7 business days after ownership is verified.";
+          ? "Tidak ada permintaan penghapusan untuk kode ini."
+          : "No deletion request matches this code.";
       }
     } catch {
       statusNote = locale === "id"

@@ -7,13 +7,13 @@ import { localizeResultLabel } from "@/lib/ads/result-metric";
 
 export interface DailyTrendPoint {
   date: string;
-  spend: number;
-  impressions: number;
+  spend: number | null;
+  impressions: number | null;
   reach: number | null;
-  linkClicks: number;
-  allClicks?: number;
-  results: number;
-  conversations?: number;
+  linkClicks: number | null;
+  allClicks?: number | null;
+  results: number | null;
+  conversations?: number | null;
 }
 
 interface PerformanceTrendChartProps {
@@ -112,11 +112,14 @@ export function PerformanceTrendChart({
   const bottomY = pad.top + plotHeight;
 
   // Maximum metrics with nice upper bounds
-  const rawMaxSpend = Math.max(...dailyTrend.map((p) => p.spend), 0);
-  const rawMaxResults = Math.max(
-    ...dailyTrend.map((p) => (p.results > 0 ? p.results : p.conversations ?? 0)),
-    0
-  );
+  const spendValues = dailyTrend
+    .map((p) => p.spend)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const resultValues = dailyTrend
+    .map((p) => (p.results != null ? p.results : p.conversations))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const rawMaxSpend = spendValues.length > 0 ? Math.max(...spendValues, 0) : 0;
+  const rawMaxResults = resultValues.length > 0 ? Math.max(...resultValues, 0) : 0;
 
   const maxSpend = useMemo(() => {
     return Math.max(getNiceMax(rawMaxSpend, 3), 120000);
@@ -151,13 +154,13 @@ export function PerformanceTrendChart({
 
   // Plot Points
   const spendPoints = useMemo(() => {
-    return dailyTrend.map((p, i) => ({ x: getX(i), y: getYSpend(p.spend) }));
+    return dailyTrend.flatMap((p, i) => (p.spend == null ? [] : [{ x: getX(i), y: getYSpend(p.spend) }]));
   }, [dailyTrend, getX, getYSpend]);
 
   const resultPoints = useMemo(() => {
-    return dailyTrend.map((p, i) => {
-      const val = p.results > 0 ? p.results : p.conversations ?? 0;
-      return { x: getX(i), y: getYResults(val) };
+    return dailyTrend.flatMap((p, i) => {
+      const val = p.results != null ? p.results : p.conversations;
+      return val == null ? [] : [{ x: getX(i), y: getYResults(val) }];
     });
   }, [dailyTrend, getX, getYResults]);
 
@@ -166,7 +169,7 @@ export function PerformanceTrendChart({
   const spendAreaPath = useMemo(() => getPolylineAreaPath(spendPoints, bottomY), [spendPoints, bottomY]);
   const resultsPath = useMemo(() => getPolylinePath(resultPoints), [resultPoints]);
 
-  const formatCurrencyVal = (val: number) =>
+  const formatCurrencyVal = (val: number | null | undefined) =>
     formatDisplayCurrency(val, currency || "IDR", locale === "en" ? "en" : "id");
 
   // Date Formatting Helpers
@@ -240,10 +243,10 @@ export function PerformanceTrendChart({
   // Tooltip position & data
   const activePoint = hoveredIndex !== null ? dailyTrend[hoveredIndex] : null;
   const activeResults =
-    activePoint ? (activePoint.results > 0 ? activePoint.results : activePoint.conversations ?? 0) : 0;
+    activePoint ? (activePoint.results != null ? activePoint.results : activePoint.conversations ?? null) : null;
   const activeHoverX = hoveredIndex !== null ? getX(hoveredIndex) : 0;
-  const activeSpendY = hoveredIndex !== null ? getYSpend(activePoint?.spend ?? 0) : 0;
-  const activeResultsY = hoveredIndex !== null ? getYResults(activeResults) : 0;
+  const activeSpendY = hoveredIndex !== null && activePoint?.spend != null ? getYSpend(activePoint.spend) : bottomY;
+  const activeResultsY = hoveredIndex !== null && activeResults != null ? getYResults(activeResults) : bottomY;
 
   // Tooltip position: position tooltip to the left if point is on the right side of the graph
   const isRightSide = hoveredIndex !== null && hoveredIndex > dailyTrend.length / 2;
@@ -512,16 +515,20 @@ export function PerformanceTrendChart({
                 <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
                   {formatFullDate(activePoint.date)}
                 </p>
-                {activeResults > 0 ? (
+                {activeResults != null && activeResults > 0 && activePoint.linkClicks != null && activePoint.linkClicks > 0 ? (
                   <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 ring-1 ring-inset ring-emerald-600/20">
                     <span>↗</span>
                     <span>
-                      {Math.round((activeResults / Math.max(1, activePoint.linkClicks)) * 100)}% CVR
+                      {Math.round((activeResults / activePoint.linkClicks) * 100)}% CVR
                     </span>
                   </span>
                 ) : (
                   <span className="inline-flex items-center rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                    {locale === "id" ? "0 Hasil" : "0 Results"}
+                    {activeResults == null
+                      ? "—"
+                      : locale === "id"
+                        ? "0 Hasil"
+                        : "0 Results"}
                   </span>
                 )}
               </div>
@@ -558,7 +565,7 @@ export function PerformanceTrendChart({
                     <span>{locale === "id" ? "Biaya / Hasil" : "Cost / Result"}</span>
                   </span>
                   <span className="font-mono font-semibold tabular-nums text-zinc-800 dark:text-zinc-200">
-                    {activeResults > 0
+                    {activeResults != null && activeResults > 0 && activePoint.spend != null
                       ? formatCurrencyVal(Math.round(activePoint.spend / activeResults))
                       : "—"}
                   </span>

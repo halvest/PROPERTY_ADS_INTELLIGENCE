@@ -81,8 +81,8 @@ export function isStructuralDecisionWindow(durationDays: number): boolean {
   return durationDays >= 14;
 }
 
-export function spentBeyondDoubleTarget(spend: number, targetCpr: number | null, results: number | null): boolean {
-  if (!targetCpr || targetCpr <= 0) return false;
+export function spentBeyondDoubleTarget(spend: number | null, targetCpr: number | null, results: number | null): boolean {
+  if (spend == null || !targetCpr || targetCpr <= 0) return false;
   const recordedResults = results ?? 0;
   return spend > 2 * targetCpr && recordedResults <= 0;
 }

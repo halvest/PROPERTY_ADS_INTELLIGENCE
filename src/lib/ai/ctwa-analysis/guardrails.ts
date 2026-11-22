@@ -22,7 +22,7 @@ export interface ActionGuardrailInput {
   hasChatTranscript: boolean;
   entityStatus?: EntityDeliveryStatus;
   analysisScope?: AnalysisScope;
-  spend?: number;
+  spend?: number | null;
   results?: number | null;
   targetCpr?: number | null;
   performanceStatus?: PerformanceStatus;

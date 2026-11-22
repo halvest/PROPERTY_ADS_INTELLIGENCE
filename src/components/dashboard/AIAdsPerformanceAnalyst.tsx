@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useSyncExternalStore } from "react";
 import type { PerformanceAnalysisOutput } from "@/app/api/ai/analyze-performance/route";
 import type { CampaignDetailData } from "@/components/dashboard/CampaignDetailWorkspace";
-import type { RealAdRow } from "@/app/(dashboard)/ads/page";
+import type { RealAdRow } from "@/lib/ads/ad-row";
 import { useToast } from "@/components/ui/Toast";
 import { useAiQuota } from "@/hooks/useAiQuota";
 import { IdempotencyKeyManager } from "@/lib/ai/idempotency-key";
@@ -49,16 +49,17 @@ export function cleanEntityName(raw?: string | null): string {
   return name || raw;
 }
 
-function Sparkline({ data, color }: { data: number[]; color: string }) {
-  if (!data || data.length < 2) return null;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+function Sparkline({ data, color }: { data: Array<number | null>; color: string }) {
+  const series = data.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (series.length < 2) return null;
+  const min = Math.min(...series);
+  const max = Math.max(...series);
   const range = max - min || 1;
   const w = 96;
   const h = 28;
   const pad = 3;
-  const coords = data.map((val, i) => {
-    const x = (i / (data.length - 1)) * (w - pad * 2) + pad;
+  const coords = series.map((val, i) => {
+    const x = (i / (series.length - 1)) * (w - pad * 2) + pad;
     const y = h - ((val - min) / range) * (h - pad * 2) - pad;
     return { x, y };
   });
@@ -99,7 +100,8 @@ export function pageRangeToAnalystPeriod(dateRange?: string | null): {
   return { period: "custom", customSince: match[1], customUntil: match[2] };
 }
 
-export function formatAccountMoney(amount: number, currency?: string | null, locale: DisplayLocale = "id"): string {
+export function formatAccountMoney(amount: number | null | undefined, currency?: string | null, locale: DisplayLocale = "id"): string {
+  if (amount == null || !Number.isFinite(amount)) return "—";
   return formatDisplayCurrency(amount, currency, locale);
 }
 
@@ -114,12 +116,21 @@ function formatAnalystMetric(
     if (metric.key === "cpr" && metric.display === "Tidak tersedia") {
       return locale === "id" ? metric.display : "Unavailable";
     }
+    if (metric.value == null || !Number.isFinite(metric.value)) {
+      return locale === "id" ? "Belum tersedia" : "Unavailable";
+    }
     return formatAccountMoney(metric.value, currency, locale);
   }
   if (metric.key === "results") {
+    if (metric.value == null || !Number.isFinite(metric.value)) {
+      return locale === "id" ? "Belum tersedia" : "Unavailable";
+    }
     return new Intl.NumberFormat(intlLocale, { maximumFractionDigits: 0 }).format(metric.value);
   }
   if (metric.display === "Tidak tersedia") return locale === "id" ? metric.display : "Unavailable";
+  if (metric.value == null || !Number.isFinite(metric.value)) {
+    return locale === "id" ? "Belum tersedia" : "Unavailable";
+  }
   return `${new Intl.NumberFormat(intlLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(metric.value)}%`;
 }
 
@@ -1716,10 +1727,10 @@ export function AIAdsPerformanceAnalyst({
                                 {adset.resultLabel}
                               </span>
                               <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
-                                {adset.results.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
+                                {adset.results == null ? "—" : adset.results.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
                               </p>
                               <p className="mt-0.5 text-[10px] text-zinc-500">
-                                {adset.linkClicks.toLocaleString(locale === "en" ? "en-US" : "id-ID")} {locale === "id" ? "klik tautan" : "link clicks"}
+                                {adset.linkClicks == null ? "—" : adset.linkClicks.toLocaleString(locale === "en" ? "en-US" : "id-ID")} {locale === "id" ? "klik tautan" : "link clicks"}
                               </p>
                             </div>
                             <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
@@ -1861,7 +1872,7 @@ export function AIAdsPerformanceAnalyst({
                                 {formatAccountMoney(adItem.spend, accountCurrency, locale)}
                               </p>
                               <p className="mt-0.5 text-[10px] text-zinc-500">
-                                {adItem.spendSharePct.toFixed(1)}% {locale === "id" ? "porsi kampanye" : "campaign share"}
+                                {adItem.spendSharePct == null ? "—" : `${adItem.spendSharePct.toFixed(1)}%`} {locale === "id" ? "porsi kampanye" : "campaign share"}
                               </p>
                             </div>
                             <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">
@@ -1869,10 +1880,10 @@ export function AIAdsPerformanceAnalyst({
                                 {adItem.resultLabel}
                               </span>
                               <p className="mt-1 font-mono text-sm font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
-                                {adItem.results.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
+                                {adItem.results == null ? "—" : adItem.results.toLocaleString(locale === "en" ? "en-US" : "id-ID")}
                               </p>
                               <p className="mt-0.5 text-[10px] text-zinc-500">
-                                {adItem.linkClicks.toLocaleString(locale === "en" ? "en-US" : "id-ID")} {locale === "id" ? "klik tautan" : "link clicks"}
+                                {adItem.linkClicks == null ? "—" : adItem.linkClicks.toLocaleString(locale === "en" ? "en-US" : "id-ID")} {locale === "id" ? "klik tautan" : "link clicks"}
                               </p>
                             </div>
                             <div className="rounded-lg border border-zinc-200/60 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">

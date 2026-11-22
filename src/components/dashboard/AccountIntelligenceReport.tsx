@@ -290,7 +290,7 @@ export function AccountIntelligenceReportView({
         totalResults: 0,
       };
       existing.items.push(item);
-      existing.totalSpend += item.spend;
+      existing.totalSpend = item.spend == null ? existing.totalSpend : existing.totalSpend + item.spend;
       existing.totalResults += item.results ?? 0;
       groups.set(key, existing);
     }

@@ -9,9 +9,9 @@ import type { FunnelStage } from "@/domain/funnel/stages";
 import type { MessageTimestampRecord } from "@/domain/scoring/response-speed";
 
 export interface DashboardKPISummary {
-  totalSpend: number;
-  totalImpressions: number;
-  totalClicks: number;
+  totalSpend: number | null;
+  totalImpressions: number | null;
+  totalClicks: number | null;
   ctr: number | null;
   cpc: number | null;
   cpm: number | null;
@@ -37,9 +37,9 @@ export interface AdLeaderboardItem {
   adName: string;
   campaignName: string;
   status: "ACTIVE" | "PAUSED";
-  spend: number;
-  impressions: number;
-  clicks: number;
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
   ctr: number | null;
   cpc: number | null;
   cpm: number | null;

@@ -10,7 +10,7 @@ export interface PremiumAdRow {
   deliveryStatus: "ACTIVE" | "PAUSED" | "CAMPAIGN_PAUSED" | "NOT_DELIVERING" | string;
   deliveryLabel: string;
   spendFormatted: string;
-  spendRaw?: number;
+  spendRaw?: number | null;
   resultsFormatted: string;
   cprFormatted: string;
   impressionsFormatted: string;

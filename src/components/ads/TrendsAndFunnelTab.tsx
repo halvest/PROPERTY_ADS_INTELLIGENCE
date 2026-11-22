@@ -6,18 +6,19 @@ import { formatDisplayCurrency } from "@/lib/format/display-currency";
 import { localizeResultLabel } from "@/lib/ads/result-metric";
 import type { CampaignDetailData } from "@/components/dashboard/CampaignDetailWorkspace";
 import type { DailyTrendPoint } from "@/components/dashboard/PerformanceTrendChart";
-import type { RealAdRow } from "@/app/(dashboard)/ads/page";
+import type { RealAdRow } from "@/lib/ads/ad-row";
+import { addReported } from "@/lib/metrics/nullable-number";
 
 export interface TrendsAndFunnelTabProps {
   dailyTrend: DailyTrendPoint[];
   campaigns: CampaignDetailData[];
   ads: RealAdRow[];
   accountMetrics: {
-    spend: number;
-    impressions: number;
-    allClicks: number;
-    linkClicks: number;
-    results: number;
+    spend: number | null;
+    impressions: number | null;
+    allClicks: number | null;
+    linkClicks: number | null;
+    results: number | null;
     allCpc: number | null;
     linkCpc: number | null;
     cpm: number | null;
@@ -33,11 +34,11 @@ type SortKey = "spend" | "results" | "linkCtr" | "cpr";
 
 interface DailyPoint {
   date: string;
-  spend: number;
-  impressions: number;
-  allClicks: number;
-  linkClicks: number;
-  results: number;
+  spend: number | null;
+  impressions: number | null;
+  allClicks: number | null;
+  linkClicks: number | null;
+  results: number | null;
 }
 
 interface CleanEntityRow {
@@ -345,9 +346,9 @@ export function TrendsAndFunnelTab({
   );
 
   const formatPct = useCallback(
-    (val: number) => {
-      const safe = Number.isFinite(val) ? val : 0;
-      const str = safe.toFixed(2);
+    (val: number | null | undefined) => {
+      if (val == null || !Number.isFinite(val)) return "—";
+      const str = val.toFixed(2);
       return uiLocale === "id" ? `${str.replace(".", ",")}%` : `${str}%`;
     },
     [uiLocale]
@@ -614,39 +615,39 @@ export function TrendsAndFunnelTab({
     if (isFullAccount || !hasAdDaily) {
       rawSeries = dailyTrend.map((d) => ({
         date: d.date,
-        spend: d.spend || 0,
-        impressions: d.impressions || 0,
-        allClicks: d.allClicks || 0,
-        linkClicks: d.linkClicks || 0,
-        results: d.results > 0 ? d.results : d.conversations ?? 0,
+        spend: d.spend,
+        impressions: d.impressions,
+        allClicks: d.allClicks ?? null,
+        linkClicks: d.linkClicks,
+        results: d.results != null ? d.results : d.conversations ?? null,
       }));
     } else {
       const dateMap = new Map<string, DailyPoint>();
       dailyTrend.forEach((d) => {
         dateMap.set(d.date, {
           date: d.date,
-          spend: 0,
-          impressions: 0,
-          allClicks: 0,
-          linkClicks: 0,
-          results: 0,
+          spend: null,
+          impressions: null,
+          allClicks: null,
+          linkClicks: null,
+          results: null,
         });
       });
       matchingRawAds.forEach((ad) => {
         (ad.dailySeries || []).forEach((pt) => {
           const cur = dateMap.get(pt.date) || {
             date: pt.date,
-            spend: 0,
-            impressions: 0,
-            allClicks: 0,
-            linkClicks: 0,
-            results: 0,
+            spend: null,
+            impressions: null,
+            allClicks: null,
+            linkClicks: null,
+            results: null,
           };
-          cur.spend += pt.spend || 0;
-          cur.impressions += pt.impressions || 0;
-          cur.allClicks += pt.allClicks || 0;
-          cur.linkClicks += pt.linkClicks || 0;
-          cur.results += pt.results || 0;
+          cur.spend = addReported(cur.spend, pt.spend);
+          cur.impressions = addReported(cur.impressions, pt.impressions);
+          cur.allClicks = addReported(cur.allClicks, pt.allClicks);
+          cur.linkClicks = addReported(cur.linkClicks, pt.linkClicks);
+          cur.results = addReported(cur.results, pt.results);
           dateMap.set(pt.date, cur);
         });
       });
@@ -656,12 +657,12 @@ export function TrendsAndFunnelTab({
     let series = rawSeries;
     if (rawSeries.length > 14) {
       const firstActive = rawSeries.findIndex(
-        (p) => p.spend > 0 || p.impressions > 0 || p.linkClicks > 0 || p.results > 0
+        (p) => (p.spend ?? 0) > 0 || (p.impressions ?? 0) > 0 || (p.linkClicks ?? 0) > 0 || (p.results ?? 0) > 0
       );
       let lastActive = -1;
       for (let i = rawSeries.length - 1; i >= 0; i--) {
         const p = rawSeries[i];
-        if (p.spend > 0 || p.impressions > 0 || p.linkClicks > 0 || p.results > 0) {
+        if ((p.spend ?? 0) > 0 || (p.impressions ?? 0) > 0 || (p.linkClicks ?? 0) > 0 || (p.results ?? 0) > 0) {
           lastActive = i;
           break;
         }
@@ -674,29 +675,29 @@ export function TrendsAndFunnelTab({
     }
 
     const spend = isFullAccount
-      ? accountMetrics.spend || 0
-      : matchingRawAds.reduce((s, a) => s + (a.spend || 0), 0);
+      ? accountMetrics.spend
+      : matchingRawAds.reduce<number | null>((sum, ad) => addReported(sum, ad.spend), null);
     const impressions = isFullAccount
-      ? accountMetrics.impressions || 0
-      : matchingRawAds.reduce((s, a) => s + (a.impressions || 0), 0);
+      ? accountMetrics.impressions
+      : matchingRawAds.reduce<number | null>((sum, ad) => addReported(sum, ad.impressions), null);
     const allClicks = isFullAccount
-      ? accountMetrics.allClicks || 0
-      : matchingRawAds.reduce((s, a) => s + (a.allClicks || 0), 0);
+      ? accountMetrics.allClicks
+      : matchingRawAds.reduce<number | null>((sum, ad) => addReported(sum, ad.allClicks), null);
     const linkClicks = isFullAccount
-      ? accountMetrics.linkClicks || 0
-      : matchingRawAds.reduce((s, a) => s + (a.linkClicks || 0), 0);
+      ? accountMetrics.linkClicks
+      : matchingRawAds.reduce<number | null>((sum, ad) => addReported(sum, ad.linkClicks), null);
     const results = isFullAccount
-      ? accountMetrics.results || 0
-      : matchingRawAds.reduce((s, a) => s + (a.resultMetricValue ?? a.results ?? 0), 0);
+      ? accountMetrics.results
+      : matchingRawAds.reduce<number | null>((sum, ad) => addReported(sum, ad.resultMetricValue ?? ad.results), null);
 
-    const cpm = impressions > 0 ? (spend / impressions) * 1000 : null;
-    const allCtr = impressions > 0 ? (allClicks / impressions) * 100 : 0;
-    const allCpc = allClicks > 0 ? spend / allClicks : null;
-    const linkCtr = impressions > 0 ? (linkClicks / impressions) * 100 : 0;
-    const linkCpc = linkClicks > 0 ? spend / linkClicks : null;
-    const intentRatio = allClicks > 0 ? (linkClicks / allClicks) * 100 : 0;
-    const cvr = linkClicks > 0 ? (results / linkClicks) * 100 : 0;
-    const cpr = results > 0 ? spend / results : null;
+    const cpm = impressions != null && impressions > 0 && spend != null ? (spend / impressions) * 1000 : null;
+    const allCtr = impressions != null && impressions > 0 && allClicks != null ? (allClicks / impressions) * 100 : null;
+    const allCpc = allClicks != null && allClicks > 0 && spend != null ? spend / allClicks : null;
+    const linkCtr = impressions != null && impressions > 0 && linkClicks != null ? (linkClicks / impressions) * 100 : null;
+    const linkCpc = linkClicks != null && linkClicks > 0 && spend != null ? spend / linkClicks : null;
+    const intentRatio = allClicks != null && allClicks > 0 && linkClicks != null ? (linkClicks / allClicks) * 100 : null;
+    const cvr = linkClicks != null && linkClicks > 0 && results != null ? (results / linkClicks) * 100 : null;
+    const cpr = results != null && results > 0 && spend != null ? spend / results : null;
 
     return {
       scopeName,
@@ -742,18 +743,20 @@ export function TrendsAndFunnelTab({
       if (chartMode === "spend_results") return p.spend;
       if (chartMode === "clicks_ctr") return p.linkClicks;
       if (chartMode === "impressions_clicks") return p.impressions;
-      return p.results > 0 ? p.spend / p.results : 0;
+      return p.results != null && p.results > 0 && p.spend != null ? p.spend / p.results : null;
     });
 
     const rightSeries = series.map((p) => {
       if (chartMode === "spend_results") return p.results;
-      if (chartMode === "clicks_ctr") return p.impressions > 0 ? (p.linkClicks / p.impressions) * 100 : 0;
+      if (chartMode === "clicks_ctr") return p.impressions != null && p.impressions > 0 && p.linkClicks != null ? (p.linkClicks / p.impressions) * 100 : null;
       if (chartMode === "impressions_clicks") return p.allClicks;
-      return p.linkClicks > 0 ? p.spend / p.linkClicks : 0;
+      return p.linkClicks != null && p.linkClicks > 0 && p.spend != null ? p.spend / p.linkClicks : null;
     });
 
-    const rawMaxLeft = Math.max(0, ...leftSeries);
-    const rawMaxRight = Math.max(0, ...rightSeries);
+    const finiteLeft = leftSeries.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const finiteRight = rightSeries.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const rawMaxLeft = finiteLeft.length > 0 ? Math.max(0, ...finiteLeft) : 0;
+    const rawMaxRight = finiteRight.length > 0 ? Math.max(0, ...finiteRight) : 0;
 
     const maxLeft =
       chartMode === "spend_results" || chartMode === "efficiency_cpr"
@@ -822,18 +825,20 @@ export function TrendsAndFunnelTab({
   );
 
   const leftCoords = useMemo(
-    () => chartData.leftSeries.map((v, i) => ({ x: getX(i), y: getYLeft(v) })),
+    () => chartData.leftSeries.map((v, i) => ({ x: getX(i), y: typeof v === "number" ? getYLeft(v) : null })),
     [chartData.leftSeries, getX, getYLeft]
   );
 
   const rightCoords = useMemo(
-    () => chartData.rightSeries.map((v, i) => ({ x: getX(i), y: getYRight(v) })),
+    () => chartData.rightSeries.map((v, i) => ({ x: getX(i), y: typeof v === "number" ? getYRight(v) : null })),
     [chartData.rightSeries, getX, getYRight]
   );
 
-  const leftLinePath = useMemo(() => getMonotoneCubicPath(leftCoords), [leftCoords]);
-  const leftAreaPath = useMemo(() => getMonotoneAreaPath(leftCoords, bottomY), [leftCoords, bottomY]);
-  const rightLinePath = useMemo(() => getMonotoneCubicPath(rightCoords), [rightCoords]);
+  const plottedLeft = leftCoords.filter((point): point is { x: number; y: number } => point.y != null);
+  const plottedRight = rightCoords.filter((point): point is { x: number; y: number } => point.y != null);
+  const leftLinePath = useMemo(() => getMonotoneCubicPath(plottedLeft), [plottedLeft]);
+  const leftAreaPath = useMemo(() => getMonotoneAreaPath(plottedLeft, bottomY), [plottedLeft, bottomY]);
+  const rightLinePath = useMemo(() => getMonotoneCubicPath(plottedRight), [plottedRight]);
 
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!svgRef.current || series.length === 0) return;
@@ -870,14 +875,16 @@ export function TrendsAndFunnelTab({
     return formatCompactCount(val);
   };
 
-  const formatLeftTooltipValue = (val: number) => {
+  const formatLeftTooltipValue = (val: number | null) => {
+    if (val == null || !Number.isFinite(val)) return "—";
     if (chartMode === "spend_results" || chartMode === "efficiency_cpr") {
       return formatMoney(val);
     }
     return formatNumber(Math.round(val));
   };
 
-  const formatRightTooltipValue = (val: number) => {
+  const formatRightTooltipValue = (val: number | null) => {
+    if (val == null || !Number.isFinite(val)) return "—";
     if (chartMode === "clicks_ctr") {
       return formatPct(val);
     }
@@ -891,8 +898,8 @@ export function TrendsAndFunnelTab({
     hoveredIdx !== null && hoveredIdx >= 0 && hoveredIdx < series.length ? hoveredIdx : null;
   const activePoint = safeHoveredIdx !== null ? series[safeHoveredIdx] : null;
   const activeHoverX = safeHoveredIdx !== null ? getX(safeHoveredIdx) : 0;
-  const activeLeftY = safeHoveredIdx !== null ? leftCoords[safeHoveredIdx].y : 0;
-  const activeRightY = safeHoveredIdx !== null ? rightCoords[safeHoveredIdx].y : 0;
+  const activeLeftY = safeHoveredIdx !== null ? leftCoords[safeHoveredIdx]?.y ?? null : null;
+  const activeRightY = safeHoveredIdx !== null ? rightCoords[safeHoveredIdx]?.y ?? null : null;
   const isTooltipRightSide = safeHoveredIdx !== null && safeHoveredIdx > series.length * 0.55;
 
   const dateRangeBadge = useMemo(() => {
@@ -1431,13 +1438,13 @@ export function TrendsAndFunnelTab({
               {series.length <= 35 &&
                 leftCoords.map((pt, idx) => (
                   <g key={`nodes-${series[idx].date}`}>
-                    {chartData.leftSeries[idx] > 0 && (
-                      <circle cx={pt.x} cy={pt.y} r="2.5" fill={chartData.palette.leftColor} />
+                    {typeof chartData.leftSeries[idx] === "number" && chartData.leftSeries[idx] > 0 && (
+                      <circle cx={pt.x} cy={pt.y ?? 0} r="2.5" fill={chartData.palette.leftColor} />
                     )}
-                    {chartData.rightSeries[idx] > 0 && (
+                    {typeof chartData.rightSeries[idx] === "number" && chartData.rightSeries[idx] > 0 && rightCoords[idx]?.y != null && (
                       <circle
                         cx={rightCoords[idx].x}
-                        cy={rightCoords[idx].y}
+                        cy={rightCoords[idx].y ?? 0}
                         r="2.5"
                         fill={chartData.palette.rightColor}
                       />
@@ -1480,14 +1487,14 @@ export function TrendsAndFunnelTab({
                   />
                   <circle
                     cx={activeHoverX}
-                    cy={activeLeftY}
+                    cy={activeLeftY ?? 0}
                     r="9"
                     fill={chartData.palette.leftColor}
                     fillOpacity="0.18"
                   />
                   <circle
                     cx={activeHoverX}
-                    cy={activeLeftY}
+                    cy={activeLeftY ?? 0}
                     r="5"
                     className="fill-white dark:fill-zinc-900"
                     stroke={chartData.palette.leftColor}
@@ -1495,14 +1502,14 @@ export function TrendsAndFunnelTab({
                   />
                   <circle
                     cx={activeHoverX}
-                    cy={activeRightY}
+                    cy={activeRightY ?? 0}
                     r="9"
                     fill={chartData.palette.rightColor}
                     fillOpacity="0.18"
                   />
                   <circle
                     cx={activeHoverX}
-                    cy={activeRightY}
+                    cy={activeRightY ?? 0}
                     r="5"
                     className="fill-white dark:fill-zinc-900"
                     stroke={chartData.palette.rightColor}
@@ -1528,7 +1535,7 @@ export function TrendsAndFunnelTab({
                     {formatDateFull(activePoint.date)}
                   </p>
                   <span className="rounded-md bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 text-[10px] font-mono font-bold text-indigo-700 dark:text-indigo-300">
-                    CTR {formatPct(activePoint.impressions > 0 ? (activePoint.linkClicks / activePoint.impressions) * 100 : 0)}
+                    CTR {formatPct(activePoint.impressions != null && activePoint.impressions > 0 && activePoint.linkClicks != null ? (activePoint.linkClicks / activePoint.impressions) * 100 : null)}
                   </span>
                 </div>
 
@@ -1689,13 +1696,17 @@ export function TrendsAndFunnelTab({
                   target: 1.0,
                   maxScale: 2.5,
                   status:
-                    activeScope.linkCtr >= 1.0
+                    activeScope.linkCtr == null
+                      ? "—"
+                      : activeScope.linkCtr >= 1.0
                       ? t.statusOptimal
                       : activeScope.linkCtr >= 0.7
                       ? t.statusWarn
                       : t.statusLow,
                   tone:
-                    activeScope.linkCtr >= 1.0
+                    activeScope.linkCtr == null
+                      ? "slate"
+                      : activeScope.linkCtr >= 1.0
                       ? "emerald"
                       : activeScope.linkCtr >= 0.7
                       ? "amber"
@@ -1707,13 +1718,17 @@ export function TrendsAndFunnelTab({
                   target: 60.0,
                   maxScale: 100.0,
                   status:
-                    activeScope.intentRatio >= 60.0
+                    activeScope.intentRatio == null
+                      ? "—"
+                      : activeScope.intentRatio >= 60.0
                       ? t.statusOptimal
                       : activeScope.intentRatio >= 40.0
                       ? t.statusWarn
                       : t.statusLow,
                   tone:
-                    activeScope.intentRatio >= 60.0
+                    activeScope.intentRatio == null
+                      ? "slate"
+                      : activeScope.intentRatio >= 60.0
                       ? "emerald"
                       : activeScope.intentRatio >= 40.0
                       ? "amber"
@@ -1725,20 +1740,24 @@ export function TrendsAndFunnelTab({
                   target: 10.0,
                   maxScale: 30.0,
                   status:
-                    activeScope.cvr >= 10.0
+                    activeScope.cvr == null
+                      ? "—"
+                      : activeScope.cvr >= 10.0
                       ? t.statusOptimal
                       : activeScope.cvr >= 5.0
                       ? t.statusWarn
                       : t.statusLow,
                   tone:
-                    activeScope.cvr >= 10.0
+                    activeScope.cvr == null
+                      ? "slate"
+                      : activeScope.cvr >= 10.0
                       ? "emerald"
                       : activeScope.cvr >= 5.0
                       ? "amber"
                       : "rose",
                 },
               ].map((bm) => {
-                const fillPct = Math.min(100, Math.max(4, (bm.val / bm.maxScale) * 100));
+                const fillPct = bm.val == null ? 0 : Math.min(100, Math.max(4, (bm.val / bm.maxScale) * 100));
                 const targetPosPct = Math.min(95, (bm.target / bm.maxScale) * 100);
                 return (
                   <div key={bm.name} className="space-y-1.5">
@@ -1787,21 +1806,21 @@ export function TrendsAndFunnelTab({
           <div className="flex items-start gap-2.5 rounded-xl border border-zinc-200/80 bg-zinc-50/70 p-3.5 text-xs leading-relaxed text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-300">
             <span
               className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                activeScope.impressions === 0
+                activeScope.impressions == null || activeScope.impressions === 0
                   ? "bg-zinc-400"
-                  : activeScope.linkCtr < 1.0
+                  : activeScope.linkCtr != null && activeScope.linkCtr < 1.0
                   ? "bg-amber-500"
-                  : activeScope.linkClicks >= 10 && activeScope.cvr < 8
+                  : activeScope.linkClicks != null && activeScope.cvr != null && activeScope.linkClicks >= 10 && activeScope.cvr < 8
                   ? "bg-rose-500"
                   : "bg-emerald-500"
               }`}
             />
             <span>
-              {activeScope.impressions === 0
+              {activeScope.impressions == null || activeScope.impressions === 0
                 ? t.DiagnosisNoData
-                : activeScope.linkCtr < 1.0
+                : activeScope.linkCtr != null && activeScope.linkCtr < 1.0
                 ? t.diagnosisLowCtr
-                : activeScope.linkClicks >= 10 && activeScope.cvr < 8
+                : activeScope.linkClicks != null && activeScope.cvr != null && activeScope.linkClicks >= 10 && activeScope.cvr < 8
                 ? t.diagnosisLowCvr
                 : t.diagnosisHealthy}
             </span>

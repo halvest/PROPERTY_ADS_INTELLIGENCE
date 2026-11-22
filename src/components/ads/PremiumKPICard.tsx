@@ -6,7 +6,7 @@ export interface KPICardProps {
   label: string;
   value: string | number;
   hint?: string;
-  trendData?: number[];
+  trendData?: Array<number | null | undefined>;
   trendPercent?: number;
   trendDirection?: "up" | "down" | "neutral";
   accentColor?: "emerald" | "indigo" | "amber" | "rose" | "violet";
@@ -60,13 +60,14 @@ export function PremiumKPICard({
     },
   }[accentColor];
 
-  const points = trendData.length > 1 ? trendData : [trendData[0] ?? 0, trendData[0] ?? 0];
-  const min = Math.min(...points);
-  const max = Math.max(...points);
+  const reported = trendData.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const points = reported.length > 1 ? reported : reported.length === 1 ? [reported[0], reported[0]] : null;
+  const min = points ? Math.min(...points) : 0;
+  const max = points ? Math.max(...points) : 0;
   const range = max - min || 1;
-  const step = points.length > 1 ? 100 / (points.length - 1) : 100;
+  const step = points && points.length > 1 ? 100 / (points.length - 1) : 100;
 
-  const coords = points
+  const coords = (points ?? [])
     .map((val, idx) => {
       const x = idx * step;
       const y = 40 - ((val - min) / range) * 30 - 5;
@@ -133,7 +134,7 @@ export function PremiumKPICard({
       <div className="relative mt-4 h-11 w-full overflow-hidden rounded-lg pointer-events-none opacity-85 group-hover:opacity-100 transition-opacity">
         {isLoading ? (
           <div className="h-full w-full rounded-lg bg-zinc-100/70 dark:bg-zinc-800/50 animate-pulse" />
-        ) : (
+        ) : points ? (
           <svg viewBox="0 0 100 44" preserveAspectRatio="none" className="h-full w-full block">
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -151,7 +152,7 @@ export function PremiumKPICard({
               points={coords}
             />
           </svg>
-        )}
+        ) : null}
       </div>
     </div>
   );

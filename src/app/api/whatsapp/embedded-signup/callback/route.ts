@@ -7,11 +7,13 @@ import {
   exchangeEmbeddedSignupCode,
   fetchPhoneNumberMetadata,
   listWabaPhoneNumbers,
+  readWhatsAppBusinessProfile,
   selectWabaPhoneNumber,
   startCoexistenceDataSync,
   subscribeAppToWaba,
   type PhoneNumberMetadata,
 } from "@/lib/meta/whatsapp-onboarding";
+import { resolveCoexistenceOutcome } from "@/lib/meta/connection-lifecycle";
 import { readMetaAppScopedUserId } from "@/lib/meta/meta-data-deletion";
 import { getMaxConnectionsForPlan } from "@/lib/workspaces/active-workspace";
 
@@ -56,6 +58,13 @@ export async function POST(req: NextRequest) {
     let phoneNumberId = parsed.data.phoneNumberId ?? null;
 
     const admin = createAdminClient();
+
+    const { data: callerProfile } = await admin
+      .from("profiles")
+      .select("organization_id")
+      .eq("id", user.id)
+      .maybeSingle();
+    const organizationId = callerProfile?.organization_id ?? null;
 
     // 1. Verify caller is owner or admin of workspaceId
     const { data: membership, error: memberErr } = await admin
@@ -159,11 +168,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    await readWhatsAppBusinessProfile(phoneNumberId, tokenResult.accessToken).catch(() => false);
     await subscribeAppToWaba(wabaId, tokenResult.accessToken);
     const sync =
       integrationMode === "coexistence"
         ? await startCoexistenceDataSync(phoneNumberId, tokenResult.accessToken)
         : { warnings: [] as string[] };
+    const coexistence = resolveCoexistenceOutcome({
+      integrationMode,
+      warnings: sync.warnings,
+    });
 
     // 5. Encrypt token with AES-256-GCM before persisting
     const { encryptedPayload, keyVersion } = encryptToken(tokenResult.accessToken);
@@ -183,18 +197,24 @@ export async function POST(req: NextRequest) {
       .upsert(
         {
           workspace_id: workspaceId,
+          organization_id: organizationId,
           sales_member_id: salesMemberId ?? null,
           phone_number_id: phoneNumberId,
           waba_id: wabaId,
           display_phone_number: phoneMeta.displayPhoneNumber,
           verified_name: phoneMeta.verifiedName,
-          connection_status: "connected",
+          connection_status: coexistence.connectionStatus,
           integration_mode: integrationMode,
-          coexistence_enabled: integrationMode === "coexistence",
+          coexistence_enabled: coexistence.coexistenceEnabled,
           connected_by: user.id,
           connected_at: nowIso,
           disconnected_at: null,
-          metadata: metaUserId ? { ...previousMetadata, meta_user_id: metaUserId } : previousMetadata,
+          metadata: {
+            ...previousMetadata,
+            ...(metaUserId ? { meta_user_id: metaUserId } : {}),
+            coexistence_sync_status: coexistence.syncStatus,
+            ...(sync.warnings.length > 0 ? { coexistence_sync_warnings: sync.warnings } : {}),
+          },
         },
         { onConflict: "phone_number_id" }
       )
@@ -233,6 +253,13 @@ export async function POST(req: NextRequest) {
         .update({ connection_status: "error" })
         .eq("id", savedConn.id);
       throw new Error(`Failed to store encrypted connection credentials: ${secretErr.message}`);
+    }
+
+    if (organizationId) {
+      await admin.from("organization_workspaces").upsert(
+        { organization_id: organizationId, workspace_id: workspaceId },
+        { onConflict: "organization_id,workspace_id" }
+      );
     }
 
     return NextResponse.json({

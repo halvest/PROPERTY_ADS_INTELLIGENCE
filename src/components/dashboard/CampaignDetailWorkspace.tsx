@@ -11,8 +11,8 @@ export interface CampaignDetailData {
   objective: string | null;
   totalAdsCount: number;
   activeAdsCount: number;
-  spend: number;
-  impressions: number;
+  spend: number | null;
+  impressions: number | null;
   reach: number | null;
   frequency: number | null;
   results: number | null;
@@ -20,7 +20,7 @@ export interface CampaignDetailData {
   linkClicks: number | null;
   linkCtr: number | null;
   linkCpc: number | null;
-  allClicks: number;
+  allClicks: number | null;
   allCtr: number | null;
   allCpc: number | null;
   cpm: number | null;

@@ -7,7 +7,9 @@ import {
   calculateCPM,
   calculateCPQL,
 } from "@/domain/metrics/marketing";
-import { calendarDayBounds, classifyTemperature } from "@/lib/crm/crm-analysis-context";
+import { calendarDayBounds } from "@/lib/crm/crm-analysis-context";
+import { qualifyCrmTemperature } from "@/lib/leads/qualified";
+import { finiteNumber } from "@/lib/metrics/nullable-number";
 import type { FunnelStage } from "@/domain/funnel/stages";
 import type { AttributionStatus } from "@/domain/attribution/types";
 import type {
@@ -177,14 +179,66 @@ export async function getLiveDashboardData(
     };
   }
 
-  // 3. Query Real Ad Insights
+  // 3. Query Real Ad Insights for the selected account only.
+  // A filter on the embedded campaigns resource does not restrict parent
+  // insight rows, so another connected account leaks into the KPIs and the
+  // leaderboard. Scope by the account's own ad ids, the same way the ads page does.
   const { since, until } = parseDateRangeToFilter(dateRange);
+
+  const { data: accountCampaignRows, error: campaignErr } = await supabaseClient
+    .from("campaigns")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("ad_account_id", activeAdAccount.id);
+  if (campaignErr) {
+    return {
+      state: "error",
+      isDemoMode: false,
+      organizationId,
+      organizationName: orgName,
+      selectedAdAccount: selectedAccountInfo,
+      summary: null,
+      leaderboard: [],
+      leads: [],
+      funnelCounts: { baru: 0, dihubungi: 0, prospek: 0, survei: 0, closing: 0, batal: 0 },
+      lastSyncedAt: metaConnection.last_synced_at,
+      errorMessage: `Database query error: ${campaignErr.message}`,
+    };
+  }
+  const accountCampaignIds = new Set((accountCampaignRows || []).map((campaign) => campaign.id));
+
+  let scopedAdIds: string[] = [];
+  if (accountCampaignIds.size > 0) {
+    const { data: scopedAdRows, error: scopedAdErr } = await supabaseClient
+      .from("ads")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .in("campaign_id", Array.from(accountCampaignIds));
+    if (scopedAdErr) {
+      return {
+        state: "error",
+        isDemoMode: false,
+        organizationId,
+        organizationName: orgName,
+        selectedAdAccount: selectedAccountInfo,
+        summary: null,
+        leaderboard: [],
+        leads: [],
+        funnelCounts: { baru: 0, dihubungi: 0, prospek: 0, survei: 0, closing: 0, batal: 0 },
+        lastSyncedAt: metaConnection.last_synced_at,
+        errorMessage: `Database query error: ${scopedAdErr.message}`,
+      };
+    }
+    scopedAdIds = (scopedAdRows || []).map((row) => row.id);
+  }
 
   let insightsQuery = supabaseClient
     .from("ad_insights")
     .select("*, ads!inner(id, name, status, campaign_id, campaigns(id, name))")
-    .eq("organization_id", organizationId)
-    .eq("ads.campaigns.ad_account_id", activeAdAccount.id);
+    .eq("organization_id", organizationId);
+  insightsQuery = scopedAdIds.length
+    ? insightsQuery.in("ad_id", scopedAdIds)
+    : insightsQuery.eq("ad_id", "00000000-0000-0000-0000-000000000000");
 
   if (since && until) {
     insightsQuery = insightsQuery.gte("date_start", since).lte("date_stop", until);
@@ -209,13 +263,6 @@ export async function getLiveDashboardData(
   }
 
   // 4. Query Real Conversations & Leads
-  const { data: accountCampaignRows } = await supabaseClient
-    .from("campaigns")
-    .select("id")
-    .eq("organization_id", organizationId)
-    .eq("ad_account_id", activeAdAccount.id);
-  const accountCampaignIds = new Set((accountCampaignRows || []).map((campaign) => campaign.id));
-
   let convsQuery = supabaseClient
     .from("conversations")
     .select(`
@@ -250,9 +297,9 @@ export async function getLiveDashboardData(
       organizationName: orgName,
       selectedAdAccount: selectedAccountInfo,
       summary: {
-        totalSpend: 0,
-        totalImpressions: 0,
-        totalClicks: 0,
+        totalSpend: null,
+        totalImpressions: null,
+        totalClicks: null,
         ctr: null,
         cpc: null,
         cpm: null,
@@ -280,9 +327,9 @@ export async function getLiveDashboardData(
   }
 
   // 5. Aggregate Authentic Metrics
-  let totalSpend = 0;
-  let totalImpressions = 0;
-  let totalClicks = 0;
+  let totalSpend: number | null = null;
+  let totalImpressions: number | null = null;
+  let totalClicks: number | null = null;
   let currency = activeAdAccount.currency || "";
 
   const adMap = new Map<
@@ -292,9 +339,9 @@ export async function getLiveDashboardData(
       adName: string;
       campaignName: string;
       status: "ACTIVE" | "PAUSED";
-      spend: number;
-      impressions: number;
-      clicks: number;
+      spend: number | null;
+      impressions: number | null;
+      clicks: number | null;
       attributedLeads: number;
       verifiedLeads: number;
       inferredLeads: number;
@@ -304,9 +351,12 @@ export async function getLiveDashboardData(
   >();
 
   rawInsights?.forEach((i) => {
-    totalSpend += Number(i.spend) || 0;
-    totalImpressions += Number(i.impressions) || 0;
-    totalClicks += Number(i.clicks) || 0;
+    const spend = finiteNumber(i.spend);
+    const impressions = finiteNumber(i.impressions);
+    const clicks = finiteNumber(i.clicks);
+    if (spend !== null) totalSpend = (totalSpend ?? 0) + spend;
+    if (impressions !== null) totalImpressions = (totalImpressions ?? 0) + impressions;
+    if (clicks !== null) totalClicks = (totalClicks ?? 0) + clicks;
     if (i.currency) currency = i.currency;
 
     const adRecord = i.ads as unknown as {
@@ -327,9 +377,9 @@ export async function getLiveDashboardData(
         adName,
         campaignName: cmpName,
         status,
-        spend: 0,
-        impressions: 0,
-        clicks: 0,
+      spend: null as number | null,
+      impressions: null as number | null,
+      clicks: null as number | null,
         attributedLeads: 0,
         verifiedLeads: 0,
         inferredLeads: 0,
@@ -339,9 +389,9 @@ export async function getLiveDashboardData(
     }
 
     const curr = adMap.get(adId)!;
-    curr.spend += Number(i.spend) || 0;
-    curr.impressions += Number(i.impressions) || 0;
-    curr.clicks += Number(i.clicks) || 0;
+    if (spend !== null) curr.spend = (curr.spend ?? 0) + spend;
+    if (impressions !== null) curr.impressions = (curr.impressions ?? 0) + impressions;
+    if (clicks !== null) curr.clicks = (curr.clicks ?? 0) + clicks;
   });
 
   // Process conversations for attribution, qualification, and buyer score
@@ -365,7 +415,6 @@ export async function getLiveDashboardData(
 
   rawConvs?.forEach((conv) => {
     const attrStatus = (conv.attribution_status || "unknown") as AttributionStatus;
-    const temperature = classifyTemperature(conv.quality_label);
     const belongsToAccount = Boolean(
       (conv.campaign_id && accountCampaignIds.has(conv.campaign_id)) ||
       (conv.ad_id && adMap.has(conv.ad_id))
@@ -382,8 +431,8 @@ export async function getLiveDashboardData(
     const buyerScore = assessment?.buyer_score ?? null;
     const salesScore = assessment?.sales_score ?? null;
 
-    if (temperature === "hot" || temperature === "warm") qualifiedLeads += 1;
-    if (conv.ad_id && (temperature === "hot" || temperature === "warm")) {
+    if (qualifyCrmTemperature(conv.quality_label) === "qualified") qualifiedLeads += 1;
+    if (conv.ad_id && qualifyCrmTemperature(conv.quality_label) === "qualified") {
       const adStats = adMap.get(conv.ad_id);
       if (adStats) adStats.qualifiedLeads += 1;
     }
@@ -492,6 +541,28 @@ export async function getLiveDashboardData(
     });
   });
 
+  const crmConversationIds = new Set((rawConvs ?? []).map((conv) => conv.id));
+  const { data: whatsappConversations } = await supabaseClient
+    .from("conversations")
+    .select("id, ad_id, attribution_status, attribution_evidence")
+    .eq("organization_id", organizationId)
+    .eq("channel", "whatsapp")
+    .eq("attribution_status", "verified");
+  for (const conv of whatsappConversations ?? []) {
+    const evidence = conv.attribution_evidence;
+    const linkedCrmId =
+      evidence && typeof evidence === "object" && !Array.isArray(evidence) && typeof evidence.crm_conversation_id === "string"
+        ? evidence.crm_conversation_id
+        : null;
+    if (crmConversationIds.has(conv.id)) continue;
+    if (linkedCrmId && crmConversationIds.has(linkedCrmId)) continue;
+    if (!conv.ad_id || !adMap.has(conv.ad_id)) continue;
+    const adStat = adMap.get(conv.ad_id)!;
+    adStat.attributedLeads += 1;
+    adStat.verifiedLeads += 1;
+    verifiedCount += 1;
+  }
+
   const totalLeads = verifiedCount + inferredCount + unknownCount;
   const verifiedPercentage = totalLeads > 0 ? Math.round((verifiedCount / totalLeads) * 100) : 0;
 
@@ -537,7 +608,7 @@ export async function getLiveDashboardData(
   });
 
   // Sort leaderboard by spend descending
-  leaderboard.sort((a, b) => b.spend - a.spend);
+  leaderboard.sort((a, b) => (b.spend ?? Number.NEGATIVE_INFINITY) - (a.spend ?? Number.NEGATIVE_INFINITY));
 
   const summary: DashboardKPISummary = {
     totalSpend,

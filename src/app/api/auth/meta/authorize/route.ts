@@ -66,9 +66,11 @@ export async function GET(request: NextRequest) {
       userId: user.id,
     });
 
-    // This integration reads ad accounts, campaigns, ads and Insights only.
-    // Page and Instagram assets are separate integrations and are not required.
-    const requiredScopes = "ads_read";
+    // ads_read covers ad accounts, campaigns, ads, and Insights.
+    // pages_show_list is required because asset discovery calls GET /me/accounts.
+    // ads_management is not requested: this product never creates or edits ads.
+    // pages_read_engagement is not requested: page content and insights are not read.
+    const requiredScopes = "ads_read,pages_show_list";
 
     const metaDialogUrl = new URL(`https://www.facebook.com/${apiVersion}/dialog/oauth`);
     metaDialogUrl.searchParams.set("client_id", appId);

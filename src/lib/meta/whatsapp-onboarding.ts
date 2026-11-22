@@ -241,6 +241,28 @@ export async function listWabaPhoneNumbers(
     }));
 }
 
+/**
+ * Read-only business profile. This is the messaging permission read.
+ * The product does not send WhatsApp messages.
+ */
+export async function readWhatsAppBusinessProfile(
+  phoneNumberId: string,
+  accessToken: string
+): Promise<boolean> {
+  if (!phoneNumberId.trim() || !accessToken.trim()) return false;
+  const { graphApiVersion } = getMetaServerConfig();
+  const url = `${META_GRAPH_BASE_URL}/${graphApiVersion}/${encodeURIComponent(phoneNumberId.trim())}/whatsapp_business_profile`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!res.ok) return false;
+  const body = (await res.json().catch(() => null)) as { data?: unknown } | null;
+  return Array.isArray(body?.data);
+}
+
 async function postCoexistenceSync(
   phoneNumberId: string,
   accessToken: string,

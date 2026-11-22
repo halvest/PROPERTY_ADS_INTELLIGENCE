@@ -95,6 +95,13 @@ const TRUSTED_FACEBOOK_ORIGINS = new Set([
   "https://business.facebook.com",
 ]);
 
+function canOpenMetaPopup(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.location.protocol === "https:") return true;
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1";
+}
+
 function isTrustedFacebookOrigin(origin: string): boolean {
   if (TRUSTED_FACEBOOK_ORIGINS.has(origin)) return true;
   try {
@@ -233,17 +240,10 @@ export default function WhatsAppConnectionsPage() {
             json.error ||
             (isId ? "Gagal memuat daftar koneksi WhatsApp." : "Failed to load WhatsApp connections.");
           setLoadError(errMsg);
-          toast.error(errMsg, isId ? "Gagal Memuat Data" : "Failed to Load");
+          if (isManual) toast.error(errMsg, isId ? "Gagal Memuat Data" : "Failed to Load");
         } else {
           setLoadError(null);
           setData(json);
-          if (isManual) {
-            toast.success(
-              isId ? "Daftar koneksi WhatsApp diperbarui." : "WhatsApp connections refreshed.",
-              isId ? "Data Diperbarui" : "Refreshed",
-              2500
-            );
-          }
         }
       } catch {
         const netErr = isId
@@ -271,7 +271,6 @@ export default function WhatsAppConnectionsPage() {
             json.error ||
             (isId ? "Gagal memuat daftar koneksi WhatsApp." : "Failed to load WhatsApp connections.");
           setLoadError(errMsg);
-          toast.error(errMsg, isId ? "Gagal Memuat Data" : "Failed to Load");
         } else {
           setLoadError(null);
           setData(json);
@@ -282,7 +281,6 @@ export default function WhatsAppConnectionsPage() {
             ? "Terjadi kesalahan jaringan saat memuat koneksi."
             : "Network error while loading connections.";
           setLoadError(netErr);
-          toast.error(netErr, isId ? "Koneksi Bermasalah" : "Network Error");
         }
       } finally {
         if (!cancelled) {
@@ -294,7 +292,7 @@ export default function WhatsAppConnectionsPage() {
     return () => {
       cancelled = true;
     };
-  }, [isId, toast]);
+  }, [isId]);
 
   const tryFinalizeSignup = useCallback(async () => {
     const state = pendingSignupRef.current;
@@ -448,35 +446,46 @@ export default function WhatsAppConnectionsPage() {
     }
   }, [initFacebookSdk]);
 
-  const handleLaunchEmbeddedSignup = () => {
+  const handleLaunchEmbeddedSignup = async () => {
     if (!META_APP_ID || !META_CONFIG_ID) {
       toast.error(
         isId
-          ? "Konfigurasi Meta Embedded Signup belum tersedia. Hubungi administrator workspace."
-          : "Meta Embedded Signup configuration is missing. Contact your workspace administrator.",
-        isId ? "Konfigurasi Belum Lengkap" : "Configuration Missing"
+          ? "Koneksi WhatsApp belum siap di server. Hubungi admin workspace."
+          : "WhatsApp connection is not ready on the server. Contact your workspace admin.",
+        isId ? "Belum bisa menghubungkan" : "Cannot connect yet"
       );
       return;
     }
 
-    if (typeof window !== "undefined" && window.location.protocol !== "https:") {
+    if (!canOpenMetaPopup()) {
       toast.warning(
         isId
-          ? "Popup otorisasi WhatsApp membutuhkan halaman HTTPS yang aman agar dapat dibuka."
-          : "WhatsApp authorization popup requires a secure HTTPS page to open.",
-        isId ? "Koneksi Aman Diperlukan" : "Secure Connection Required"
+          ? "Buka halaman lewat https://hdcreative.cloud agar jendela Facebook bisa muncul."
+          : "Open the page on https://hdcreative.cloud so the Facebook window can appear.",
+        isId ? "Butuh halaman aman" : "Secure page required"
       );
       return;
     }
 
     if (!window.FB) {
-      toast.info(
-        isId
-          ? "Meta SDK masih dimuat. Tunggu beberapa detik lalu klik tombol kembali."
-          : "Meta SDK is still loading. Please wait a few seconds and try again.",
-        isId ? "Menyiapkan SDK" : "Loading SDK"
-      );
-      return;
+      const ready = await new Promise<boolean>((resolve) => {
+        const started = Date.now();
+        const timer = window.setInterval(() => {
+          if (window.FB || Date.now() - started > 4000) {
+            window.clearInterval(timer);
+            resolve(Boolean(window.FB));
+          }
+        }, 100);
+      });
+      if (!ready || !window.FB) {
+        toast.error(
+          isId
+            ? "Jendela Facebook belum siap. Muat ulang halaman, lalu klik Hubungkan lagi."
+            : "The Facebook window is not ready. Reload the page, then click Connect again.",
+          isId ? "Coba muat ulang" : "Reload and retry"
+        );
+        return;
+      }
     }
 
     pendingSignupRef.current = {
@@ -568,7 +577,7 @@ export default function WhatsAppConnectionsPage() {
     try {
       await navigator.clipboard.writeText(phoneNumberId);
       toast.success(
-        isId ? `Phone ID ${phoneNumberId} disalin ke clipboard.` : `Phone ID ${phoneNumberId} copied.`,
+        isId ? "ID nomor disalin." : "Number ID copied.",
         isId ? "Disalin" : "Copied",
         2500
       );
@@ -613,25 +622,25 @@ export default function WhatsAppConnectionsPage() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {isId ? "Koneksi WhatsApp Business" : "WhatsApp Business Connections"}
+              {isId ? "Nomor WhatsApp sales" : "Sales WhatsApp numbers"}
             </h1>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              Coexistence · Analysis-Only
+              {isId ? "Chat tetap di HP" : "Chats stay on the phone"}
             </span>
           </div>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-1 max-w-xl text-sm text-zinc-600 dark:text-zinc-400">
             {isId
-              ? "Hubungkan WhatsApp Business App sales untuk melacak lead iklan Meta, SLA respons, dan skor AI tanpa mengganggu chat di HP."
-              : "Connect sales WhatsApp Business App numbers to track Meta ad attribution, response SLAs, and AI scoring without leaving the phone app."}
+              ? "Sambungkan nomor sales. Tim tetap membalas dari HP, dan dashboard membaca calon pembeli dari chat yang masuk."
+              : "Connect a sales number. The team keeps replying from the phone, and the dashboard reads incoming buyer chats."}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {data?.workspace && (
-            <div className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs shadow-[var(--shadow-card)] dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="inline-flex max-w-full items-center gap-2 whitespace-nowrap rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs shadow-[var(--shadow-card)] dark:border-zinc-800 dark:bg-zinc-900">
               <span className="text-zinc-500 dark:text-zinc-400">Workspace</span>
-              <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+              <span className="max-w-[12rem] truncate font-semibold text-zinc-900 dark:text-zinc-100">
                 {data.workspace.name}
               </span>
               {data.userRole && (
@@ -686,72 +695,105 @@ export default function WhatsAppConnectionsPage() {
                 </div>
                 <div>
                   <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                    {isId
-                      ? "Hubungkan WhatsApp Business Sales (Coexistence)"
-                      : "Connect Sales WhatsApp Business (Coexistence)"}
+                    {isId ? "Hubungkan nomor yang dipakai sales" : "Connect the number sales uses"}
                   </h2>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">
                     {isId
-                      ? "Ikuti 3 langkah singkat berikut saat popup Meta terbuka."
-                      : "Follow these 3 quick steps when the Meta popup opens."}
+                      ? "Satu klik membuka jendela Facebook. Siapkan HP sales di samping Anda."
+                      : "One click opens the Facebook window. Keep the sales phone nearby."}
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Scannable 3-Step Guide */}
-            <ol className="space-y-2.5">
-              <li className="flex items-start gap-3 rounded-xl border border-zinc-100 bg-zinc-50/70 p-3 dark:border-zinc-800/80 dark:bg-zinc-950/40">
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-white dark:bg-zinc-100 dark:text-zinc-900">
-                  1
-                </span>
-                <p className="text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
-                  {isId ? (
-                    <>
-                      Nomor wajib aktif di <strong>WhatsApp Business App</strong> versi terbaru
-                      (bukan WhatsApp Messenger biasa).
-                    </>
-                  ) : (
-                    <>
-                      The number must be active on the latest{" "}
-                      <strong>WhatsApp Business App</strong> (not standard WhatsApp Messenger).
-                    </>
-                  )}
-                </p>
-              </li>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <Button
+                type="button"
+                variant="primary"
+                size="lg"
+                onClick={() => {
+                  void handleLaunchEmbeddedSignup();
+                }}
+                isLoading={connecting}
+                leftIcon={<WhatsAppIcon className="h-4 w-4" />}
+                disabled={
+                  loading || connecting || !canManageConnections || isQuotaFull || !envConfigured
+                }
+                className="w-full shrink-0 sm:w-auto"
+              >
+                {signupStep === "saving"
+                  ? isId
+                    ? "Menyimpan..."
+                    : "Saving..."
+                  : isId
+                    ? "Hubungkan nomor"
+                    : "Connect number"}
+              </Button>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {!canManageConnections && !loading
+                  ? isId
+                    ? "Minta owner atau admin workspace untuk menekan tombol ini."
+                    : "Ask a workspace owner or admin to press this button."
+                  : !envConfigured
+                    ? isId
+                      ? "Tombol ini belum bisa dipakai. Hubungi admin."
+                      : "This button is not ready yet. Contact an admin."
+                    : sdkReady
+                      ? isId
+                        ? "Siap. Nomor sales tetap dipakai di HP."
+                        : "Ready. The sales number stays on the phone."
+                      : isId
+                        ? "Menyiapkan tombol..."
+                        : "Preparing the button..."}
+              </p>
+            </div>
 
-              <li className="flex items-start gap-3 rounded-xl border border-zinc-100 bg-zinc-50/70 p-3 dark:border-zinc-800/80 dark:bg-zinc-950/40">
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-white dark:bg-zinc-100 dark:text-zinc-900">
-                  2
+            {connecting && (
+              <div
+                role="status"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-900 dark:text-amber-200"
+              >
+                <span className="flex items-center gap-2 font-medium">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                  {signupStep === "saving"
+                    ? isId
+                      ? "Menyimpan nomor..."
+                      : "Saving the number..."
+                    : isId
+                      ? "Jendela Facebook terbuka. Selesaikan pilihan di sana, lalu kembali ke halaman ini."
+                      : "The Facebook window is open. Finish the steps there, then return to this page."}
                 </span>
-                <p className="text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
-                  {isId
-                    ? "HP Sales tetap bisa dipakai balas chat normal seperti biasa (tidak logout / tidak pindah ke WA API)."
-                    : "The sales phone continues replying to chats normally (no logout / no migration to standalone Cloud API)."}
-                </p>
-              </li>
+                {signupStep === "popup" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetPendingSignup();
+                      toast.info(isId ? "Sambungan dibatalkan." : "Connection cancelled.", undefined, 2500);
+                    }}
+                    className="cursor-pointer font-semibold underline hover:no-underline"
+                  >
+                    {isId ? "Batalkan" : "Cancel"}
+                  </button>
+                )}
+              </div>
+            )}
 
-              <li className="flex items-start gap-3 rounded-xl border border-zinc-100 bg-zinc-50/70 p-3 dark:border-zinc-800/80 dark:bg-zinc-950/40">
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-white dark:bg-zinc-100 dark:text-zinc-900">
-                  3
-                </span>
-                <p className="text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
-                  {isId ? (
-                    <>
-                      Saat popup Meta muncul, pilih{" "}
-                      <strong>&ldquo;Connect your existing WhatsApp Business App&rdquo;</strong>{" "}
-                      lalu scan QR dari menu <strong>Perangkat Tertaut (Linked Devices)</strong> di
-                      HP Sales.
-                    </>
-                  ) : (
-                    <>
-                      When the Meta popup opens, select{" "}
-                      <strong>&ldquo;Connect your existing WhatsApp Business App&rdquo;</strong> and
-                      scan the QR code from <strong>Linked Devices</strong> on the sales phone.
-                    </>
-                  )}
-                </p>
-              </li>
+            <ol className="grid gap-2 sm:grid-cols-3">
+              {[
+                isId ? "Pakai WhatsApp Business, bukan WhatsApp biasa." : "Use WhatsApp Business, not regular WhatsApp.",
+                isId ? "Sales tetap membalas dari HP. Tidak perlu pindah aplikasi." : "Sales keep replying on the phone. No app switch.",
+                isId
+                  ? "Di jendela Facebook, pilih sambungkan aplikasi yang sudah ada, lalu pindai kode dari Perangkat tertaut."
+                  : "In the Facebook window, connect the existing app, then scan the code from Linked devices.",
+              ].map((step, index) => (
+                <li
+                  key={step}
+                  className="rounded-xl border border-zinc-100 bg-zinc-50/70 p-3 text-xs leading-relaxed text-zinc-700 dark:border-zinc-800/80 dark:bg-zinc-950/40 dark:text-zinc-300"
+                >
+                  <span className="mb-1 block text-[11px] font-semibold text-zinc-400">{index + 1}</span>
+                  {step}
+                </li>
+              ))}
             </ol>
 
             {/* Collapsible Data Transparency Disclosure */}
@@ -763,9 +805,7 @@ export default function WhatsAppConnectionsPage() {
                 className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-xs font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100 cursor-pointer"
               >
                 <span>
-                  {isId
-                    ? "Transparansi Izin Data & Privasi (Analysis-Only)"
-                    : "Data Permissions & Privacy Disclosure (Analysis-Only)"}
+                  {isId ? "Apa yang dibaca, dan apa yang tidak" : "What is read, and what is not"}
                 </span>
                 <svg
                   className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform duration-150 ${
@@ -788,109 +828,23 @@ export default function WhatsAppConnectionsPage() {
                   <li>
                     •{" "}
                     {isId
-                      ? "Hanya membaca metadata & isi percakapan Click-to-WhatsApp (CTWA) untuk atribusi iklan, SLA respons, dan klasifikasi pipeline."
-                      : "Strictly reads Click-to-WhatsApp (CTWA) conversation metadata & messages for attribution, response SLAs, and pipeline scoring."}
+                      ? "Dashboard membaca chat yang masuk untuk mengenali calon pembeli."
+                      : "The dashboard reads incoming chats to recognize buyers."}
                   </li>
                   <li>
                     •{" "}
                     {isId
-                      ? "Sistem TIDAK mengirim pesan keluar, tidak melakukan broadcast, dan tidak mengaktifkan auto-reply/chatbot."
-                      : "This app NEVER sends outbound messages, broadcasts, or automated chatbot replies."}
+                      ? "Aplikasi ini tidak mengirim pesan dan tidak membalas otomatis."
+                      : "This app does not send messages and does not reply automatically."}
                   </li>
                   <li>
                     •{" "}
                     {isId
-                      ? "Anda dapat memutuskan koneksi kapan saja untuk mencabut dan menghapus access token secara permanen."
-                      : "You can disconnect anytime to permanently revoke and delete stored access tokens."}
+                      ? "Nomor bisa dilepas kapan saja. Chat di HP tetap ada."
+                      : "You can remove the number anytime. Chats on the phone stay."}
                   </li>
                 </ul>
               )}
-            </div>
-          </div>
-
-          {/* Active Flow Indicator + Primary CTA */}
-          <div className="space-y-3 border-t border-zinc-100 pt-4 dark:border-zinc-800">
-            {connecting && (
-              <div
-                role="status"
-                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-900 dark:text-amber-200"
-              >
-                <span className="flex items-center gap-2 font-medium">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-                  {signupStep === "saving"
-                    ? isId
-                      ? "Menyimpan koneksi & mengaktifkan webhook WABA..."
-                      : "Saving connection & activating WABA webhook..."
-                    : isId
-                      ? "Popup Meta aktif — selesaikan pilihan & scan QR di jendela popup."
-                      : "Meta popup active — complete the steps and scan the QR code in the popup."}
-                </span>
-                {signupStep === "popup" && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetPendingSignup();
-                      toast.info(
-                        isId ? "Status koneksi direset." : "Connection flow reset.",
-                        undefined,
-                        2500
-                      );
-                    }}
-                    className="font-semibold underline hover:no-underline cursor-pointer"
-                  >
-                    {isId ? "Batalkan" : "Cancel"}
-                  </button>
-                )}
-              </div>
-            )}
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                {!canManageConnections && !loading
-                  ? isId
-                    ? "Hanya role owner atau admin workspace yang dapat menghubungkan nomor."
-                    : "Only workspace owners or admins can connect WhatsApp numbers."
-                  : !envConfigured
-                    ? isId
-                      ? "Konfigurasi Meta Embedded Signup belum aktif di workspace ini."
-                      : "Meta Embedded Signup configuration is not active yet."
-                    : sdkReady
-                      ? isId
-                        ? "Siap dihubungkan — nomor tetap aktif di HP sales."
-                        : "Ready to connect — your sales phone remains active."
-                      : isId
-                        ? "Menyiapkan Meta Embedded Signup SDK..."
-                        : "Preparing Meta Embedded Signup SDK..."}
-              </p>
-
-              <Button
-                type="button"
-                variant="primary"
-                size="lg"
-                onClick={handleLaunchEmbeddedSignup}
-                isLoading={connecting}
-                leftIcon={<WhatsAppIcon className="h-4 w-4" />}
-                disabled={
-                  loading ||
-                  connecting ||
-                  !canManageConnections ||
-                  isQuotaFull ||
-                  !envConfigured
-                }
-                className="w-full sm:w-auto shrink-0"
-              >
-                {signupStep === "saving"
-                  ? isId
-                    ? "Menyimpan Koneksi..."
-                    : "Saving Connection..."
-                  : signupStep === "popup"
-                    ? isId
-                      ? "Menunggu Popup Meta..."
-                      : "Waiting for Meta Popup..."
-                    : isId
-                      ? "Hubungkan WhatsApp Business"
-                      : "Connect WhatsApp Business"}
-              </Button>
             </div>
           </div>
         </section>
@@ -901,21 +855,29 @@ export default function WhatsAppConnectionsPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                  {isId ? "Kuota & Kesehatan Koneksi" : "Quota & Connection Health"}
+                  {isId ? "Nomor yang bisa disambungkan" : "Numbers you can connect"}
                 </p>
-                <p className="mt-1.5 text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  {quota.connected_count}{" "}
-                  <span className="text-base font-normal text-zinc-400 dark:text-zinc-500">
-                    / {quota.max_whatsapp_connections}
-                  </span>{" "}
-                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                    {isId ? "nomor aktif" : "active numbers"}
-                  </span>
-                </p>
+                {loading ? (
+                  <div className="mt-2 h-8 w-28 animate-pulse rounded-lg bg-zinc-100 dark:bg-zinc-800" />
+                ) : (
+                  <p className="mt-1.5 text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    {quota.connected_count}{" "}
+                    <span className="text-base font-normal text-zinc-400 dark:text-zinc-500">
+                      / {quota.max_whatsapp_connections}
+                    </span>{" "}
+                    <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                      {isId ? "nomor" : "numbers"}
+                    </span>
+                  </p>
+                )}
               </div>
-              <span className="rounded-full border border-zinc-200 bg-zinc-100 px-3 py-1 text-[11px] font-semibold uppercase text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                {quota.plan}
-              </span>
+              {loading ? (
+                <span className="h-6 w-16 animate-pulse rounded-full bg-zinc-100 dark:bg-zinc-800" />
+              ) : (
+                <span className="rounded-full border border-zinc-200 bg-zinc-100 px-3 py-1 text-[11px] font-semibold uppercase text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                  {quota.plan}
+                </span>
+              )}
             </div>
 
             <div>
@@ -965,12 +927,12 @@ export default function WhatsAppConnectionsPage() {
 
           <div className="rounded-xl border border-zinc-100 bg-zinc-50/70 p-3.5 text-xs leading-relaxed text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-400">
             <p className="font-semibold text-zinc-800 dark:text-zinc-200">
-              {isId ? "Tips Menjaga Coexistence Aktif" : "Keep Coexistence Active"}
+              {isId ? "Supaya sambungan tidak putus" : "Keep the link alive"}
             </p>
             <p className="mt-1">
               {isId
-                ? "Pastikan aplikasi WhatsApp Business di HP sales tetap dibuka setidaknya 1× setiap 14 hari agar tautan perangkat dari Meta tetap aktif."
-                : "Open WhatsApp Business on the sales phone at least once every 14 days so Meta keeps the linked session active."}
+                ? "Buka WhatsApp Business di HP sales minimal sekali setiap 14 hari."
+                : "Open WhatsApp Business on the sales phone at least once every 14 days."}
             </p>
           </div>
         </aside>
@@ -981,7 +943,7 @@ export default function WhatsAppConnectionsPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-              {isId ? "Nomor WhatsApp Terdaftar" : "Registered WhatsApp Numbers"}
+              {isId ? "Nomor yang sudah tersambung" : "Connected numbers"}
             </h2>
             {!loading && (
               <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
@@ -1013,21 +975,11 @@ export default function WhatsAppConnectionsPage() {
             ))}
           </div>
         ) : connections.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-700 dark:bg-zinc-900">
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <WhatsAppIcon className="h-5 w-5" />
-            </div>
-            <p className="mt-3 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-              {isId
-                ? "Belum ada nomor WhatsApp Business yang terhubung"
-                : "No WhatsApp Business numbers connected yet"}
-            </p>
-            <p className="mx-auto mt-1 max-w-md text-xs text-zinc-500 dark:text-zinc-400">
-              {isId
-                ? "Klik tombol \"Hubungkan WhatsApp Business\" di atas untuk menautkan nomor WhatsApp Business HP sales ke workspace ini."
-                : "Click \"Connect WhatsApp Business\" above to link your sales team's WhatsApp Business mobile app to this workspace."}
-            </p>
-          </div>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            {isId
+              ? "Belum ada nomor. Tekan Hubungkan nomor di atas."
+              : "No numbers yet. Press Connect number above."}
+          </p>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {connections.map((item) => {
@@ -1068,13 +1020,15 @@ export default function WhatsAppConnectionsPage() {
                         </span>
                         <span className="font-medium text-zinc-800 dark:text-zinc-200">
                           {item.integration_mode === "coexistence"
-                            ? "Coexistence App"
+                            ? isId
+                              ? "Tetap di HP"
+                              : "Stays on phone"
                             : item.integration_mode}
                         </span>
                       </div>
                       <div>
                         <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">
-                          {isId ? "Terakhir Echo" : "Last Echo"}
+                          {isId ? "Terakhir aktif di HP" : "Last active on phone"}
                         </span>
                         <span className="font-medium text-zinc-800 dark:text-zinc-200">
                           {formatDate(item.last_echo_at, locale)}
@@ -1090,12 +1044,12 @@ export default function WhatsAppConnectionsPage() {
                       </div>
                       <div>
                         <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">
-                          Phone ID
+                          {isId ? "ID bantuan" : "Support ID"}
                         </span>
                         <button
                           type="button"
                           onClick={() => void handleCopyPhoneId(item.phone_number_id)}
-                          title={isId ? "Salin Phone ID" : "Copy Phone ID"}
+                          title={isId ? "Salin ID untuk bantuan" : "Copy support ID"}
                           className="inline-flex max-w-full items-center gap-1 font-mono text-[11px] text-zinc-700 hover:text-zinc-950 dark:text-zinc-300 dark:hover:text-white cursor-pointer"
                         >
                           <span className="truncate">{item.phone_number_id}</span>
@@ -1106,8 +1060,8 @@ export default function WhatsAppConnectionsPage() {
                     {hasInactivityWarning && (
                       <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
                         {isId
-                          ? "Peringatan Coexistence: belum ada echo pesan sales masuk dalam >10 hari (atau >3 hari sejak terhubung). Buka WhatsApp Business App di HP agar sinkronisasi Coexistence tidak terputus otomatis setelah 14 hari inaktif."
-                          : "Coexistence warning: no outbound sales echoes detected recently. Open the WhatsApp Business mobile app periodically to avoid Meta's 14-day inactivity unlink."}
+                          ? "HP sales sudah lama tidak membuka WhatsApp. Buka aplikasinya supaya sambungan tidak putus."
+                          : "The sales phone has not opened WhatsApp for a while. Open the app so the link stays active."}
                       </div>
                     )}
                   </div>
@@ -1124,11 +1078,11 @@ export default function WhatsAppConnectionsPage() {
                       >
                         {disconnectingId === item.id
                           ? isId
-                            ? "Memutuskan..."
-                            : "Disconnecting..."
+                            ? "Melepas..."
+                            : "Removing..."
                           : isId
-                            ? "Putuskan Koneksi"
-                            : "Disconnect"}
+                            ? "Lepas nomor"
+                            : "Remove number"}
                       </Button>
                     </div>
                   )}
@@ -1146,21 +1100,21 @@ export default function WhatsAppConnectionsPage() {
           if (disconnectingId === null) setConfirmDisconnectItem(null);
         }}
         onConfirm={() => void handleConfirmDisconnect()}
-        title={isId ? "Putuskan Koneksi WhatsApp?" : "Disconnect WhatsApp Number?"}
+        title={isId ? "Lepas nomor ini?" : "Remove this number?"}
         description={
           confirmDisconnectItem
             ? isId
               ? `Nomor ${
                   confirmDisconnectItem.display_phone_number ||
                   confirmDisconnectItem.phone_number_id
-                } akan diputuskan dan access token dihapus permanen. Data percakapan, lead, dan analisis AI tetap dipertahankan.`
+                } dilepas dari dashboard. Chat di HP tidak dihapus.`
               : `Number ${
                   confirmDisconnectItem.display_phone_number ||
                   confirmDisconnectItem.phone_number_id
-                } will be disconnected and its access token permanently removed. Existing conversations, leads, and AI analyses will remain intact.`
+                } is removed from the dashboard. Chats on the phone stay.`
             : undefined
         }
-        confirmText={isId ? "Ya, Putuskan Koneksi" : "Yes, Disconnect"}
+        confirmText={isId ? "Ya, lepas nomor" : "Yes, remove"}
         cancelText={isId ? "Batal" : "Cancel"}
         variant="danger"
         isLoading={disconnectingId !== null}

@@ -9,8 +9,6 @@ export interface TranslationDictionary {
     leads: string;
     ctwaLeads?: string;
     pipeline?: string;
-    reviews: string;
-    enhancer: string;
     connections?: string;
     settings: string;
     login: string;

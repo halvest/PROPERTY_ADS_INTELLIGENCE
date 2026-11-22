@@ -1,5 +1,5 @@
 export interface JustificationMetrics {
-  spend: number;
+  spend: number | null;
   link_ctr: number | null;
   cpm: number | null;
   link_cpc: number | null;
@@ -11,9 +11,9 @@ export interface JustificationMetrics {
 }
 
 export interface CtwaGroundTruthMetrics extends JustificationMetrics {
-  impressions: number;
-  link_clicks: number;
-  all_clicks: number;
+  impressions: number | null;
+  link_clicks: number | null;
+  all_clicks: number | null;
   frequency: number | null;
   results_legacy: number | null;
   cost_per_result_legacy: number | null;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMetaAppSecret, getWhatsappWebhookVerifyToken } from "@/lib/meta/config";
 import { verifyMetaWebhookSignature } from "@/lib/meta/webhook-security";
-import { ingestWhatsAppWebhookPayload } from "@/lib/meta/webhook-ingestion";
+import { ingestWhatsAppWebhookPayload, replayRetryingWebhookEvents } from "@/lib/meta/webhook-ingestion";
 
 export async function GET(req: NextRequest) {
   try {
@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
     }
 
     await ingestWhatsAppWebhookPayload(payload);
+    await replayRetryingWebhookEvents();
     return NextResponse.json({ received: true }, { status: 200 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Webhook ingestion error";

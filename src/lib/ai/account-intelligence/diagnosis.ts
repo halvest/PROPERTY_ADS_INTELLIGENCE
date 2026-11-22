@@ -181,7 +181,8 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
     });
   }
 
-  for (const wasted of report.budget_analysis.wasted_spend_campaigns.slice(0, 2)) {
+    for (const wasted of report.budget_analysis.wasted_spend_campaigns.slice(0, 2)) {
+    if (wasted.spend == null) continue;
     findings.push({
       title: `${wasted.name} berbelanja tanpa hasil`,
       headline: `Spend Tanpa Hasil · ${compactRp(wasted.spend)} (0 konversi) pada ${wasted.name} — Hentikan penayangan.`,
@@ -254,7 +255,7 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
         "Potensi skala konversi sangat besar apabila daya tarik visual (hook) ditingkatkan tanpa mengubah penawaran inti.",
       limitations: ["Variasi hook visual baru tetap perlu diuji terpisah agar algoritma kampanye asli tidak terganggu."],
     });
-  } else if (summary.average_ctr !== null && summary.average_ctr < 0.8 && summary.total_impressions >= 1000) {
+  } else if (summary.average_ctr !== null && summary.average_ctr < 0.8 && summary.total_impressions != null && summary.total_impressions >= 1000) {
     findings.push({
       title: "CTR tautan akun rendah",
       headline: `CTR Akun Rendah (Hipotesis) · CTR ${fmtPct(summary.average_ctr)} — Uji variasi hook visual atau penawaran.`,
@@ -276,18 +277,20 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
    * Flags high-CTR ads that fail to convert post-click traffic.
    */
   const trafficLeakEntity = [...report.ad_rankings, ...report.campaign_rankings].find((item) => {
-    const ctr = item.ctr ?? 0;
+    const ctr = item.ctr;
     const cvr =
       item.cvr !== undefined && item.cvr !== null
         ? item.cvr
         : item.linkClicks && item.linkClicks > 0 && item.results !== null
         ? Number(((item.results / item.linkClicks) * 100).toFixed(2))
-        : (item.results ?? 0) === 0
+        : item.results === 0
         ? 0
-        : 100;
+        : null;
     return (
+      item.spend != null &&
       item.spend >= 100_000 &&
-      ((ctr > 1.5 && cvr < 2) || (ctr >= 1.2 && (item.results ?? 0) === 0))
+      ctr != null &&
+      ((ctr > 1.5 && cvr != null && cvr < 2) || (ctr >= 1.2 && (item.results ?? 0) === 0))
     );
   });
 
@@ -396,7 +399,7 @@ export function buildAdvertisingIntelligence(report: Omit<AccountIntelligenceRep
   }));
 
   const activeCount = report.campaign_rankings.filter((item) => item.effectiveStatus === "ACTIVE").length;
-  const performance: ConfidenceLevel = summary.total_impressions >= 1000 && (summary.total_results ?? 0) >= 5 && summary.results_comparable
+  const performance: ConfidenceLevel = summary.total_impressions != null && summary.total_impressions >= 1000 && (summary.total_results ?? 0) >= 5 && summary.results_comparable
     ? "high"
     : meta.campaigns_with_delivery > 0
       ? "medium"

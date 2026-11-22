@@ -50,9 +50,9 @@ export function evaluateAdOptimization(
   // 1. Validate Identifier & Numeric Integrity, then Compute Deterministic Metrics
   const isAdIdInvalid = !adId || typeof adId !== "string" || adId.trim().length === 0;
   const isNumericInputInvalid =
-    !Number.isFinite(spend) || spend < 0 ||
-    !Number.isFinite(impressions) || impressions < 0 ||
-    !Number.isFinite(clicks) || clicks < 0 ||
+    typeof spend !== "number" || !Number.isFinite(spend) || spend < 0 ||
+    typeof impressions !== "number" || !Number.isFinite(impressions) || impressions < 0 ||
+    typeof clicks !== "number" || !Number.isFinite(clicks) || clicks < 0 ||
     !Number.isFinite(attributedLeadsCount) || attributedLeadsCount < 0 ||
     !Number.isFinite(qualifiedLeadsCount) || qualifiedLeadsCount < 0 ||
     !Number.isFinite(buyerScoreSampleSize) || buyerScoreSampleSize < 0 ||
@@ -108,10 +108,10 @@ export function evaluateAdOptimization(
       `Ukuran sampel Buyer Score (n = ${buyerScoreSampleSize}) di bawah ambang minimal (n = ${thresholds.minSampleSize}).`
     );
   }
-  if (!Number.isFinite(spend) || spend <= 0) {
+  if (typeof spend !== "number" || !Number.isFinite(spend) || spend <= 0) {
     missingDataAndLimitations.push("Data belanja iklan (spend) belum tersedia atau bernilai 0.");
   }
-  if (!Number.isFinite(impressions) || impressions <= 0) {
+  if (typeof impressions !== "number" || !Number.isFinite(impressions) || impressions <= 0) {
     missingDataAndLimitations.push("Data impresi iklan belum tersedia atau bernilai 0.");
   }
   if (attributedLeadsCount === 0) {
